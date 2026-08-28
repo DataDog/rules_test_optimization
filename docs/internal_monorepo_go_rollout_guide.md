@@ -91,17 +91,15 @@ SHA256, and archive prefix generated from the same published commit.
   `--artifact-staging-dir=<temp-dir>`.
 - Pass `DD_GIT_*` only through `--repo_env`, never through `--test_env`.
 - Pass uploader credentials at `bazel run` time, not into test actions.
-- Keep one user-facing `test-optimization` config with both phase-correct
-  switches:
+- Keep one user-facing `test-optimization` metadata config:
 
   ```bazelrc
   common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-  build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
   ```
 
-  Removing `--config=test-optimization` disables both metadata repositories
-  and Orchestrion aliases. The public Go helpers enable metadata gating by
-  default; they do not dynamically control Orchestrion repository declaration.
+  Optimized targets enable Orchestrion through their own transition. Removing
+  the config disables metadata repositories; the public Go helpers enable that
+  metadata gating by default.
 
 ## Bootstrap Flow
 

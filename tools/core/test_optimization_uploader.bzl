@@ -146,7 +146,8 @@ def _base_template_substitutions(
         expected_targets_rloc,
         expected_targets_path,
         expected_targets_file_rloc,
-        expected_targets_file_path):
+        expected_targets_file_path,
+        runtime_selection):
     """Build shared template substitutions for Bash/PowerShell scripts."""
     return {
         "quiescent_sec": quiescent_sec,
@@ -173,6 +174,7 @@ def _base_template_substitutions(
         "expected_targets_path": expected_targets_path,
         "expected_targets_file_rloc": expected_targets_file_rloc,
         "expected_targets_file_path": expected_targets_file_path,
+        "runtime_selection": _bool_to_str(runtime_selection),
         "rules_version": RULES_VERSION,
     }
 
@@ -679,6 +681,8 @@ def _uploader_impl(ctx):
     filter_prefix_enabled = ctx.attr.filter_prefix
     gzip_payloads = ctx.attr.gzip_payloads
     expected_targets_file = ctx.file.expected_targets_file
+    if ctx.attr.runtime_selection and (ctx.attr.data or ctx.attr.expected_targets or expected_targets_file):
+        fail_with_prefix("test_optimization_uploader", "runtime_selection cannot be combined with configured data, expected_targets, or expected_targets_file")
     expected_targets = ctx.actions.declare_file(ctx.label.name + ".expected_targets")
     ctx.actions.write(
         output = expected_targets,
@@ -790,6 +794,7 @@ def _uploader_impl(ctx):
         expected_targets.path,
         expected_targets_file.short_path if expected_targets_file else "",
         expected_targets_file.path if expected_targets_file else "",
+        ctx.attr.runtime_selection,
     )
     bash_substitutions["curl_retry_flags"] = " ".join(_bash_curl_retry_flags_for_tests())
     bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
@@ -833,6 +838,7 @@ def _uploader_impl(ctx):
                 expected_targets.path,
                 expected_targets_file.short_path if expected_targets_file else "",
                 expected_targets_file.path if expected_targets_file else "",
+                ctx.attr.runtime_selection,
             ),
         ),
         is_executable = False,
@@ -896,6 +902,7 @@ _dd_payload_uploader_rule = rule(
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
         "expected_targets": attr.string_list(default = [], doc = "Optional local labels whose current-invocation outputs the uploader must account for."),
         "expected_targets_file": attr.label(allow_single_file = True, doc = "Optional generated schema-v1 JSON file containing invocation-scoped expected targets."),
+        "runtime_selection": attr.bool(default = False, doc = "Require expected targets and keyed context files to be supplied at runtime."),
         # Schema + validator bundled for best-effort payload validation
         "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
         "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),

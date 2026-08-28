@@ -166,6 +166,29 @@ Go target metadata records the selected mode in `bazel.go.orchestrion.mode` and
 whether the linker optimization was active in
 `bazel.go.test_binary_linker_optimization`.
 
+### Explicit single-service Go descriptor
+
+`dd_topt_go_test` also accepts a local-static `topt_data` descriptor for a
+consumer-owned stable `.topt` target:
+
+```bzl
+topt_data = {
+    "repo_name": "test_optimization_data_service",
+    "service_name": "service-name",
+    "runtime_module_path": "example.com/repo",
+    # Optional only when the sync repository uses a non-default out_dir:
+    # "manifest_label": "@test_optimization_data_service//:custom/manifest.txt",
+}
+```
+
+The descriptor is literal configuration; it does not load the external
+repository's `export.bzl`. The macro derives
+`:test_optimization_repository_state`, `:test_optimization_files`, and
+`:test_optimization_runtime_module` from `repo_name`. The selector fails
+analysis when the repository is disabled or its service, Go runtime, or module
+identity differs. If the configured module is absent, the stable runtime-module
+label is empty and selection uses the canonical full bundle.
+
 ## Sync extension attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`
@@ -201,6 +224,11 @@ Notes:
   cache-key churn.
 - For HTTP numeric overrides, `-1` means "do not pin here"; resolution falls
   back to environment overrides first, then the rule default.
+- Single-service repositories expose stable public
+  `:test_optimization_repository_state` and
+  `:test_optimization_runtime_module` targets in both enabled and disabled
+  states. These support explicit static Go targets and do not activate a
+  repository by themselves.
 
 ## Multi-sync extension attributes
 
@@ -307,6 +335,7 @@ Rule: `dd_payload_uploader(...)`
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
 | `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; missing results are reported while other fresh outputs continue to upload |
 | `expected_targets_file` | label | unset | Optional schema-v1 exact-target file. Static and file inputs must match when both are non-empty; missing results do not block other fresh uploads |
+| `runtime_selection` | bool | `False` | Require repeatable runtime `--expected-target` and `--context-entry` arguments instead of configured expected/context inputs |
 
 ## Doctor rule attributes
 
@@ -322,6 +351,7 @@ delete, or rewrite source payloads.
 | `data` | label_list | `["@test_optimization_data//:test_optimization_context"]` in examples | Context targets bundle `context.json` and `telemetry_facts.json`. Doctor selects `context.json` for Git validation; the same labels can be reused by the uploader for enrichment and rule telemetry |
 | `expected_targets` | string_list | `[]` | Optional strict list of local Bazel test labels to validate. When empty, the doctor validates discovered Test Optimization output directories and ignores plain non-instrumented test outputs |
 | `expected_targets_file` | label | unset | Optional schema-v1 JSON file containing the exact invocation-scoped target set. Static and file inputs must match when both are non-empty |
+| `runtime_selection` | bool | `False` | Require repeatable runtime `--expected-target` and `--context-entry` arguments instead of configured expected/context inputs |
 | `require_git_metadata` | bool | `True` | Require `git.repository_url`, `git.commit.sha`, and `git.branch` or `git.tag` in synced context data |
 | `require_bazel_metadata` | bool | `True` | Require `bazel_target_metadata.json` next to selected payload outputs |
 | `require_json_payloads` | bool | `True` | Require parseable `.json` payload files |
@@ -380,8 +410,9 @@ workspace root package.
 | `expected_targets` | string_list | `[]` | Exact labels passed to both tools. Doctor validates them strictly; uploader reports missing results while continuing with other fresh payloads |
 | `expected_targets_file` | label or `None` | `None` | Generated exact-target JSON file forwarded to both tools with the same doctor/uploader semantics for manifest-driven invocations |
 | `context_data` | label_list or `None` | `["@<sync_repo>//:test_optimization_context"]` | Explicit context data labels when the default sync repo label is not enough |
-| `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, `expected_targets`, or `expected_targets_file` |
-| `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name`, `data`, `expected_targets`, or `expected_targets_file` |
+| `runtime_selection` | bool | `False` | Give both generated tools empty static data/expected inputs and require the runner to supply exact runtime targets and keyed contexts |
+| `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, `expected_targets`, `expected_targets_file`, or `runtime_selection` |
+| `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name`, `data`, `expected_targets`, `expected_targets_file`, or `runtime_selection` |
 
 Example:
 
@@ -398,6 +429,20 @@ dd_test_optimization_targets(
     },
 )
 ```
+
+With `runtime_selection = True`, do not configure `context_data`,
+`expected_targets`, or `expected_targets_file`. Invoke both tools with the same
+sorted exact selection:
+
+```text
+--expected-target=//pkg:test.topt
+--context-entry=test_optimization_data_service=/absolute/path/to/context.json
+```
+
+Both flags are repeatable. Context entries are keyed by the apparent Bazel
+repository name and require a sibling `telemetry_facts.json`; repository,
+service, runtime, schema, duplicate, and target-set mismatches fail before
+payload discovery or upload.
 
 ## Python snippet generator
 
@@ -448,11 +493,10 @@ invocation. They do not include
 `DD_CIVISIBILITY_AGENTLESS_ENABLED`.
 
 For Go onboarding, the generated block also contains
-`common:<config> --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1` and the existing
-`rules_go` analysis setting
-`build:<config> --@<rules_go_repo>//go/private/orchestrion:enabled=true`.
-`--config=<config>` is the single user-facing switch: removing it disables
-both metadata resolution and the real Orchestrion aliases.
+`common:<config> --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`. Optimized Go
+targets enable Orchestrion through their own transition, so no global
+`orchestrion:enabled` build setting is generated. `--config=<config>` remains
+the single user-facing metadata gate.
 
 In that disabled state, the patched `rules_go` aliases select package-local
 empty targets and the gated Orchestrion repository writes its stable empty

@@ -5,6 +5,10 @@
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
 load(
+    "@datadog-rules-test-optimization-go//:topt_go_stdlib.bzl",
+    "dd_topt_go_stdlib_warmup",
+)
+load(
     ":test_extension.bzl",
     "go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test",
     "go_single_spec_propagates_non_default_enablement_and_flaky_tests_test",
@@ -30,8 +34,6 @@ load(
     "go_macro_inferred_importpath_metadata_test",
     "go_macro_multi_service_target",
     "go_macro_multi_service_wiring_test",
-    "go_macro_orchestrion_enablement_mismatch_failure_test",
-    "go_macro_orchestrion_enablement_mismatch_target",
     "go_macro_orchestrion_pin_files_provider_test",
     "go_macro_orchestrion_pin_files_target",
     "go_macro_orchestrion_pin_files_wiring_test",
@@ -48,6 +50,15 @@ load(
     "go_macro_stage_sources_select_wiring_test",
     "go_macro_stage_sources_target",
     "go_macro_stage_sources_wiring_test",
+    "go_macro_static_disabled_failure_test",
+    "go_macro_static_disabled_target",
+    "go_macro_static_fallback_metadata_test",
+    "go_macro_static_identity_mismatch_failure_test",
+    "go_macro_static_identity_mismatch_target",
+    "go_macro_static_module_metadata_test",
+    "go_macro_static_module_target",
+    "go_macro_static_target",
+    "go_macro_static_wiring_test",
     "go_macro_test_optimization_linker_default_target",
     "go_macro_test_optimization_linker_default_wiring_test",
     "go_macro_test_optimization_linker_metadata_dbg_test",
@@ -63,6 +74,7 @@ load(
     "go_macro_test_optimization_public_wrapper_mode_test",
     "has_go_mod_pin_test",
     "has_package_local_go_mod_test",
+    "hidden_raw_tags_test",
     "orch_transition_forwards_mode_test",
     "orch_wrapper_materialized_actual_non_windows_target",
     "orch_wrapper_materialized_actual_non_windows_test",
@@ -72,8 +84,8 @@ load(
     "resolve_topt_service_key_missing_target_rule",
     "resolve_topt_service_key_unknown_failure_test",
     "resolve_topt_service_key_unknown_target_rule",
-    "stdlib_warmup_disabled_noop_test",
     "stdlib_warmup_tags_test",
+    "stdlib_warmup_target_has_outputs_test",
     "stdlib_warmup_transition_selects_test_optimization_test",
     "validate_orchestrion_mode_invalid_failure_test",
     "validate_orchestrion_mode_invalid_target_rule",
@@ -84,10 +96,6 @@ load(
     "wrapper_output_name_non_windows_test",
     "wrapper_output_name_target_rule",
     "wrapper_output_name_windows_test",
-)
-load(
-    "@datadog-rules-test-optimization-go//:topt_go_stdlib.bzl",
-    "dd_topt_go_stdlib_warmup",
 )
 load(
     ":test_payloads_selector.bzl",
@@ -699,14 +707,54 @@ validate_test_optimization_pin_files_missing_go_mod_failure_test(
     target_under_test = ":validate_test_optimization_pin_files_missing_go_mod_target",
 )
 
-go_macro_orchestrion_enablement_mismatch_target(
-    name = "go_macro_orchestrion_enablement_mismatch_target",
+go_macro_static_target(
+    name = "go_macro_static_target",
+    tags = [
+        "dd-requires-docker",
+        "dd-test-optimization",
+        "dd-test-optimization-source-manual",
+        "manual",
+    ],
+)
+
+go_macro_static_wiring_test(
+    name = "go_macro_static_wiring_test",
+    target_under_test = ":go_macro_static_target__raw_go_test",
+)
+
+go_macro_static_fallback_metadata_test(
+    name = "go_macro_static_fallback_metadata_test",
+    target_under_test = ":go_macro_static_target_topt_bazel_metadata",
+)
+
+go_macro_static_module_target(
+    name = "go_macro_static_module_target",
     tags = ["manual"],
 )
 
-go_macro_orchestrion_enablement_mismatch_failure_test(
-    name = "go_macro_orchestrion_enablement_mismatch_failure_test",
-    target_under_test = ":go_macro_orchestrion_enablement_mismatch_target",
+go_macro_static_module_metadata_test(
+    name = "go_macro_static_module_metadata_test",
+    target_under_test = ":go_macro_static_module_target_topt_bazel_metadata",
+)
+
+go_macro_static_disabled_target(
+    name = "go_macro_static_disabled_target",
+    tags = ["manual"],
+)
+
+go_macro_static_disabled_failure_test(
+    name = "go_macro_static_disabled_failure_test",
+    target_under_test = ":go_macro_static_disabled_target",
+)
+
+go_macro_static_identity_mismatch_target(
+    name = "go_macro_static_identity_mismatch_target",
+    tags = ["manual"],
+)
+
+go_macro_static_identity_mismatch_failure_test(
+    name = "go_macro_static_identity_mismatch_failure_test",
+    target_under_test = ":go_macro_static_identity_mismatch_target",
 )
 
 wrapper_output_name_target_rule(
@@ -795,13 +843,19 @@ stdlib_warmup_tags_test(
     timeout = "short",
 )
 
-dd_topt_go_stdlib_warmup(
-    name = "stdlib_warmup_disabled_target",
+hidden_raw_tags_test(
+    name = "hidden_raw_tags_test",
+    size = "small",
+    timeout = "short",
 )
 
-stdlib_warmup_disabled_noop_test(
-    name = "stdlib_warmup_disabled_noop_test",
-    target_under_test = ":stdlib_warmup_disabled_target",
+dd_topt_go_stdlib_warmup(
+    name = "stdlib_warmup_target",
+)
+
+stdlib_warmup_target_has_outputs_test(
+    name = "stdlib_warmup_target_has_outputs_test",
+    target_under_test = ":stdlib_warmup_target",
 )
 
 test_suite(
@@ -821,7 +875,6 @@ test_suite(
         ":go_macro_explicit_service_wiring_test",
         ":go_macro_inferred_importpath_metadata_test",
         ":go_macro_multi_service_wiring_test",
-        ":go_macro_orchestrion_enablement_mismatch_failure_test",
         ":go_macro_orchestrion_pin_files_provider_test",
         ":go_macro_orchestrion_pin_files_wiring_test",
         ":go_macro_public_wrapper_test",
@@ -831,6 +884,11 @@ test_suite(
         ":go_macro_stage_sources_rundir_wiring_test",
         ":go_macro_stage_sources_select_wiring_test",
         ":go_macro_stage_sources_wiring_test",
+        ":go_macro_static_disabled_failure_test",
+        ":go_macro_static_fallback_metadata_test",
+        ":go_macro_static_identity_mismatch_failure_test",
+        ":go_macro_static_module_metadata_test",
+        ":go_macro_static_wiring_test",
         ":go_macro_test_optimization_linker_default_wiring_test",
         ":go_macro_test_optimization_linker_metadata_dbg_test",
         ":go_macro_test_optimization_linker_metadata_default_test",
@@ -848,6 +906,7 @@ test_suite(
         ":go_workspace_single_specs_test",
         ":has_go_mod_pin_test",
         ":has_package_local_go_mod_test",
+        ":hidden_raw_tags_test",
         ":normalize_user_data_handles_none_test",
         ":normalize_user_data_invalid_type_failure_test",
         ":orch_transition_forwards_mode_test",
@@ -872,8 +931,8 @@ test_suite(
         ":selector_override_miss_failure_test",
         ":selector_override_test",
         ":service_mapping_entries_filters_non_service_test",
-        ":stdlib_warmup_disabled_noop_test",
         ":stdlib_warmup_tags_test",
+        ":stdlib_warmup_target_has_outputs_test",
         ":stdlib_warmup_transition_selects_test_optimization_test",
         ":validate_orchestrion_mode_invalid_failure_test",
         ":validate_orchestrion_mode_test",

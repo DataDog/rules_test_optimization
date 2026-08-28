@@ -6,15 +6,16 @@
 
 """Internal Orchestrion wrapper rule for Go tests."""
 
-load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
-
 _BAZEL_TARGET_METADATA_OUTPUT = "bazel_target_metadata.json"
+_ORCHESTRION_ENABLED_SETTING = "@rules_go//go/private/orchestrion:enabled"
+_ORCHESTRION_MODE_SETTING = "@rules_go//go/private/orchestrion:mode"
 _ORCHESTRION_MODE_GENERAL = "general"
 _ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _orch_transition_impl(_settings, _attr):
     return {
-        "@rules_go//go/private/orchestrion:mode": _attr.orchestrion_mode,
+        _ORCHESTRION_ENABLED_SETTING: True,
+        _ORCHESTRION_MODE_SETTING: _attr.orchestrion_mode,
     }
 
 orch_transition_impl_for_tests = _orch_transition_impl
@@ -22,7 +23,10 @@ orch_transition_impl_for_tests = _orch_transition_impl
 orch_transition = transition(
     implementation = _orch_transition_impl,
     inputs = [],
-    outputs = ["@rules_go//go/private/orchestrion:mode"],
+    outputs = [
+        _ORCHESTRION_ENABLED_SETTING,
+        _ORCHESTRION_MODE_SETTING,
+    ],
 )
 
 def _first_target(dep):
@@ -107,13 +111,6 @@ exit /b %%ERRORLEVEL%%
     )
 
 def _orch_go_test_impl(ctx):
-    if ctx.attr.test_optimization_enabled and not ctx.attr._orchestrion_enabled[BuildSettingInfo].value:
-        fail(
-            "orch_go_test: Test Optimization metadata is enabled but Orchestrion is disabled; " +
-            "run with --config=test-optimization. Consumers upgrading an existing setup should " +
-            "rerun dd_topt_go_bootstrap with --write-bazelrc before building tests.",
-        )
-
     dep_exe, dep_runfiles = _dep_exec_and_runfiles(ctx.attr.actual)
     dep_run_environment = _dep_run_environment_info(ctx.attr.actual)
     metadata_file = ctx.file.metadata
@@ -164,16 +161,8 @@ orch_go_test = rule(
             ],
             doc = "Internal Orchestrion mode forwarded to the raw go_test target.",
         ),
-        "test_optimization_enabled": attr.bool(
-            default = False,
-            doc = "Whether the selected generated metadata repository is enabled.",
-        ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
-        ),
-        "_orchestrion_enabled": attr.label(
-            default = "@rules_go//go/private/orchestrion:enabled",
-            providers = [BuildSettingInfo],
         ),
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },

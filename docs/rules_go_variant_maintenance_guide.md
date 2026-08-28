@@ -268,17 +268,15 @@ patch in their private patch order.
 ## Test Optimization Alias Contract
 
 The public base trees keep the existing
-`//go/private/orchestrion:enabled` setting as the analysis-time control. Their
-stable Orchestrion aliases select package-local empty targets when the setting
-is false and the real `rules_go_orchestrion_tool` files when it is true.
-Consumers should expose one config that sets both effects:
+`//go/private/orchestrion:enabled` setting and stable aliases. The Datadog Go
+wrapper transitions that setting only for optimized targets. Consumers expose
+one metadata config:
 
 ```bazelrc
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 ```
 
 The public Go extension reads the metadata environment by default; low-level
 repositories do so when explicitly configured with `enabled_by_env = True`.
-Removing the config is the opt-out and must not require a consumer-owned
-duplicate bool flag or stub repository.
+Removing the config is the metadata opt-out and must not require a
+consumer-owned duplicate bool flag or stub repository.

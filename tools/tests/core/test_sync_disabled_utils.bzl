@@ -20,6 +20,8 @@ load(
     "render_disabled_settings_json_for_tests",
     "render_disabled_telemetry_facts_json_for_tests",
     "render_disabled_test_management_json_for_tests",
+    "render_repository_state_target_for_tests",
+    "render_runtime_module_target_for_tests",
     "repository_environ_for_tests",
     "resolve_service_and_environment_for_tests",
 )
@@ -229,6 +231,8 @@ def _disabled_export_and_build_shape_test(ctx):
     for fragment in [
         'name = "test_optimization_files"',
         'name = "test_optimization_context"',
+        'name = "test_optimization_repository_state"',
+        'name = "test_optimization_runtime_module"',
         "custom_topt/cache/http/settings.json",
         "custom_topt/cache/http/known_tests.json",
         "custom_topt/cache/http/test_management.json",
@@ -236,6 +240,34 @@ def _disabled_export_and_build_shape_test(ctx):
         "custom_topt/telemetry_facts.json",
     ]:
         asserts.true(env, fragment in build, "missing BUILD fragment %s" % fragment)
+    return unittest.end(env)
+
+def _repository_state_and_runtime_module_rendering_test(ctx):
+    """Validate stable static-consumer labels represent module hits and misses."""
+    env = unittest.begin(ctx)
+    state = render_repository_state_target_for_tests(
+        enabled = True,
+        disabled_reason = "",
+        repo_name = "test_optimization_data_service",
+        service_name = "service-name",
+        runtime_name = "go",
+        runtime_module_path = "example.com/repo",
+        runtime_module_included = True,
+    )
+    for fragment in [
+        'name = "test_optimization_repository_state"',
+        'repo_name = "test_optimization_data_service"',
+        'service_name = "service-name"',
+        'runtime_name = "go"',
+        'runtime_module_path = "example.com/repo"',
+        "runtime_module_included = True",
+    ]:
+        asserts.true(env, fragment in state, "missing state fragment %s" % fragment)
+
+    module_hit = render_runtime_module_target_for_tests("example_com_repo")
+    asserts.true(env, 'srcs = [":module_example_com_repo"]' in module_hit)
+    module_miss = render_runtime_module_target_for_tests()
+    asserts.true(env, "srcs = []" in module_miss)
     return unittest.end(env)
 
 enabled_truthy_values_test = unittest.make(_enabled_truthy_values_test)
@@ -247,3 +279,4 @@ disabled_cache_payloads_contract_test = unittest.make(_disabled_cache_payloads_c
 disabled_telemetry_contract_test = unittest.make(_disabled_telemetry_contract_test)
 disabled_export_and_build_shape_test = unittest.make(_disabled_export_and_build_shape_test)
 disabled_runtime_module_path_precedence_test = unittest.make(_disabled_runtime_module_path_precedence_test)
+repository_state_and_runtime_module_rendering_test = unittest.make(_repository_state_and_runtime_module_rendering_test)

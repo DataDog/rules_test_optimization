@@ -307,17 +307,15 @@ in one place.
 Implementation:
 - [topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
 
-In the enabled path, the wrapper rule applies a function transition that sets
-only:
+In the enabled path, the wrapper rule applies a function transition that sets:
 
 ```bzl
-"@rules_go//go/private/orchestrion:mode": "general" or "test_optimization"
+"@rules_go//go/private/orchestrion:enabled": True,
+"@rules_go//go/private/orchestrion:mode": "general" or "test_optimization",
 ```
 
-The transition deliberately preserves the existing
-`@rules_go//go/private/orchestrion:enabled` setting. The user-facing
-`--config=test-optimization` config enables that setting during analysis;
-omitting the config leaves it at the `rules_go` default of `False`.
+Enablement therefore follows the optimized target edge instead of a global
+build setting. Ordinary tests in a mixed invocation remain untransitioned.
 
 The wrapper then symlinks the executable produced by the raw target and returns
 the same runfiles.

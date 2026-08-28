@@ -35,18 +35,16 @@ The `test-optimization` config should contain the recommended Bazel test flags:
 `--remote_download_minimal`, `--remote_download_regex=.*test[.]outputs.*`, and
 `--zip_undeclared_test_outputs`.
 
-For Go consumers using the reusable bootstrap, keep the phase-correct enablement
-in the same config:
+For Go consumers using the reusable bootstrap, keep metadata enablement in the
+same config:
 
 ```bazelrc
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 ```
 
-This is one user-facing switch. Removing `--config=test-optimization` disables
-both metadata resolution and the Orchestrion analysis aliases; it does not
-require a second bool flag. In WORKSPACE repositories, use the apparent
-`rules_go` repository name configured by that workspace.
+Optimized Go targets enable Orchestrion through their own transition. Removing
+`--config=test-optimization` disables metadata resolution; no global
+Orchestrion setting or second user-facing bool is required.
 
 Config-gated Python consumers use only the
 `DD_TEST_OPTIMIZATION_ENABLED=1` entry and omit the Go-specific Orchestrion
@@ -163,6 +161,30 @@ dd_test_optimization_targets(
     },
 )
 ```
+
+For a runner that selects explicit per-service repositories at execution time,
+create the same pair with `runtime_selection = True` and no static context or
+expected-target inputs:
+
+```bzl
+dd_test_optimization_targets(
+    name = "test_optimization",
+    runtime_selection = True,
+)
+```
+
+Pass the same repeatable arguments to doctor and uploader:
+
+```bash
+--expected-target=//pkg:test.topt \
+--context-entry=test_optimization_data_service=/absolute/path/to/context.json
+```
+
+Each context path must name an existing `context.json` with a sibling
+`telemetry_facts.json`. The apparent repository key and both documents' service
+and runtime identity must agree. Missing, duplicate, mismatched, or incomplete
+runtime selections fail before payload discovery, cleanup, enrichment, or
+network access.
 
 If your repository is small, the same helper can live in the root package. In
 large monorepos, prefer `//tools/test_optimization` or another lightweight

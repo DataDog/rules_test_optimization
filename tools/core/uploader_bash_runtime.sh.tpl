@@ -305,6 +305,197 @@ resolve_runtime_file_path() {
     resolve_artifact_path "$input_path"
 }
 
+RUNTIME_SELECTION_REQUIRED="__DDTPL_RUNTIME_SELECTION__"
+RUNTIME_EXPECTED_TARGETS=()
+RUNTIME_CONTEXT_REPOS=()
+RUNTIME_CONTEXT_FILES=()
+RUNTIME_TELEMETRY_FACTS_FILES=()
+
+validate_runtime_expected_target() {
+    local label="$1"
+    if [[ ! "$label" =~ ^//[^:[:space:]]*:[^:[:space:]]+$ || "$label" == *"..."* || "$label" == *"*"* || "$label" == *"\\"* ]]; then
+        log "error: --expected-target must be a fully expanded local //pkg:target label, got '$label'"
+        exit 2
+    fi
+}
+
+validate_runtime_context_pair() {
+    local repo_key="$1"
+    local context_file="$2"
+    local telemetry_file="$3"
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq -e --arg repo "$repo_key" '
+          type == "object" and
+          .["topt.sync.repository_name"] == $repo and
+          (.["service.name"] | type == "string" and length > 0) and
+          (.["runtime.name"] | type == "string" and length > 0)
+        ' "$context_file" >/dev/null; then
+            log "error: runtime context/telemetry identity or schema mismatch for repository '$repo_key'"
+            exit 2
+        fi
+        local service_name runtime_name
+        service_name="$(jq -r '.["service.name"]' "$context_file")"
+        runtime_name="$(jq -r '.["runtime.name"]' "$context_file")"
+        if ! jq -e --arg service "$service_name" --arg runtime "$runtime_name" '
+          type == "object" and
+          .schema_version == 1 and
+          .service_name == $service and
+          .runtime_name == $runtime and
+          (.counts | type == "array") and
+          (.distributions | type == "array")
+        ' "$telemetry_file" >/dev/null; then
+            log "error: runtime context/telemetry identity or schema mismatch for repository '$repo_key'"
+            exit 2
+        fi
+        return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        if ! python3 - "$repo_key" "$context_file" "$telemetry_file" <<'PY'
+import json
+import sys
+
+repo, context_path, telemetry_path = sys.argv[1:]
+with open(context_path, encoding="utf-8-sig") as handle:
+    context = json.load(handle)
+with open(telemetry_path, encoding="utf-8-sig") as handle:
+    telemetry = json.load(handle)
+valid = (
+    isinstance(context, dict)
+    and context.get("topt.sync.repository_name") == repo
+    and isinstance(context.get("service.name"), str)
+    and bool(context.get("service.name"))
+    and isinstance(context.get("runtime.name"), str)
+    and bool(context.get("runtime.name"))
+    and isinstance(telemetry, dict)
+    and telemetry.get("schema_version") == 1
+    and telemetry.get("service_name") == context.get("service.name")
+    and telemetry.get("runtime_name") == context.get("runtime.name")
+    and isinstance(telemetry.get("counts"), list)
+    and isinstance(telemetry.get("distributions"), list)
+)
+raise SystemExit(0 if valid else 1)
+PY
+        then
+            log "error: runtime context/telemetry identity or schema mismatch for repository '$repo_key'"
+            exit 2
+        fi
+        return 0
+    fi
+    log "error: runtime --context-entry validation requires jq or python3"
+    exit 2
+}
+
+scan_runtime_selection_args() {
+    local args=("$@")
+    local i=0 arg value repo_key raw_path resolved telemetry existing
+    while (( i < ${#args[@]} )); do
+        arg="${args[$i]}"
+        case "$arg" in
+            --expected-target)
+                ((++i))
+                if (( i >= ${#args[@]} )); then
+                    log "error: --expected-target requires a local label"
+                    exit 2
+                fi
+                value="${args[$i]}"
+                ;;
+            --expected-target=*)
+                value="${arg#--expected-target=}"
+                ;;
+            --context-entry)
+                ((++i))
+                if (( i >= ${#args[@]} )); then
+                    log "error: --context-entry requires <repo>=<context.json>"
+                    exit 2
+                fi
+                value="${args[$i]}"
+                ;;
+            --context-entry=*)
+                value="${arg#--context-entry=}"
+                ;;
+            *)
+                ((++i))
+                continue
+                ;;
+        esac
+
+        if [[ "$arg" == --expected-target* ]]; then
+            validate_runtime_expected_target "$value"
+            for existing in "${RUNTIME_EXPECTED_TARGETS[@]}"; do
+                if [[ "$existing" == "$value" ]]; then
+                    log "error: duplicate --expected-target '$value'"
+                    exit 2
+                fi
+            done
+            RUNTIME_EXPECTED_TARGETS+=("$value")
+        else
+            repo_key="${value%%=*}"
+            raw_path="${value#*=}"
+            if [[ "$repo_key" == "$value" || -z "$repo_key" || -z "$raw_path" || "$repo_key" == *[^A-Za-z0-9._+-]* ]]; then
+                log "error: --context-entry must use <apparent-repo-name>=<context-json-path>"
+                exit 2
+            fi
+            resolved="$(resolve_runtime_file_path "$raw_path")"
+            if [[ -z "$resolved" || ! -f "$resolved" || "$(basename "$resolved")" != "context.json" ]]; then
+                log "error: context entry for '$repo_key' must reference an existing regular context.json file"
+                exit 2
+            fi
+            telemetry="$(dirname "$resolved")/telemetry_facts.json"
+            if [[ ! -f "$telemetry" ]]; then
+                log "error: context entry for '$repo_key' is missing sibling telemetry_facts.json"
+                exit 2
+            fi
+            for existing in "${RUNTIME_CONTEXT_REPOS[@]}"; do
+                if [[ "$existing" == "$repo_key" ]]; then
+                    log "error: duplicate --context-entry repository '$repo_key'"
+                    exit 2
+                fi
+            done
+            for existing in "${RUNTIME_CONTEXT_FILES[@]}"; do
+                if [[ "$existing" == "$resolved" ]]; then
+                    log "error: duplicate --context-entry path '$resolved'"
+                    exit 2
+                fi
+            done
+            validate_runtime_context_pair "$repo_key" "$resolved" "$telemetry"
+            RUNTIME_CONTEXT_REPOS+=("$repo_key")
+            RUNTIME_CONTEXT_FILES+=("$resolved")
+            RUNTIME_TELEMETRY_FACTS_FILES+=("$telemetry")
+        fi
+        ((++i))
+    done
+
+    if [[ "$RUNTIME_SELECTION_REQUIRED" == "true" ]]; then
+        if (( ${#RUNTIME_EXPECTED_TARGETS[@]} == 0 )); then
+            log "error: runtime selection requires at least one --expected-target"
+            exit 2
+        fi
+        if (( ${#RUNTIME_CONTEXT_REPOS[@]} == 0 )); then
+            log "error: runtime selection requires at least one --context-entry"
+            exit 2
+        fi
+    fi
+
+    local left right tmp
+    for (( left = 0; left < ${#RUNTIME_CONTEXT_REPOS[@]}; ++left )); do
+        for (( right = left + 1; right < ${#RUNTIME_CONTEXT_REPOS[@]}; ++right )); do
+            if [[ "${RUNTIME_CONTEXT_REPOS[$right]}" < "${RUNTIME_CONTEXT_REPOS[$left]}" ]]; then
+                tmp="${RUNTIME_CONTEXT_REPOS[$left]}"
+                RUNTIME_CONTEXT_REPOS[$left]="${RUNTIME_CONTEXT_REPOS[$right]}"
+                RUNTIME_CONTEXT_REPOS[$right]="$tmp"
+                tmp="${RUNTIME_CONTEXT_FILES[$left]}"
+                RUNTIME_CONTEXT_FILES[$left]="${RUNTIME_CONTEXT_FILES[$right]}"
+                RUNTIME_CONTEXT_FILES[$right]="$tmp"
+                tmp="${RUNTIME_TELEMETRY_FACTS_FILES[$left]}"
+                RUNTIME_TELEMETRY_FACTS_FILES[$left]="${RUNTIME_TELEMETRY_FACTS_FILES[$right]}"
+                RUNTIME_TELEMETRY_FACTS_FILES[$right]="$tmp"
+            fi
+        done
+    done
+}
+
+scan_runtime_selection_args "$@"
+
 # Resolve bundled context inputs used for payload enrichment.
 # Runtime override wins first so callers can reuse an already-fetched context
 # file without making `bazel run //:dd_upload_payloads` depend on sync labels.
@@ -370,7 +561,13 @@ load_context_manifest_entries() {
     CONTEXT_REPO_COUNT=${#CONTEXT_REPO_KEYS[@]}
 }
 
-if [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
+if (( ${#RUNTIME_CONTEXT_REPOS[@]} > 0 )); then
+    CONTEXT_REPO_KEYS=("${RUNTIME_CONTEXT_REPOS[@]}")
+    CONTEXT_REPO_FILES=("${RUNTIME_CONTEXT_FILES[@]}")
+    CONTEXT_REPO_COUNT=${#CONTEXT_REPO_KEYS[@]}
+    CONTEXT_JSON="${CONTEXT_REPO_FILES[0]}"
+    dbg "runtime contexts selected for repos: ${CONTEXT_REPO_KEYS[*]}"
+elif [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
     CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_OVERRIDE")
     if [[ -n "$CONTEXT_JSON" ]]; then
         CONTEXT_JSON_FROM_OVERRIDE=1
@@ -379,7 +576,7 @@ if [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
         log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
     fi
 fi
-if (( CONTEXT_JSON_FROM_OVERRIDE == 0 )); then
+if (( ${#RUNTIME_CONTEXT_REPOS[@]} == 0 && CONTEXT_JSON_FROM_OVERRIDE == 0 )); then
     CONTEXT_MANIFEST="$(resolve_artifact_path "$CONTEXT_MANIFEST_PATH")"
     if [[ -n "$CONTEXT_MANIFEST" ]]; then
         dbg "context manifest resolved via direct path: '$CONTEXT_MANIFEST'"
@@ -689,6 +886,8 @@ Options:
   --dry-run                    Enrich and validate payloads without uploading or deleting files.
   --validate-enrichment        Require key context and Bazel tags after enrichment, before upload.
   --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags.
+  --expected-target LABEL       Select one exact local target; repeatable.
+  --context-entry REPO=PATH     Select one keyed context.json and telemetry sibling; repeatable.
   --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable.
   --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto.
   --freshness-mode MODE        Cache-safety mode: auto, required, optional, or disabled. Default: auto.
@@ -727,6 +926,16 @@ while (($# > 0)); do
             ;;
         --expected-enriched-tag=*)
             EXPECTED_ENRICHED_TAGS+=("${1#--expected-enriched-tag=}")
+            shift
+            ;;
+        --expected-target|--context-entry)
+            if (($# < 2)); then
+                log "error: $1 requires a value"
+                exit 2
+            fi
+            shift 2
+            ;;
+        --expected-target=*|--context-entry=*)
             shift
             ;;
         --bep-json)
@@ -2986,6 +3195,7 @@ prepare_expected_targets() {
   fi
 
   if [[ -z "$EXPECTED_TARGETS_FILE_PATH" && -z "$EXPECTED_TARGETS_FILE_RLOC" ]]; then
+    apply_runtime_expected_targets
     if [[ -s "$EXPECTED_TARGETS_RESOLVED_FILE" ]]; then
       EXPECTED_TARGETS_CONFIGURED=1
     fi
@@ -3025,6 +3235,21 @@ prepare_expected_targets() {
     exit 2
   fi
   cp "$dynamic_targets" "$EXPECTED_TARGETS_RESOLVED_FILE"
+  EXPECTED_TARGETS_CONFIGURED=1
+  apply_runtime_expected_targets
+}
+
+apply_runtime_expected_targets() {
+  local runtime_targets
+  (( ${#RUNTIME_EXPECTED_TARGETS[@]} > 0 )) || return 0
+  runtime_targets="$TMP_PAYLOAD_DIR/expected_targets_runtime.txt"
+  printf '%s\n' "${RUNTIME_EXPECTED_TARGETS[@]}" | LC_ALL=C sort >"$runtime_targets"
+  if [[ -s "$EXPECTED_TARGETS_RESOLVED_FILE" ]] &&
+      ! cmp -s "$EXPECTED_TARGETS_RESOLVED_FILE" "$runtime_targets"; then
+    log "error: configured and runtime expected targets contain different target sets"
+    exit 2
+  fi
+  cp "$runtime_targets" "$EXPECTED_TARGETS_RESOLVED_FILE"
   EXPECTED_TARGETS_CONFIGURED=1
 }
 
@@ -4185,6 +4410,13 @@ resolve_telemetry_facts_sources() {
             printf '%s\n' "$canonical" >>"$tmp_sources"
         fi
     fi
+
+    for resolved in "${RUNTIME_TELEMETRY_FACTS_FILES[@]}"; do
+        canonical=$(canonicalize_existing_file "$resolved")
+        if [[ -n "$canonical" ]]; then
+            printf '%s\n' "$canonical" >>"$tmp_sources"
+        fi
+    done
 
     if [[ ! -s "$tmp_sources" ]]; then
         rm -f "$tmp_sources" 2>/dev/null || true

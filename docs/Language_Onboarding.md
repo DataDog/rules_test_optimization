@@ -75,17 +75,10 @@ enablement contract of the other companions:
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 ```
 
-Go workspaces also add the existing `rules_go` analysis-time setting. Prefer
-the generated block from `dd_topt_go_bootstrap --print-bazelrc-snippet` or
-`dd_topt_go_bootstrap --write-bazelrc`, which substitutes the consumer's actual
-apparent repository name:
-
-```text
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
-# Use @io_bazel_rules_go instead of @rules_go in WORKSPACE mode.
-```
-
-Do not add that Go-only line to Python-only or other non-Go workspaces.
+Go optimized targets enable Orchestrion through their own transition. The
+generated block therefore needs no global `orchestrion:enabled` setting; this
+also allows ordinary and optimized Go tests to run together without changing
+the ordinary target's configuration.
 
 Pass `DD_GIT_*` only through `--repo_env`. Never forward it as test
 environment data because that makes Git metadata part of the test action cache

@@ -35,6 +35,10 @@ Maintenance notes:
 """
 
 load(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_repository_state.bzl",
+    "TestOptimizationRepositoryStateInfo",
+)
+load(
     "@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl",
     "select_module_group_name",
     "selected_payload_runfiles",
@@ -73,6 +77,17 @@ def _resolve_payload_selection(ctx):
         ctx.attr.embeds,
         ctx.attr.fallback_importpath or "",
     )
+
+    if ctx.attr.repository_state:
+        state = ctx.attr.repository_state[TestOptimizationRepositoryStateInfo]
+        _validate_static_repository_state(ctx, state)
+        return struct(
+            importpath = ip,
+            importpath_source = importpath_source,
+            selected_name = "test_optimization_runtime_module" if state.runtime_module_included else "",
+            chosen = ctx.attr.runtime_module if state.runtime_module_included else None,
+            selection = "module" if state.runtime_module_included else "full_bundle_no_match",
+        )
 
     module_group_names = ctx.attr.module_group_names
     if module_group_names:
@@ -113,6 +128,22 @@ def _resolve_payload_selection(ctx):
         chosen = chosen,
         selection = selection,
     )
+
+def _validate_static_repository_state(ctx, state):
+    """Fail closed when a local descriptor disagrees with its sync repository."""
+    if not state.enabled:
+        reason = state.disabled_reason or "repository synchronization is disabled"
+        fail("topt_go_payloads_selector: selected Test Optimization repository %r is disabled: %s" % (state.repo_name, reason))
+    if state.repo_name != ctx.attr.expected_repo_name:
+        fail("topt_go_payloads_selector: repository identity mismatch: descriptor=%r repository=%r" % (ctx.attr.expected_repo_name, state.repo_name))
+    if state.service_name != ctx.attr.expected_service_name:
+        fail("topt_go_payloads_selector: service identity mismatch for repository %r: descriptor=%r repository=%r" % (state.repo_name, ctx.attr.expected_service_name, state.service_name))
+    if state.runtime_name != "go":
+        fail("topt_go_payloads_selector: repository %r has runtime %r; expected %r" % (state.repo_name, state.runtime_name, "go"))
+    if state.runtime_module_path != ctx.attr.expected_runtime_module_path:
+        fail("topt_go_payloads_selector: runtime module mismatch for repository %r: descriptor=%r repository=%r" % (state.repo_name, ctx.attr.expected_runtime_module_path, state.runtime_module_path))
+    if state.runtime_module_included and not ctx.attr.runtime_module:
+        fail("topt_go_payloads_selector: repository %r reports an included runtime module but exposes no stable runtime-module target" % state.repo_name)
 
 # Provider carrying the inferred importpath string
 ToptGoImportpathInfo = provider(
@@ -276,6 +307,14 @@ topt_go_payloads_selector = rule(
 
         # Optional override for the sanitized module label suffix
         "module_label_override": attr.string(),
+
+        # Static local descriptor state. Dynamic exports leave these empty and
+        # retain the existing per-module selection behavior above.
+        "repository_state": attr.label(providers = [TestOptimizationRepositoryStateInfo]),
+        "runtime_module": attr.label(),
+        "expected_repo_name": attr.string(),
+        "expected_service_name": attr.string(),
+        "expected_runtime_module_path": attr.string(),
     },
 )
 
@@ -289,6 +328,11 @@ topt_go_bazel_metadata = rule(
         "module_groups": attr.label_list(),
         "include_per_module": attr.bool(default = True),
         "module_label_override": attr.string(),
+        "repository_state": attr.label(providers = [TestOptimizationRepositoryStateInfo]),
+        "runtime_module": attr.label(),
+        "expected_repo_name": attr.string(),
+        "expected_service_name": attr.string(),
+        "expected_runtime_module_path": attr.string(),
         "orchestrion_mode": attr.string(default = "general", values = ["general", "test_optimization"]),
         "bazel_package": attr.string(mandatory = True),
         "bazel_target": attr.string(mandatory = True),

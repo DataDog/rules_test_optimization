@@ -218,6 +218,7 @@ def _render_uploader_runtime_template(
     expected_targets_path: str = "",
     expected_targets_file_path: str = "",
     fail_on_error: bool = False,
+    runtime_selection: bool = False,
     curl_retry_flags: str = "--retry 3 --retry-delay 2 --retry-connrefused",
 ) -> str:
     """Render uploader runtime template placeholders for direct unit tests."""
@@ -243,6 +244,7 @@ def _render_uploader_runtime_template(
         "ps_name": "generated_uploader.ps1",
         "quiescent_sec": "10",
         "rules_version": "test-rules-version",
+        "runtime_selection": "true" if runtime_selection else "false",
         "schema_json_path": "",
         "schema_json_rloc": "",
         "schema_validator_path": "",
@@ -1736,6 +1738,83 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
                 self.mod._resolve_expected_targets(config, config_path)
             self.assertIn("different target sets", stderr.getvalue())
+
+    def test_runtime_expected_targets_are_sorted_and_must_match_configured_inputs(self) -> None:
+        """Validate runtime target selection is exact, deterministic, and fail closed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = self._write_doctor_config(root, ["//pkg:a_test", "//pkg:b_test"])
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            targets, source = self.mod._resolve_expected_targets(
+                config,
+                config_path,
+                ["//pkg:b_test", "//pkg:a_test"],
+                True,
+            )
+            self.assertEqual(["//pkg:a_test", "//pkg:b_test"], targets)
+            self.assertEqual("runtime_and_configured", source)
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._resolve_expected_targets(
+                    config,
+                    config_path,
+                    ["//pkg:a_test", "//pkg:a_test"],
+                    True,
+                )
+            self.assertIn("duplicate target labels", stderr.getvalue())
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._resolve_expected_targets(config, config_path, [], True)
+            self.assertIn("requires at least one --expected-target", stderr.getvalue())
+
+    def test_runtime_contexts_validate_and_sort_keyed_context_telemetry_pairs(self) -> None:
+        """Validate runtime contexts preserve exact repo, service, and runtime identity."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = []
+            for repo_name, service_name in (("repo-b", "service-b"), ("repo-a", "service-a")):
+                repo_dir = root / repo_name
+                repo_dir.mkdir()
+                context_path = repo_dir / "context.json"
+                context_path.write_text(
+                    json.dumps({
+                        "topt.sync.repository_name": repo_name,
+                        "service.name": service_name,
+                        "runtime.name": "go",
+                    }),
+                    encoding="utf-8",
+                )
+                (repo_dir / "telemetry_facts.json").write_text(
+                    json.dumps({
+                        "schema_version": 1,
+                        "service_name": service_name,
+                        "runtime_name": "go",
+                        "counts": [],
+                        "distributions": [],
+                    }),
+                    encoding="utf-8",
+                )
+                entries.append(f"{repo_name}={context_path}")
+
+            contexts = self.mod._load_runtime_contexts(entries)
+            self.assertEqual(["repo-a", "repo-b"], [repo for repo, _ in contexts])
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_runtime_contexts([entries[0], entries[0]])
+            self.assertIn("duplicate --context-entry repository", stderr.getvalue())
+
+            context_path = contexts[0][1]
+            context_doc = json.loads(context_path.read_text(encoding="utf-8"))
+            context_doc["topt.sync.repository_name"] = "other-repo"
+            context_path.write_text(json.dumps(context_doc), encoding="utf-8")
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_runtime_contexts([f"repo-a={context_path}"])
+            self.assertIn("repository mismatch", stderr.getvalue())
 
     def test_expected_targets_file_rejects_duplicates_and_invalid_labels(self) -> None:
         """Validate generated target input cannot weaken local exactness."""
@@ -7099,6 +7178,109 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     self.assertEqual("ok", report_doc["status"])
                     self.assertEqual(0, report_doc["bep"]["eligible_outputs"])
                     self.assertEqual(0, report_doc["payloads"]["tests"]["processed"])
+
+    def test_generated_uploaders_validate_runtime_selection_before_discovery(self) -> None:
+        """Validate Bash and PowerShell accept only complete keyed runtime selections."""
+        bash = _require_functional_bash(self)
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell execution")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context_args = []
+            context_paths = []
+            for repo_name, service_name in (("repo-b", "service-b"), ("repo-a", "service-a")):
+                repo_dir = root / repo_name
+                repo_dir.mkdir()
+                context_path = repo_dir / "context.json"
+                context_path.write_text(
+                    json.dumps({
+                        "topt.sync.repository_name": repo_name,
+                        "service.name": service_name,
+                        "runtime.name": "go",
+                    }),
+                    encoding="utf-8",
+                )
+                (repo_dir / "telemetry_facts.json").write_text(
+                    json.dumps({
+                        "schema_version": 1,
+                        "service_name": service_name,
+                        "runtime_name": "go",
+                        "counts": [],
+                        "distributions": [],
+                    }),
+                    encoding="utf-8",
+                )
+                context_args.extend(["--context-entry", f"{repo_name}={context_path}"])
+                context_paths.append(context_path)
+
+            bash_script = root / "generated_uploader.sh"
+            bash_script.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_bash_runtime.sh.tpl",
+                    runtime_selection=True,
+                ),
+                encoding="utf-8",
+            )
+            bash_script.chmod(0o755)
+            powershell_script = root / "generated_uploader.ps1"
+            powershell_script.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_powershell_runtime.ps1.tpl",
+                    runtime_selection=True,
+                ),
+                encoding="utf-8",
+            )
+
+            for runtime, command in (
+                ("Bash", [bash, str(bash_script)]),
+                ("PowerShell", [pwsh, "-NoLogo", "-NoProfile", "-File", str(powershell_script)]),
+            ):
+                with self.subTest(runtime=runtime, case="missing"):
+                    result = subprocess.run(
+                        [*command, "--help"],
+                        cwd=root,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                    self.assertIn("requires at least one --expected-target", result.stdout + result.stderr)
+
+                with self.subTest(runtime=runtime, case="valid-multi-service"):
+                    result = subprocess.run(
+                        [*command, "--expected-target", "//pkg:test.topt", *context_args, "--help"],
+                        cwd=root,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+                with self.subTest(runtime=runtime, case="identity-mismatch"):
+                    result = subprocess.run(
+                        [
+                            *command,
+                            "--expected-target",
+                            "//pkg:test.topt",
+                            "--context-entry",
+                            f"wrong-repo={context_paths[0]}",
+                            "--help",
+                        ],
+                        cwd=root,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                    self.assertIn("identity or schema mismatch", result.stdout + result.stderr)
 
     def _assert_uploader_report_failure(self, report_path: Path, bep_path: Path) -> None:
         """Validate a failed generated uploader machine-readable report."""

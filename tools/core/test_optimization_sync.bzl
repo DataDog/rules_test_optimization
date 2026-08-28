@@ -1472,10 +1472,56 @@ def _render_disabled_export(repo_name, service, runtime_name, runtime_module_pat
         enabled = False,
     )
 
-def _render_disabled_build(settings_file, manifest_file, known_tests_file, test_management_file, flaky_tests_file, context_file, telemetry_facts_file):
+def _render_repository_state_target(
+        enabled,
+        repo_name,
+        service_name,
+        runtime_name,
+        runtime_module_path,
+        runtime_module_included,
+        disabled_reason = ""):
+    """Render the stable analysis-time repository-state target."""
+    return (
+        "test_optimization_repository_state(\n" +
+        '    name = "test_optimization_repository_state",\n' +
+        "    enabled = %s,\n" % ("True" if enabled else "False") +
+        "    repo_name = %s,\n" % _bzl_string_literal(repo_name or "") +
+        "    service_name = %s,\n" % _bzl_string_literal(service_name or "") +
+        "    runtime_name = %s,\n" % _bzl_string_literal(runtime_name or "") +
+        "    runtime_module_path = %s,\n" % _bzl_string_literal(runtime_module_path or "") +
+        "    runtime_module_included = %s,\n" % ("True" if runtime_module_included else "False") +
+        "    disabled_reason = %s,\n" % _bzl_string_literal(disabled_reason or "") +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n"
+    )
+
+def _render_runtime_module_target(module_label = ""):
+    """Render the stable filegroup for the configured runtime module."""
+    srcs = [":module_%s" % module_label] if module_label else []
+    return (
+        "filegroup(\n" +
+        '    name = "test_optimization_runtime_module",\n' +
+        "    srcs = %s,\n" % repr(srcs) +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n"
+    )
+
+def _render_disabled_build(
+        settings_file,
+        manifest_file,
+        known_tests_file,
+        test_management_file,
+        flaky_tests_file,
+        context_file,
+        telemetry_facts_file,
+        repo_name = "",
+        service_name = "",
+        runtime_name = "",
+        runtime_module_path = ""):
     """Render public disabled targets with the same file labels as live repos."""
     return (
-        'load(":module_runfiles.bzl", "topt_module_files")\n\n' +
+        'load(":module_runfiles.bzl", "topt_module_files")\n' +
+        'load("@datadog-rules-test-optimization//tools/core:test_optimization_repository_state.bzl", "test_optimization_repository_state")\n\n' +
         "filegroup(\n" +
         '    name = "test_optimization_files",\n' +
         "    srcs = %s,\n" % repr([settings_file, manifest_file, known_tests_file, test_management_file, flaky_tests_file]) +
@@ -1486,6 +1532,18 @@ def _render_disabled_build(settings_file, manifest_file, known_tests_file, test_
         "    srcs = %s,\n" % repr([context_file, telemetry_facts_file]) +
         '    visibility = ["//visibility:public"],\n' +
         ")\n\n" +
+        _render_runtime_module_target() +
+        "\n" +
+        _render_repository_state_target(
+            enabled = False,
+            repo_name = repo_name,
+            service_name = service_name,
+            runtime_name = runtime_name,
+            runtime_module_path = runtime_module_path,
+            runtime_module_included = False,
+            disabled_reason = "disabled by repository configuration",
+        ) +
+        "\n" +
         'exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest_file)
     )
 
@@ -1558,6 +1616,10 @@ def _write_disabled_repository(ctx, out_dir, env_data, debug):
             flaky_tests_file,
             context_file,
             telemetry_facts_file,
+            repo_name = repo_name,
+            service_name = env_data.get("service") or "",
+            runtime_name = runtime_name,
+            runtime_module_path = runtime_module_path,
         ),
     )
 
@@ -1846,6 +1908,8 @@ render_disabled_settings_json_for_tests = _render_disabled_settings_json
 render_disabled_test_management_json_for_tests = _render_disabled_test_management_json
 render_disabled_telemetry_facts_json_for_tests = _render_disabled_telemetry_facts_json
 render_disabled_export_for_tests = _render_disabled_export
+render_repository_state_target_for_tests = _render_repository_state_target
+render_runtime_module_target_for_tests = _render_runtime_module_target
 render_disabled_build_for_tests = _render_disabled_build
 is_test_optimization_enabled_for_tests = _is_test_optimization_enabled
 repository_environ_for_tests = _TEST_OPTIMIZATION_REPOSITORY_ENVIRON
@@ -2164,7 +2228,7 @@ def _build_configurations_json(ctx, debug, osinfo = None, runtime = None):
     log_debug(debug, "config", "Configurations JSON: %s" % conf_json)
     return conf_json
 
-def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None, runtime = None):
+def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None, runtime = None, repo_name = ""):
     """Build non-secret context tags stored in generated `context.json`."""
 
     # _build_context_tags: aggregates CI, git, OS, and runtime tags for context.json
@@ -2196,6 +2260,7 @@ def _build_context_tags(ctx, env_data, api_key, debug, osinfo = None, runtime = 
     tags["bazel.rule_version"] = TEST_BAZEL_RULE_VERSION
     tags["bazel.os"] = osinfo.get("platform") or "unknown"
     tags["bazel.arch"] = osinfo.get("arch") or "unknown"
+    tags["topt.sync.repository_name"] = repo_name or getattr(ctx.attr, "repo_name", None) or getattr(ctx, "name", "")
 
     # Git tags
     if env_data.get("repository_url"):
@@ -2914,7 +2979,15 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
 
     # Build and write context.json (non-secret metadata) under `out_dir`
     # so all manifest-relative payload files share a single root.
-    context_tags = _build_context_tags(ctx, env_data, api_key, debug, osinfo = osinfo, runtime = runtime)
+    context_tags = _build_context_tags(
+        ctx,
+        env_data,
+        api_key,
+        debug,
+        osinfo = osinfo,
+        runtime = runtime,
+        repo_name = spec["repo_name"],
+    )
     ctx.file(context_file, json.encode(context_tags) + "\n")
     ctx.file(telemetry_facts_file, json.encode(telemetry_facts) + "\n")
 
@@ -3014,6 +3087,33 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     # Unified export file for simpler loading from user repos
     # Prefer the apparent repo name passed by the extension/WORKSPACE helper; fallback to ctx.name
     repo_name = spec["repo_name"]
+    repository_runtime_module_path = ""
+    repository_runtime_module_label = ""
+    repository_runtime_module_included = False
+    if runtime_name == "go":
+        repository_runtime_module_path = go_module_path
+        repository_runtime_module_label = sanitized_go_module_path
+        repository_runtime_module_included = go_module_included
+    elif runtime_name == "python":
+        repository_runtime_module_path = python_module_path
+        repository_runtime_module_label = sanitized_python_module_path
+        repository_runtime_module_included = python_module_included
+    elif runtime_name == "java":
+        repository_runtime_module_path = java_module_path
+        repository_runtime_module_label = sanitized_java_module_path
+        repository_runtime_module_included = java_module_included
+    elif runtime_name == "nodejs":
+        repository_runtime_module_path = nodejs_module_path
+        repository_runtime_module_label = sanitized_nodejs_module_path
+        repository_runtime_module_included = nodejs_module_included
+    elif runtime_name == "dotnet":
+        repository_runtime_module_path = dotnet_module_path
+        repository_runtime_module_label = sanitized_dotnet_module_path
+        repository_runtime_module_included = dotnet_module_included
+    elif runtime_name == "ruby":
+        repository_runtime_module_path = ruby_module_path
+        repository_runtime_module_label = sanitized_ruby_module_path
+        repository_runtime_module_included = ruby_module_included
     export_bzl = _render_export_bzl(
         repo_name,
         validated_service,
@@ -3059,6 +3159,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     exp = repr(exports)
     build_content = (
         'load(":module_runfiles.bzl", "topt_module_files")\n' +
+        'load("@datadog-rules-test-optimization//tools/core:test_optimization_repository_state.bzl", "test_optimization_repository_state")\n\n' +
         "filegroup(\n" +
         '    name = "test_optimization_files",\n' +
         ("    srcs = %s,\n" % exp) +
@@ -3146,6 +3247,21 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
                               (("    flaky_tests = %s,\n" % _bzl_string_literal(flaky_tests_file)) if flaky_tests_file else "") +
                               '    visibility = ["//visibility:public"],\n' +
                               ")\n")
+    build_content += (
+        "\n" +
+        _render_runtime_module_target(
+            repository_runtime_module_label if repository_runtime_module_included else "",
+        ) +
+        "\n" +
+        _render_repository_state_target(
+            enabled = True,
+            repo_name = repo_name,
+            service_name = validated_service,
+            runtime_name = runtime_name,
+            runtime_module_path = repository_runtime_module_path,
+            runtime_module_included = repository_runtime_module_included,
+        )
+    )
     if emit_surface:
         log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)
         ctx.report_progress("test_optimization_sync: writing BUILD")

@@ -382,6 +382,125 @@ function Log-StartTimeStats([string]$FilePath) {
     }
 }
 
+$script:RuntimeSelectionRequired = [System.Convert]::ToBoolean("__DDTPL_RUNTIME_SELECTION__")
+$script:RuntimeExpectedTargets = New-Object System.Collections.Generic.List[string]
+$script:RuntimeContextEntries = [ordered]@{}
+$script:RuntimeTelemetryFacts = New-Object System.Collections.Generic.List[string]
+
+function Assert-RuntimeExpectedTarget([string]$Label) {
+    if (
+        [string]::IsNullOrWhiteSpace($Label) -or
+        $Label -notmatch '^//[^:\s]*:[^:\s]+$' -or
+        $Label.Contains('...') -or
+        $Label.Contains('*') -or
+        $Label.Contains('\')
+    ) {
+        Log "error: --expected-target must be a fully expanded local //pkg:target label, got '$Label'"
+        exit 2
+    }
+}
+
+function Assert-RuntimeContextPair([string]$RepoKey, [string]$ContextPath, [string]$TelemetryPath) {
+    try {
+        $context = Get-Content -LiteralPath $ContextPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $telemetry = Get-Content -LiteralPath $TelemetryPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Log "error: runtime context/telemetry must contain valid JSON for repository '$RepoKey'"
+        exit 2
+    }
+    $contextRepo = [string]$context.PSObject.Properties['topt.sync.repository_name'].Value
+    $serviceName = [string]$context.PSObject.Properties['service.name'].Value
+    $runtimeName = [string]$context.PSObject.Properties['runtime.name'].Value
+    if (
+        $contextRepo -cne $RepoKey -or
+        [string]::IsNullOrWhiteSpace($serviceName) -or
+        [string]::IsNullOrWhiteSpace($runtimeName) -or
+        [int]$telemetry.schema_version -ne 1 -or
+        [string]$telemetry.service_name -cne $serviceName -or
+        [string]$telemetry.runtime_name -cne $runtimeName -or
+        $null -eq $telemetry.counts -or
+        $null -eq $telemetry.distributions
+    ) {
+        Log "error: runtime context/telemetry identity or schema mismatch for repository '$RepoKey'"
+        exit 2
+    }
+}
+
+function Initialize-RuntimeSelectionArguments {
+    $seenTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $seenPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    for ($index = 0; $index -lt $args.Count; $index++) {
+        $argument = [string]$args[$index]
+        $value = $null
+        $isTarget = $false
+        if ($argument -eq '--expected-target') {
+            if ($index + 1 -ge $args.Count) { Log 'error: --expected-target requires a local label'; exit 2 }
+            $index++
+            $value = [string]$args[$index]
+            $isTarget = $true
+        } elseif ($argument.StartsWith('--expected-target=')) {
+            $value = $argument.Substring('--expected-target='.Length)
+            $isTarget = $true
+        } elseif ($argument -eq '--context-entry') {
+            if ($index + 1 -ge $args.Count) { Log 'error: --context-entry requires <repo>=<context.json>'; exit 2 }
+            $index++
+            $value = [string]$args[$index]
+        } elseif ($argument.StartsWith('--context-entry=')) {
+            $value = $argument.Substring('--context-entry='.Length)
+        } else {
+            continue
+        }
+
+        if ($isTarget) {
+            Assert-RuntimeExpectedTarget $value
+            if (-not $seenTargets.Add($value)) { Log "error: duplicate --expected-target '$value'"; exit 2 }
+            $script:RuntimeExpectedTargets.Add($value) | Out-Null
+            continue
+        }
+
+        $separator = $value.IndexOf('=')
+        if ($separator -le 0 -or $separator + 1 -ge $value.Length) {
+            Log 'error: --context-entry must use <apparent-repo-name>=<context-json-path>'
+            exit 2
+        }
+        $repoKey = $value.Substring(0, $separator)
+        $rawPath = $value.Substring($separator + 1)
+        if ($repoKey -notmatch '^[A-Za-z0-9._+-]+$') {
+            Log 'error: --context-entry must use <apparent-repo-name>=<context-json-path>'
+            exit 2
+        }
+        $resolved = Resolve-RuntimeFilePath $rawPath
+        if (-not $resolved -or -not (Test-Path -LiteralPath $resolved -PathType Leaf) -or [System.IO.Path]::GetFileName($resolved) -cne 'context.json') {
+            Log "error: context entry for '$repoKey' must reference an existing regular context.json file"
+            exit 2
+        }
+        $resolved = [System.IO.Path]::GetFullPath($resolved)
+        $telemetry = Join-Path (Split-Path -Parent $resolved) 'telemetry_facts.json'
+        if (-not (Test-Path -LiteralPath $telemetry -PathType Leaf)) {
+            Log "error: context entry for '$repoKey' is missing sibling telemetry_facts.json"
+            exit 2
+        }
+        if ($script:RuntimeContextEntries.Contains($repoKey)) { Log "error: duplicate --context-entry repository '$repoKey'"; exit 2 }
+        if (-not $seenPaths.Add($resolved)) { Log "error: duplicate --context-entry path '$resolved'"; exit 2 }
+        Assert-RuntimeContextPair $repoKey $resolved $telemetry
+        $script:RuntimeContextEntries[$repoKey] = $resolved
+        $script:RuntimeTelemetryFacts.Add([System.IO.Path]::GetFullPath($telemetry)) | Out-Null
+    }
+
+    if ($script:RuntimeSelectionRequired) {
+        if ($script:RuntimeExpectedTargets.Count -eq 0) { Log 'error: runtime selection requires at least one --expected-target'; exit 2 }
+        if ($script:RuntimeContextEntries.Count -eq 0) { Log 'error: runtime selection requires at least one --context-entry'; exit 2 }
+    }
+
+    $sortedEntries = [ordered]@{}
+    foreach ($repoKey in @($script:RuntimeContextEntries.Keys | Sort-Object -CaseSensitive)) {
+        $sortedEntries[$repoKey] = $script:RuntimeContextEntries[$repoKey]
+    }
+    $script:RuntimeContextEntries = $sortedEntries
+}
+
+Initialize-RuntimeSelectionArguments @args
+
 # Resolve context.json path (used by upload functions for payload enrichment).
 # Runtime override wins first so callers can reuse an already-fetched context
 # file without reintroducing sync repo dependencies at uploader run time.
@@ -449,7 +568,11 @@ function Load-ContextManifestEntries {
         $script:BundledContextEntries[$repoKey] = $resolved
     }
 }
-if ($ContextJsonOverride) {
+if ($script:RuntimeContextEntries.Count -gt 0) {
+    $script:BundledContextEntries = $script:RuntimeContextEntries
+    $script:PrimaryContextJson = @($script:BundledContextEntries.Values)[0]
+    Dbg "runtime contexts selected for repos: $([string]::Join(', ', @($script:BundledContextEntries.Keys)))"
+} elseif ($ContextJsonOverride) {
     $script:PrimaryContextJson = Resolve-ArtifactPath $ContextJsonOverride
     if ($script:PrimaryContextJson) {
         $contextJsonFromOverride = $true
@@ -736,6 +859,8 @@ function Show-Usage {
     Write-Host "  --dry-run                    Enrich and validate payloads without uploading or deleting files."
     Write-Host "  --validate-enrichment        Require key context and Bazel tags after enrichment, before upload."
     Write-Host "  --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags."
+    Write-Host "  --expected-target LABEL       Select one exact local target; repeatable."
+    Write-Host "  --context-entry REPO=PATH     Select one keyed context.json and telemetry sibling; repeatable."
     Write-Host "  --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable."
     Write-Host "  --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto."
     Write-Host "  --freshness-mode MODE        Cache-safety mode: auto, required, optional, or disabled. Default: auto."
@@ -774,6 +899,17 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     }
     if ($arg.StartsWith("--expected-enriched-tag=")) {
         $ExpectedEnrichedTags.Add($arg.Substring("--expected-enriched-tag=".Length)) | Out-Null
+        continue
+    }
+    if ($arg -eq "--expected-target" -or $arg -eq "--context-entry") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: $arg requires a value"
+            exit 2
+        }
+        $i++
+        continue
+    }
+    if ($arg.StartsWith("--expected-target=") -or $arg.StartsWith("--context-entry=")) {
         continue
     }
     if ($arg -eq "--bep-json") {
@@ -2852,6 +2988,30 @@ function Get-BepFileReferenceCandidates($FileObject) {
   return $values
 }
 
+function Set-ExpectedTargetsWithRuntime($ConfiguredTargets, [bool]$HasConfiguredSource) {
+  $configured = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  foreach ($label in @($ConfiguredTargets)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$label)) { $configured.Add([string]$label) | Out-Null }
+  }
+  if ($script:RuntimeExpectedTargets.Count -gt 0) {
+    $runtime = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($label in $script:RuntimeExpectedTargets) { $runtime.Add($label) | Out-Null }
+    if (
+      $configured.Count -gt 0 -and
+      ($configured.Count -ne $runtime.Count -or @($configured | Where-Object { -not $runtime.Contains($_) }).Count -gt 0)
+    ) {
+      Log "error: configured and runtime expected targets contain different target sets"
+      exit 2
+    }
+    $configured = $runtime
+  }
+  $script:ExpectedTargets.Clear()
+  foreach ($label in @($configured | Sort-Object -CaseSensitive)) {
+    $script:ExpectedTargets.Add($label) | Out-Null
+  }
+  $script:ExpectedTargetsConfigured = $HasConfiguredSource -or $script:RuntimeExpectedTargets.Count -gt 0
+}
+
 function Initialize-ExpectedTargets {
   $script:ExpectedTargets.Clear()
   $script:ExpectedTargetsConfigured = $false
@@ -2873,8 +3033,7 @@ function Initialize-ExpectedTargets {
     -not [string]::IsNullOrWhiteSpace($script:ExpectedTargetsFileRloc)
   )
   if (-not $dynamicConfigured) {
-    foreach ($label in $staticTargets) { $script:ExpectedTargets.Add($label) | Out-Null }
-    $script:ExpectedTargetsConfigured = $staticTargets.Count -gt 0
+    Set-ExpectedTargetsWithRuntime $staticTargets ($staticTargets.Count -gt 0)
     return
   }
 
@@ -2931,8 +3090,7 @@ function Initialize-ExpectedTargets {
       exit 2
     }
   }
-  foreach ($label in $dynamicTargets) { $script:ExpectedTargets.Add($label) | Out-Null }
-  $script:ExpectedTargetsConfigured = $true
+  Set-ExpectedTargetsWithRuntime $dynamicTargets $true
 }
 
 function Initialize-BepEligibility {
@@ -4111,6 +4269,13 @@ function Resolve-TelemetryFactsSources {
     if ($script:ContextJsonFromOverride -and $script:PrimaryContextJson) {
         $sibling = Join-Path (Split-Path -Parent $script:PrimaryContextJson) "telemetry_facts.json"
         $canonical = Resolve-CanonicalExistingFile $sibling
+        if ($canonical -and $seen.Add($canonical)) {
+            $sources += ,$canonical
+        }
+    }
+
+    foreach ($runtimeFacts in $script:RuntimeTelemetryFacts) {
+        $canonical = Resolve-CanonicalExistingFile $runtimeFacts
         if ($canonical -and $seen.Add($canonical)) {
             $sources += ,$canonical
         }

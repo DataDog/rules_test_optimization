@@ -6,15 +6,16 @@
 
 """Build target for warming the Test Optimization Go standard library."""
 
-load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@rules_go//go/private:providers.bzl", "GoStdLib")
 load("@rules_go//go/private/rules:transition.bzl", "go_transition")
 
+_ORCHESTRION_ENABLED_SETTING = "@rules_go//go/private/orchestrion:enabled"
 _ORCHESTRION_MODE_SETTING = "@rules_go//go/private/orchestrion:mode"
 _ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _stdlib_warmup_transition_impl(_settings, _attr):
     return {
+        _ORCHESTRION_ENABLED_SETTING: True,
         _ORCHESTRION_MODE_SETTING: _ORCHESTRION_MODE_TEST_OPTIMIZATION,
     }
 
@@ -32,6 +33,7 @@ _stdlib_warmup_transition = transition(
     implementation = _stdlib_warmup_transition_impl,
     inputs = [],
     outputs = [
+        _ORCHESTRION_ENABLED_SETTING,
         _ORCHESTRION_MODE_SETTING,
     ],
 )
@@ -62,8 +64,6 @@ _go_transition_stdlib_warmup = rule(
 )
 
 def _dd_topt_go_stdlib_warmup_impl(ctx):
-    if not ctx.attr._orchestrion_enabled[BuildSettingInfo].value:
-        return [DefaultInfo()]
     return [DefaultInfo(files = _first_target(ctx.attr.actual)[DefaultInfo].files)]
 
 _dd_topt_go_stdlib_warmup = rule(
@@ -72,10 +72,6 @@ _dd_topt_go_stdlib_warmup = rule(
         "actual": attr.label(
             mandatory = True,
             cfg = _stdlib_warmup_transition,
-        ),
-        "_orchestrion_enabled": attr.label(
-            default = "@rules_go//go/private/orchestrion:enabled",
-            providers = [BuildSettingInfo],
         ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",

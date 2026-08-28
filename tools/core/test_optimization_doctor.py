@@ -212,6 +212,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse doctor runtime arguments, including optional BEP freshness flags."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--expected-target", action="append", default=[])
+    parser.add_argument("--context-entry", action="append", default=[])
     parser.add_argument("--bep-json", action="append", default=[])
     parser.add_argument(
         "--freshness-source",
@@ -533,6 +535,8 @@ def _load_expected_targets_file(path: Path) -> list[str]:
 def _resolve_expected_targets(
     config: dict[str, Any],
     config_path: Path,
+    runtime_targets: list[str] | None = None,
+    runtime_selection: bool = False,
 ) -> tuple[list[str], str]:
     static_targets = config["expected_targets"]
     for label in static_targets:
@@ -544,17 +548,96 @@ def _resolve_expected_targets(
         "expected_targets_file_path",
         "expected_targets_file_short_path",
     )
-    if expected_targets_file is None:
-        return list(static_targets), "static" if static_targets else "discovery"
+    configured_targets = list(static_targets)
+    configured_source = "static" if static_targets else "discovery"
+    if expected_targets_file is not None:
+        dynamic_targets = _load_expected_targets_file(expected_targets_file)
+        if static_targets and set(static_targets) != set(dynamic_targets):
+            _fail(
+                "static expected_targets and expected_targets_file contain different target sets"
+            )
+        configured_targets = sorted(set(static_targets)) if static_targets else dynamic_targets
+        configured_source = "static_and_file" if static_targets else "file"
 
-    dynamic_targets = _load_expected_targets_file(expected_targets_file)
-    if static_targets and set(static_targets) != set(dynamic_targets):
-        _fail(
-            "static expected_targets and expected_targets_file contain different target sets"
-        )
-    if static_targets:
-        return sorted(set(static_targets)), "static_and_file"
-    return dynamic_targets, "file"
+    runtime_targets = runtime_targets or []
+    normalized_runtime = [_validate_expected_target_label(label) for label in runtime_targets]
+    if len(set(normalized_runtime)) != len(normalized_runtime):
+        _fail("runtime --expected-target arguments contain duplicate target labels")
+    normalized_runtime = sorted(normalized_runtime)
+    if normalized_runtime:
+        if configured_targets and set(configured_targets) != set(normalized_runtime):
+            _fail("configured and runtime expected targets contain different target sets")
+        return normalized_runtime, "runtime_and_configured" if configured_targets else "runtime"
+    if runtime_selection:
+        _fail("runtime selection requires at least one --expected-target argument")
+    return configured_targets, configured_source
+
+
+_APPARENT_REPO_NAME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-"
+)
+
+
+def _validate_runtime_repo_name(repo_name: str) -> str:
+    if not repo_name or any(ch not in _APPARENT_REPO_NAME_CHARS for ch in repo_name):
+        _fail(f"context entry has invalid apparent repository name: {repo_name!r}")
+    return repo_name
+
+
+def _load_runtime_contexts(entries: list[str]) -> list[tuple[str, Path]]:
+    """Validate keyed runtime context files and their telemetry siblings."""
+    contexts: list[tuple[str, Path]] = []
+    seen_repos: set[str] = set()
+    seen_paths: set[Path] = set()
+    for entry in entries:
+        repo_name, separator, raw_path = entry.partition("=")
+        if not separator or not raw_path:
+            _fail("--context-entry must use <apparent-repo-name>=<context-json-path>")
+        repo_name = _validate_runtime_repo_name(repo_name)
+        if repo_name in seen_repos:
+            _fail(f"duplicate --context-entry repository name: {repo_name!r}")
+        context_path = Path(raw_path).expanduser().resolve()
+        if context_path.name != "context.json" or not context_path.is_file():
+            _fail(f"context entry for {repo_name!r} must reference an existing regular context.json file")
+        if context_path in seen_paths:
+            _fail(f"duplicate --context-entry path: {context_path}")
+        telemetry_path = context_path.with_name("telemetry_facts.json")
+        if not telemetry_path.is_file():
+            _fail(f"context entry for {repo_name!r} is missing sibling telemetry_facts.json")
+
+        context = _load_json(context_path)
+        if not isinstance(context, dict):
+            _fail(f"runtime context for {repo_name!r} must be a JSON object")
+        context_repo = context.get("topt.sync.repository_name")
+        service_name = context.get("service.name")
+        runtime_name = context.get("runtime.name")
+        if context_repo != repo_name:
+            _fail(
+                f"runtime context repository mismatch: argument={repo_name!r} context={context_repo!r}"
+            )
+        if not isinstance(service_name, str) or not service_name:
+            _fail(f"runtime context for {repo_name!r} is missing service.name")
+        if not isinstance(runtime_name, str) or not runtime_name:
+            _fail(f"runtime context for {repo_name!r} is missing runtime.name")
+
+        telemetry = _load_json(telemetry_path)
+        if not isinstance(telemetry, dict):
+            _fail(f"telemetry facts for {repo_name!r} must be a JSON object")
+        if telemetry.get("schema_version") != 1:
+            _fail(f"telemetry facts for {repo_name!r} must use schema_version 1")
+        if not isinstance(telemetry.get("counts"), list) or not isinstance(
+            telemetry.get("distributions"), list
+        ):
+            _fail(f"telemetry facts for {repo_name!r} has an invalid facts schema")
+        if telemetry.get("service_name") != service_name:
+            _fail(f"runtime context and telemetry service mismatch for {repo_name!r}")
+        if telemetry.get("runtime_name") != runtime_name:
+            _fail(f"runtime context and telemetry runtime mismatch for {repo_name!r}")
+
+        seen_repos.add(repo_name)
+        seen_paths.add(context_path)
+        contexts.append((repo_name, context_path))
+    return sorted(contexts, key=lambda item: item[0])
 
 
 def _expected_target_outputs(testlogs_dir: Path | None, label: str, *, allow_missing: bool = False) -> list[Path]:
@@ -1888,7 +1971,10 @@ def _resolve_configured_context_manifest(config: dict[str, Any], config_path: Pa
 
 
 def _validate_git_metadata(context_manifest: Path) -> None:
-    contexts = _load_contexts(context_manifest)
+    _validate_git_metadata_contexts(_load_contexts(context_manifest))
+
+
+def _validate_git_metadata_contexts(contexts: list[tuple[str, Path]]) -> None:
     if not contexts:
         _fail("require_git_metadata=True but no context.json was provided in data")
     for repo_key, context_path in contexts:
@@ -2709,16 +2795,28 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
     if execroot is not None and not os.environ.get(DOCTOR_EXECROOT_ENV):
         os.environ[DOCTOR_EXECROOT_ENV] = str(execroot)
 
+    runtime_selection = bool(config.get("runtime_selection", False))
+    expected_targets, expected_targets_source = _resolve_expected_targets(
+        config,
+        config_path,
+        args.expected_target,
+        runtime_selection,
+    )
+    runtime_contexts = _load_runtime_contexts(args.context_entry)
+    if runtime_selection and not runtime_contexts:
+        _fail("runtime selection requires at least one --context-entry argument")
+
     workspace = _workspace_root()
     testlogs_dir = _resolve_testlogs_dir(workspace, allow_missing=staging_requested)
 
     if config["forbid_dd_git_test_env"]:
         _validate_bazelrc(workspace)
     if config["require_git_metadata"]:
-        context_manifest = _resolve_configured_context_manifest(config, config_path)
-        _validate_git_metadata(context_manifest)
-
-    expected_targets, expected_targets_source = _resolve_expected_targets(config, config_path)
+        if runtime_contexts:
+            _validate_git_metadata_contexts(runtime_contexts)
+        else:
+            context_manifest = _resolve_configured_context_manifest(config, config_path)
+            _validate_git_metadata(context_manifest)
     _update_diagnostic_config(
         report,
         config_path=config_path,

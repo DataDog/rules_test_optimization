@@ -85,11 +85,10 @@ Add these lines to the named config used by test, doctor, and uploader:
 
 ```text
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 ```
 
-`--config=test-optimization` is the only user-facing switch. Omitting it
-renders disabled metadata stubs and selects the local empty Orchestrion aliases.
+`--config=test-optimization` is the only user-facing metadata switch. The
+optimized target transition enables Orchestrion; no global flag is required.
 
 For a managed monorepo, declare one aggregate repository after the Rule
 dependency:
@@ -417,7 +416,6 @@ common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 test:test-optimization --remote_download_minimal
 test:test-optimization --remote_download_regex=.*test[.]outputs.*
 test:test-optimization --zip_undeclared_test_outputs

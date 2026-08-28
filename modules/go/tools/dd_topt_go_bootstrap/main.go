@@ -1448,16 +1448,6 @@ func bazelrcSnippet(cfg config) (string, error) {
 		fmt.Fprintf(&buf, "common:%s --repo_env=%s\n", cfg.bazelrcConfig, key)
 	}
 	fmt.Fprintf(&buf, "common:%s --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1\n", cfg.bazelrcConfig)
-	rulesGoRepoName := cfg.rulesGoRepoName
-	if !cfg.workspaceMode {
-		// Bzlmod exposes rules_go under its module name. The WORKSPACE
-		// repository name is configurable because repository rules may
-		// remap it (the default there remains io_bazel_rules_go).
-		rulesGoRepoName = "rules_go"
-	} else if rulesGoRepoName == "" {
-		rulesGoRepoName = defaultRulesGoRepoName
-	}
-	fmt.Fprintf(&buf, "build:%s --@%s//go/private/orchestrion:enabled=true\n", cfg.bazelrcConfig, rulesGoRepoName)
 	fmt.Fprintf(&buf, "test:%s --remote_download_minimal\n", cfg.bazelrcConfig)
 	fmt.Fprintf(&buf, "test:%s --remote_download_regex=.*test[.]outputs.*\n", cfg.bazelrcConfig)
 	fmt.Fprintf(&buf, "test:%s --zip_undeclared_test_outputs\n", cfg.bazelrcConfig)
@@ -1526,7 +1516,7 @@ func validationScript(cfg config) (string, error) {
 	fmt.Fprintf(&buf, "SYNC_REPO=%s\n", shellQuote(cfg.syncRepoName))
 	fmt.Fprintf(&buf, "DOCTOR_TARGET=%s\n", shellQuote(cfg.validationDoctorTarget))
 	fmt.Fprintf(&buf, "UPLOAD_TARGET=%s\n", shellQuote(cfg.validationUploadTarget))
-	fmt.Fprintf(&buf, "RULES_GO_ENABLED_LABEL=%s\n", shellQuote("@"+apparentRulesGoRepoName(cfg)+"//go/private/orchestrion:enabled"))
+	fmt.Fprintf(&buf, "RULES_GO_ORCHESTRION_PACKAGE=%s\n", shellQuote("@"+apparentRulesGoRepoName(cfg)+"//go/private/orchestrion"))
 	buf.WriteString("WORKSPACE_DIR=\"$(pwd -P)\"\n")
 	buf.WriteString("BEP_TMP_ROOT=\"\"\n")
 	buf.WriteString("BEP_JSON_DIR=\"\"\n")
@@ -1657,7 +1647,7 @@ validate_disabled_bootstrap() {
   alias_files="$(
     env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
       "${BAZEL}" cquery \
-      "${RULES_GO_ENABLED_LABEL%:enabled}:tool_binary" --output=files
+      "${RULES_GO_ORCHESTRION_PACKAGE}:tool_binary" --output=files
   )" || return $?
   if [[ -n "${alias_files}" ]]; then
     warn "ordinary no-config Orchestrion alias unexpectedly exposed files: ${alias_files}"
@@ -1668,7 +1658,6 @@ validate_disabled_bootstrap() {
   env -u DD_API_KEY -u DD_SITE -u DD_TEST_OPTIMIZATION_ENABLED \
     "${BAZEL}" query "--config=${BAZEL_CONFIG}" \
     --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0 \
-    "--${RULES_GO_ENABLED_LABEL}=false" \
     "@${SYNC_REPO}//:test_optimization_files"
 }
 

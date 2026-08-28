@@ -48,15 +48,12 @@ repository, use `./bazelw` for local development convenience.
 
   ```bazelrc
   common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-  # Go only:
-  build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
   ```
 
   Removing `--config=test-optimization` disables metadata resolution and the
-  matching Go/Python runtime wiring. Go additionally disables Orchestrion
-  analysis; in WORKSPACE mode, use the apparent `rules_go` repo name configured
-  by the workspace. Python-only consumers omit the Go line. Other companions
-  retain their existing enablement contract in this release.
+  matching Go/Python runtime wiring. Optimized Go targets enable Orchestrion
+  through their own transition. Other companions retain their existing
+  enablement contract in this release.
 
 ## Single-service (classic)
 

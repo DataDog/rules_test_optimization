@@ -113,6 +113,17 @@ _ORCHESTRION_MODES = {
     _ORCHESTRION_MODE_GENERAL: None,
     _ORCHESTRION_MODE_TEST_OPTIMIZATION: None,
 }
+_STATIC_DESCRIPTOR_KEYS = {
+    "manifest_label": None,
+    "repo_name": None,
+    "runtime_module_path": None,
+    "service_name": None,
+}
+_APPARENT_REPO_NAME_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-"
+_PUBLIC_WRAPPER_ONLY_TAGS = {
+    "dd-test-optimization": None,
+    "dd-test-optimization-source-manual": None,
+}
 _TEST_BINARY_LINKER_OPTIMIZATION_GC_LINKOPTS = select({
     # rules_go already strips Go binaries under these Bazel modes, and explicit
     # debug/no-strip modes should keep their normal linker behavior unless the
@@ -160,6 +171,70 @@ def _validate_orchestrion_mode(orchestrion_mode):
         fail_with_prefix("dd_topt_go_test", "orchestrion_mode must be one of %s" % ", ".join(sorted(_ORCHESTRION_MODES.keys())))
 
 validate_orchestrion_mode_for_tests = _validate_orchestrion_mode
+
+def _validate_apparent_repo_name(repo_name):
+    if type(repo_name) != type("") or not repo_name:
+        fail_with_prefix("dd_topt_go_test", "local-static descriptor repo_name must be a non-empty apparent repository name")
+    for char in repo_name.elems():
+        if char not in _APPARENT_REPO_NAME_CHARS:
+            fail_with_prefix("dd_topt_go_test", "local-static descriptor repo_name %r contains invalid character %r" % (repo_name, char))
+    return repo_name
+
+def _validate_non_empty_descriptor_string(descriptor, key):
+    value = descriptor.get(key)
+    if type(value) != type("") or not value.strip():
+        fail_with_prefix("dd_topt_go_test", "local-static descriptor %s must be a non-empty string" % key)
+    return value.strip()
+
+def _normalize_static_descriptor(descriptor, topt_service):
+    """Validate and normalize the checked-in local descriptor shape."""
+    if topt_service != None:
+        fail_with_prefix("dd_topt_go_test", "topt_service cannot be used with a local-static descriptor")
+    for key in descriptor.keys():
+        if key not in _STATIC_DESCRIPTOR_KEYS:
+            fail_with_prefix("dd_topt_go_test", "local-static descriptor contains unsupported field %r" % key)
+
+    repo_name = _validate_apparent_repo_name(_validate_non_empty_descriptor_string(descriptor, "repo_name"))
+    service_name = _validate_non_empty_descriptor_string(descriptor, "service_name")
+    runtime_module_path = _validate_non_empty_descriptor_string(descriptor, "runtime_module_path")
+    manifest_label = descriptor.get("manifest_label")
+    if manifest_label == None:
+        manifest_label = "@%s//:.testoptimization/manifest.txt" % repo_name
+    elif type(manifest_label) != type("") or not manifest_label:
+        fail_with_prefix("dd_topt_go_test", "local-static descriptor manifest_label must be a non-empty label string")
+
+    expected_prefix = "@%s//" % repo_name
+    if not manifest_label.startswith(expected_prefix) or ":" not in manifest_label[len(expected_prefix):]:
+        fail_with_prefix(
+            "dd_topt_go_test",
+            "local-static descriptor manifest_label must be a complete label in repository @%s" % repo_name,
+        )
+    Label(manifest_label)
+
+    return {
+        "_local_static": True,
+        "enabled": True,
+        "manifest_label": manifest_label,
+        "repo_name": repo_name,
+        "runtime_module_path": runtime_module_path,
+        "service_name": service_name,
+    }
+
+normalize_static_descriptor_for_tests = _normalize_static_descriptor
+
+def _hidden_raw_tags(public_tags):
+    """Keep operational tags on the hidden test and normalize its manual tag."""
+    if type(public_tags) == "select":
+        return public_tags + ["manual"]
+    tags = []
+    for tag in list(public_tags or []):
+        if tag == "manual" or tag in _PUBLIC_WRAPPER_ONLY_TAGS:
+            continue
+        tags.append(tag)
+    tags.append("manual")
+    return tags
+
+hidden_raw_tags_for_tests = _hidden_raw_tags
 
 def _validate_test_optimization_pin_files(
         orchestrion_mode,
@@ -348,10 +423,15 @@ def dd_topt_go_test(
     if go_test_rule == None:
         fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
-    # Support both shapes:
-    # 1) Single-service dict with keys: repo_name, labels, set, runtimes
-    # 2) Aggregator mapping dict: { <svc_key>: single-service dict, ... }
-    if topt_data.get("repo_name"):
+    # Support three shapes:
+    # 1) Local-static descriptor identified by top-level runtime_module_path
+    # 2) Single-service generated export
+    # 3) Aggregator mapping of generated service exports
+    is_local_static = "runtime_module_path" in topt_data
+    if is_local_static:
+        _svc = _normalize_static_descriptor(topt_data, topt_service)
+        orchestrion_mode = _ORCHESTRION_MODE_TEST_OPTIMIZATION
+    elif topt_data.get("repo_name"):
         # Single-service shape: caller already selected the service by choosing
         # this exported dict, so no key resolution is needed.
         _svc = topt_data
@@ -423,7 +503,9 @@ def dd_topt_go_test(
     if not _is_dict(_go):
         _go = {}
     uses_inference = bool(explicit_importpath) or bool(embed_labels)
-    if uses_inference:
+    if is_local_static:
+        include_per_module_files = True
+    elif uses_inference:
         # When we can infer importpath, always allow per-module selection.
         # Missing module matches still safely fall back in selector rule.
         include_per_module_files = True
@@ -440,7 +522,9 @@ def dd_topt_go_test(
 
     # Build labels for files/context based on (possibly derived) sync_repo_name.
     # These labels remain stable public contracts of the generated sync repo.
-    files_label = resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
+    files_label = (
+        "@%s//:test_optimization_files" % sync_repo_name if is_local_static else resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
+    )
 
     # ------------------------------------------------------------------
     # Phase 4: Build environment and selector inputs for analysis-time mapping.
@@ -460,12 +544,24 @@ def dd_topt_go_test(
     # Build the list of per-module groups once (if any were exported)
     # Use exported sanitized labels directly to avoid re-deriving naming policy
     # in the macro and drifting from sync-side label generation.
-    module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
-    module_group_names = resolve_module_group_names(
-        _svc,
-        module_labels,
-        macro_name = "dd_topt_go_test",
-    )
+    if is_local_static:
+        module_labels = []
+        module_group_names = []
+        repository_state_label = "@%s//:test_optimization_repository_state" % sync_repo_name
+        runtime_module_label = "@%s//:test_optimization_runtime_module" % sync_repo_name
+        expected_service_name = _svc["service_name"]
+        expected_runtime_module_path = _svc["runtime_module_path"]
+    else:
+        module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
+        module_group_names = resolve_module_group_names(
+            _svc,
+            module_labels,
+            macro_name = "dd_topt_go_test",
+        )
+        repository_state_label = None
+        runtime_module_label = None
+        expected_service_name = ""
+        expected_runtime_module_path = ""
 
     # Mirror rules_go's fallback for the actual hidden go_test label. rules_go
     # only inherits an embed importpath when that path is explicit; otherwise
@@ -489,6 +585,11 @@ def dd_topt_go_test(
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override,
+        repository_state = repository_state_label,
+        runtime_module = runtime_module_label,
+        expected_repo_name = sync_repo_name if is_local_static else "",
+        expected_service_name = expected_service_name,
+        expected_runtime_module_path = expected_runtime_module_path,
     )
 
     # Emit a small Bazel-owned metadata file next to the built test artifacts.
@@ -506,6 +607,11 @@ def dd_topt_go_test(
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override or "",
+        repository_state = repository_state_label,
+        runtime_module = runtime_module_label,
+        expected_repo_name = sync_repo_name if is_local_static else "",
+        expected_service_name = expected_service_name,
+        expected_runtime_module_path = expected_runtime_module_path,
         orchestrion_mode = orchestrion_mode,
         bazel_package = "//%s" % pkg_path if pkg_path else "//",
         bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
@@ -574,7 +680,9 @@ def dd_topt_go_test(
     # manifest_path is emitted by sync metadata and may include slashes.
     # These paths are rooted at the sync repo package, so target syntax remains
     # @repo//:<path> (for example @test_optimization_data//:.testoptimization/manifest.txt).
-    manifest_label = resolve_manifest_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
+    manifest_label = (
+        _svc["manifest_label"] if is_local_static else resolve_manifest_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
+    )
     data = _append_data_dependencies(data, [manifest_label])
     required_env = {
         "DD_TEST_OPTIMIZATION_MANIFEST_FILE": "$(rlocationpath %s)" % manifest_label,
@@ -605,7 +713,7 @@ def dd_topt_go_test(
         )
 
     user_tags = wrapper_kwargs.get("tags")
-    kwargs["tags"] = (user_tags or []) + ["manual"]
+    kwargs["tags"] = _hidden_raw_tags(user_tags)
     kwargs["visibility"] = ["//visibility:private"]
     for key, value in raw_passthrough.items():
         kwargs[key] = value
@@ -624,6 +732,5 @@ def dd_topt_go_test(
         actual = ":" + raw_name,
         metadata = ":" + metadata_name,
         orchestrion_mode = orchestrion_mode,
-        test_optimization_enabled = bool(_svc.get("enabled", True)),
         **wrapper_kwargs
     )

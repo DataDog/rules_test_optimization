@@ -532,7 +532,6 @@ func TestBazelrcSnippetUsesRepoEnvOnlyForSyncMetadata(t *testing.T) {
 		`common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL`,
 		`common:test-optimization --repo_env=DD_PR_NUMBER`,
 		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`,
-		`build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`,
 		`test:test-optimization --remote_download_minimal`,
 		`test:test-optimization --remote_download_regex=.*test[.]outputs.*`,
 		`test:test-optimization --zip_undeclared_test_outputs`,
@@ -775,7 +774,7 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`SYNC_REPO='test_optimization_data_worker'`,
 		`DOCTOR_TARGET='//:dd_test_optimization_doctor'`,
 		`UPLOAD_TARGET='//:dd_upload_payloads'`,
-		`RULES_GO_ENABLED_LABEL='@rules_go//go/private/orchestrion:enabled'`,
+		`RULES_GO_ORCHESTRION_PACKAGE='@rules_go//go/private/orchestrion'`,
 		`WORKSPACE_DIR="$(pwd -P)"`,
 		`BEP_TMP_ROOT=""`,
 		`BEP_JSON_DIR=""`,
@@ -807,7 +806,7 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`validate explicit disabled precedence`,
 		`query "@${SYNC_REPO}//:test_optimization_files"`,
 		`"${BAZEL}" cquery \
-      "${RULES_GO_ENABLED_LABEL%:enabled}:tool_binary"`,
+      "${RULES_GO_ORCHESTRION_PACKAGE}:tool_binary"`,
 		`--repo_env=DD_TEST_OPTIMIZATION_ENABLED=0`,
 		`upload skipped; rerun with --upload`,
 		`${BAZEL}" shutdown`,
@@ -928,7 +927,7 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 	for _, want := range []string{
 		"query @test_optimization_data//:test_optimization_files",
 		"cquery @rules_go//go/private/orchestrion:tool_binary --output=files",
-		"query --config=test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0 --@rules_go//go/private/orchestrion:enabled=false @test_optimization_data//:test_optimization_files",
+		"query --config=test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0 @test_optimization_data//:test_optimization_files",
 		"sync --config=test-optimization --repo_env=FETCH_SALT=",
 		"test --config=test-optimization --build_event_json_file=",
 		"//pkg:go_default_test",
@@ -1363,7 +1362,6 @@ test:old --test_env=DD_GIT_BRANCH=main
 	}
 	for _, want := range []string{
 		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`,
-		`build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("migrated managed block missing %q:\n%s", want, text)

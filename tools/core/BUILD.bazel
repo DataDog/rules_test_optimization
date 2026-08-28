@@ -15,6 +15,7 @@ exports_files(
         "test_optimization_sync.bzl",
         "test_optimization_manifest_sync.bzl",
         "test_optimization_multi_sync.bzl",
+        "test_optimization_repository_state.bzl",
         "test_optimization_context_utils.bzl",
         "test_optimization_doctor.bzl",
         "test_optimization_doctor.py",

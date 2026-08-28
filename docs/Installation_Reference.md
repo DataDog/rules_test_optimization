@@ -399,7 +399,6 @@ The generated config is named `test-optimization` by default:
 
 ```text
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 common:test-optimization --repo_env=DD_API_KEY
 common:test-optimization --repo_env=DD_SITE
 common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL
@@ -973,12 +972,12 @@ and Python onboarding additionally includes:
 
 ```text
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-# Go only; use the apparent rules_go repository name:
-build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 ```
 
-Python-only consumers omit the Go line. Java, NodeJS, .NET, and Ruby retain
-their existing enablement contract and omit both lines in this release.
+Optimized Go targets enable Orchestrion through their own transition, so the
+config has no global `orchestrion:enabled` setting. Java, NodeJS, .NET, and Ruby
+retain their existing enablement contract and omit the metadata gate in this
+release.
 
 ```text
 # Repository rule (module/repo phase) — affects refetch
