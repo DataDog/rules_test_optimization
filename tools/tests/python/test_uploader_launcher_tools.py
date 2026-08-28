@@ -103,23 +103,23 @@ class LauncherTests(unittest.TestCase):
         )
         if powershell is None:
             self.skipTest("PowerShell is not installed")
-        python_interpreter = sys.executable
-        if os.name == "nt":
-            # Bazel's Windows py_test launcher becomes sys.executable. Use the
-            # real setup-python interpreter rather than recursively launching
-            # this test executable.
-            python_interpreter = (
-                shutil.which("python.exe")
-                or shutil.which("python3.exe")
-                or shutil.which("python")
-                or ""
-            )
-            if not python_interpreter:
-                self.skipTest("Python interpreter is not available on PATH")
         template = _repo_file("tools/core/uploader_python_launcher.ps1.tpl")
         main = _repo_file("tools/core/uploader_main.py")
         with tempfile.TemporaryDirectory(prefix="uploader launcher ") as raw_root:
             root = Path(raw_root)
+            if os.name == "nt":
+                fake_python = root / "fake python.cmd"
+                fake_python.write_text(
+                    "@echo off\r\necho summary: mode=dry-run\r\nexit /b 0\r\n",
+                    encoding="utf-8",
+                )
+            else:
+                fake_python = root / "fake python"
+                fake_python.write_text(
+                    "#!/usr/bin/env sh\necho 'summary: mode=dry-run'\n",
+                    encoding="utf-8",
+                )
+                fake_python.chmod(0o755)
             launcher_dir = root / "generated files"
             launcher_dir.mkdir()
             testlogs = root / "empty testlogs"
@@ -158,7 +158,7 @@ class LauncherTests(unittest.TestCase):
                 environment.pop(name, None)
             environment.update(
                 {
-                    "DD_TEST_OPTIMIZATION_PYTHON": python_interpreter,
+                    "DD_TEST_OPTIMIZATION_PYTHON": str(fake_python),
                     "BUILD_WORKSPACE_DIRECTORY": str(root),
                     "TESTLOGS_DIR": str(testlogs),
                 }
