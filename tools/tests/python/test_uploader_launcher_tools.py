@@ -187,7 +187,10 @@ class LauncherTests(unittest.TestCase):
             )
 
             self.assertEqual(0, completed.returncode, completed.stderr)
-            self.assertIn(str(manifest.resolve()), completed.stdout)
+            self.assertEqual(
+                manifest.resolve(),
+                Path(completed.stdout.strip()).resolve(),
+            )
 
     def test_launchers_contain_resolution_only_not_uploader_behavior(self) -> None:
         for relative in (
