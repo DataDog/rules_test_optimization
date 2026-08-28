@@ -28,7 +28,13 @@ class WorkspaceLockError(RuntimeError):
 
 def workspace_lock_name(workspace: str | Path) -> str:
     """Return the legacy lock name for an exact workspace path string."""
-    digest = hashlib.md5(str(workspace).encode("utf-8")).hexdigest()[:8]
+    # Keep the legacy digest so Python and the Bash/PowerShell uploaders
+    # contend on the same lock during rollout. The digest only names a local
+    # lock; it is not used for a security purpose.
+    digest = hashlib.md5(
+        str(workspace).encode("utf-8"),
+        usedforsecurity=False,
+    ).hexdigest()[:8]
     return f"dd_upload_payloads_{digest}.lock"
 
 

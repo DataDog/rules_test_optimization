@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
+import hashlib
 import io
 import json
 import os
@@ -708,9 +709,17 @@ class UploaderRunfilesTests(unittest.TestCase):
 
 class UploaderWorkspaceLockTests(unittest.TestCase):
     def test_lock_name_matches_legacy_workspace_md5_contract(self) -> None:
-        self.assertEqual(
-            "dd_upload_payloads_56512a07.lock",
-            workspace_lock_name("/workspace/example"),
+        with mock.patch(
+            "uploader_py.locking.hashlib.md5",
+            wraps=hashlib.md5,
+        ) as md5:
+            self.assertEqual(
+                "dd_upload_payloads_56512a07.lock",
+                workspace_lock_name("/workspace/example"),
+            )
+        md5.assert_called_once_with(
+            b"/workspace/example",
+            usedforsecurity=False,
         )
 
     def test_same_workspace_contends_and_owner_cleanup_releases(self) -> None:
