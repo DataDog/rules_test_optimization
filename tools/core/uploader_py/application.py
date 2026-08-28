@@ -214,7 +214,12 @@ def _run_uploader_with_lock(
                     staged_output_keys=selected_output_keys,
                 )
 
-            if preparation.scan_roots:
+            if all_expected_outputs_cached:
+                raw_discovery = _empty_discovery()
+                logger.debug(
+                    "all expected target outputs were cached; skipping discovery wait"
+                )
+            elif preparation.scan_roots:
                 quiescence = wait_for_quiescence(
                     discover,
                     quiescent_seconds=config.quiescent_sec,
@@ -321,8 +326,13 @@ def _run_uploader_with_lock(
                     )
 
             if not raw_discovery.tasks:
-                ran_tests = tests_executed(preparation.scan_roots)
-                if ran_tests and config.fail_on_error:
+                if all_expected_outputs_cached:
+                    forced_reason = (
+                        "ok",
+                        "All expected target outputs were cached; nothing was uploaded.",
+                        (),
+                    )
+                elif tests_executed(preparation.scan_roots) and config.fail_on_error:
                     outcome = CoordinatorOutcome(
                         replace(outcome.report, exit_code=1),
                         outcome.initialization_warning_codes,
@@ -333,12 +343,6 @@ def _run_uploader_with_lock(
                         (
                             "Check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set.",
                         ),
-                    )
-                elif all_expected_outputs_cached:
-                    forced_reason = (
-                        "ok",
-                        "All expected target outputs were cached; nothing was uploaded.",
-                        (),
                     )
     except _CONTROLLED_ERRORS as exc:
         exit_code = exc.exit_code if isinstance(exc, FreshnessError) else 2
