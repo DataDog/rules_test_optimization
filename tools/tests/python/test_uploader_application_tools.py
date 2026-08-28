@@ -76,6 +76,8 @@ class ApplicationTests(unittest.TestCase):
         *,
         dry_run: bool = True,
         fail_on_error: bool = False,
+        expected_targets: tuple[str, ...] = (),
+        allow_cached_payload_uploads: bool = True,
         extra_arguments: tuple[str, ...] = (),
         extra_environment: dict[str, str] | None = None,
     ):
@@ -87,6 +89,7 @@ class ApplicationTests(unittest.TestCase):
                     "quiescent_sec": 0,
                     "max_wait_sec": 0,
                     "fail_on_error": fail_on_error,
+                    "expected_targets": expected_targets,
                     "workers": 3,
                     "rules_version": "rules-test",
                     "uploader_version": "uploader-test",
@@ -106,7 +109,9 @@ class ApplicationTests(unittest.TestCase):
         arguments = ["--config", str(config_path)]
         if dry_run:
             arguments.append("--dry-run")
-        arguments.extend(("--allow-cached-payload-uploads", *extra_arguments))
+        if allow_cached_payload_uploads:
+            arguments.append("--allow-cached-payload-uploads")
+        arguments.extend(extra_arguments)
         return parse_uploader_config(
             arguments,
             environ=environment,
@@ -267,6 +272,50 @@ class ApplicationTests(unittest.TestCase):
             report = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual("tests_ran_without_payloads", report["result"]["reason_code"])
             self.assertEqual(0, report["files"]["processed"])
+
+    def test_fail_on_error_all_cached_bep_without_testlogs_is_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bep = _runfile("tools/tests/python/fixtures/bep_cached_local.ndjson")
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                dry_run=False,
+                fail_on_error=True,
+                expected_targets=("//pkg:target",),
+                allow_cached_payload_uploads=False,
+                extra_arguments=(
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    f"--bep-json={bep}",
+                    f"--report-json={report_path}",
+                ),
+            )
+            transport_factory = mock.Mock(
+                side_effect=AssertionError("transport must not be created")
+            )
+            log_stream = StringIO()
+
+            with mock.patch(
+                "uploader_py.application.resolve_local_testlogs_root",
+                return_value=None,
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=log_stream),
+                    stream=StringIO(),
+                    transport_factory=transport_factory,
+                )
+
+            self.assertEqual(0, exit_code, log_stream.getvalue())
+            transport_factory.assert_not_called()
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual("ok", report["result"]["reason_code"])
+            self.assertEqual(1, report["bep"]["cached_outputs"])
+            self.assertEqual(0, report["files"]["discovered"])
+            self.assertEqual(0, report["requests"]["attempted"])
 
     def test_interrupted_worker_outcome_still_prints_and_writes_final_report(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

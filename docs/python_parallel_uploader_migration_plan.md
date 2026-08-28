@@ -130,7 +130,7 @@ Current checkpoint:
 Validation checkpoint (`2026-08-28`, macOS arm64):
 
 - `python3 -m unittest discover -s tools/tests/python -p 'test*_tools.py'`:
-  430 tests executed; 429 pass and one platform-specific test is skipped on
+  431 tests executed; 430 pass and one platform-specific test is skipped on
   macOS with ShellCheck and PowerShell installed;
 - `./bazelw test //tools/tests/core:tests
   //tools/tests/python:python_tools_test

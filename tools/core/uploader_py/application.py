@@ -187,7 +187,16 @@ def _run_uploader_with_lock(
                 len(freshness_plan.cached_outputs),
                 len(freshness_plan.remote_only_outputs),
             )
-            if not preparation.scan_roots and config.fail_on_error:
+            all_expected_outputs_cached = bool(
+                expected_plan.targets
+                and freshness_plan.cached_outputs
+                and not freshness_plan.eligible_outputs
+            )
+            if (
+                not preparation.scan_roots
+                and config.fail_on_error
+                and not all_expected_outputs_cached
+            ):
                 raise DiscoveryError(
                     "FAIL_ON_ERROR is set and no local or staged testlogs root was found"
                 )
@@ -325,11 +334,7 @@ def _run_uploader_with_lock(
                             "Check that DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES=true is set.",
                         ),
                     )
-                elif (
-                    expected_plan.targets
-                    and freshness_plan.cached_outputs
-                    and not freshness_plan.eligible_outputs
-                ):
+                elif all_expected_outputs_cached:
                     forced_reason = (
                         "ok",
                         "All expected target outputs were cached; nothing was uploaded.",
