@@ -161,6 +161,15 @@ def parse_uploader_config(
     """Resolve generated config, environment, and CLI using public precedence."""
     env = dict(os.environ if environ is None else environ)
     args = _parser().parse_args(list(argv))
+
+    def text_option(
+        cli_value: str | None,
+        variable: str,
+        default: str = "",
+    ) -> str:
+        """Prefer an explicit CLI value to its environment fallback."""
+        return cli_value if cli_value is not None else env.get(variable) or default
+
     config_path = Path(args.config)
     rule = load_rule_config(config_path)
     invocation_cwd = Path(cwd or Path.cwd()).absolute()
@@ -207,25 +216,20 @@ def parse_uploader_config(
     if args.validate_enrichment and not args.dry_run:
         raise ConfigError("--validate-enrichment requires --dry-run")
 
-    freshness_source_value = (
-        args.freshness_source
-        if args.freshness_source is not None
-        else env.get("DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE") or "auto"
+    freshness_source_value = text_option(
+        args.freshness_source,
+        "DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE",
+        "auto",
     )
     freshness_source = _choice(
         "--freshness-source/DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE",
         freshness_source_value,
         VALID_FRESHNESS_SOURCES,
     )
-    new_freshness_mode = (
-        args.freshness_mode
-        if args.freshness_mode is not None
-        else env.get("DD_TEST_OPTIMIZATION_FRESHNESS_MODE") or None
-    )
-    legacy_freshness_mode = (
-        args.execution_log_mode
-        if args.execution_log_mode is not None
-        else env.get("DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE") or None
+    new_freshness_mode = text_option(args.freshness_mode, "DD_TEST_OPTIMIZATION_FRESHNESS_MODE")
+    legacy_freshness_mode = text_option(
+        args.execution_log_mode,
+        "DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE",
     )
     freshness_mode = _choice(
         "--freshness-mode/DD_TEST_OPTIMIZATION_FRESHNESS_MODE",
@@ -235,40 +239,39 @@ def parse_uploader_config(
     if args.allow_cached_payload_uploads:
         freshness_mode = "disabled"
 
-    artifact_source_value = (
-        args.artifact_source
-        if args.artifact_source is not None
-        else env.get("DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE") or "local"
+    artifact_source_value = text_option(
+        args.artifact_source,
+        "DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE",
+        "local",
     )
     artifact_source = _choice(
         "--artifact-source/DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE",
         artifact_source_value,
         VALID_ARTIFACT_SOURCES,
     )
-    remote_artifacts_value = (
-        args.remote_artifacts
-        if args.remote_artifacts is not None
-        else env.get("DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS") or "disabled"
+    remote_artifacts_value = text_option(
+        args.remote_artifacts,
+        "DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS",
+        "disabled",
     )
     remote_artifacts = _choice(
         "--remote-artifacts/DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS",
         remote_artifacts_value,
         VALID_REMOTE_ARTIFACT_MODES,
     )
-    downloader_timeout_value = (
-        args.bep_artifact_downloader_timeout_sec
-        if args.bep_artifact_downloader_timeout_sec is not None
-        else env.get("DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC") or "300"
+    downloader_timeout_value = text_option(
+        args.bep_artifact_downloader_timeout_sec,
+        "DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC",
+        "300",
     )
     downloader_timeout = _positive_decimal(
         "--bep-artifact-downloader-timeout-sec",
         downloader_timeout_value,
     )
 
-    staging_text = (
-        args.artifact_staging_dir
-        if args.artifact_staging_dir is not None
-        else env.get("DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR", "")
+    staging_text = text_option(
+        args.artifact_staging_dir,
+        "DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR",
     )
     artifact_staging_dir = (
         Path(staging_text)
@@ -284,21 +287,17 @@ def parse_uploader_config(
         bep_json_values.append(environment_bep)
     bep_json_values.extend(args.bep_json)
 
-    expected_enriched_tags = tuple(args.expected_enriched_tag) or DEFAULT_EXPECTED_ENRICHED_TAGS
-    report_text = (
-        args.report_json
-        if args.report_json is not None
-        else env.get("DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON", "")
+    expected_enriched_tags = (
+        tuple(args.expected_enriched_tag) or DEFAULT_EXPECTED_ENRICHED_TAGS
     )
-    execution_log_text = (
-        args.execution_log_json
-        if args.execution_log_json is not None
-        else env.get("DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON", "")
+    report_text = text_option(args.report_json, "DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON")
+    execution_log_text = text_option(
+        args.execution_log_json,
+        "DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON",
     )
-    downloader_text = (
-        args.bep_artifact_downloader
-        if args.bep_artifact_downloader is not None
-        else env.get("DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER", "")
+    downloader_text = text_option(
+        args.bep_artifact_downloader,
+        "DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER",
     )
 
     return UploaderConfig(

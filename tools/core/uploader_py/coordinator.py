@@ -39,6 +39,8 @@ from .worker_pool import (
 
 @dataclass(frozen=True)
 class CoordinatorSettings:
+    """Worker-facing configuration with lifecycle-only options removed."""
+
     workspace: Path
     workers: int
     dry_run: bool

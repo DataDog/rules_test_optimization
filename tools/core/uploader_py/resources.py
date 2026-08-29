@@ -24,6 +24,8 @@ from .json_utils import strict_json_loads
 
 @dataclass(frozen=True)
 class ResourceInputs:
+    """Runfile locations from the rule plus an optional runtime override."""
+
     context_override: Path | None = None
     context_manifest_paths: tuple[str, ...] = ()
     telemetry_facts_manifest_paths: tuple[str, ...] = ()
@@ -32,6 +34,8 @@ class ResourceInputs:
 
 @dataclass(frozen=True)
 class LoadedResources:
+    """Validated read-only resources safe to share with every worker."""
+
     context_plan: ContextPlan
     primary_context: dict[str, Any] | None
     primary_context_path: Path | None
@@ -60,7 +64,7 @@ def load_resources(
 
     context_records: list[ContextRecord] = []
     primary_path: Path | None = None
-    override_enabled = override_context is not None
+    runtime_override_enabled = override_context is not None
     if override_context is not None:
         context_records.append(ContextRecord.create("__runtime_override__", override_context))
         primary_path = override_path
@@ -93,15 +97,17 @@ def load_resources(
                 if primary_path is None:
                     primary_path = resolved
 
-    primary_record = context_records[0] if context_records else None
-    primary_context = dict(primary_record.values) if primary_record else None
+    primary_context_record = context_records[0] if context_records else None
+    primary_context = (
+        dict(primary_context_record.values) if primary_context_record else None
+    )
     context_plan = ContextPlan(
-        primary=primary_record,
+        primary=primary_context_record,
         by_repo=tuple(context_records),
-        override=override_enabled,
+        override=runtime_override_enabled,
     )
 
-    telemetry_paths: list[Path] = []
+    telemetry_facts_paths: list[Path] = []
     telemetry_manifest = _resolve_optional(
         resolver,
         inputs.telemetry_facts_manifest_paths,
@@ -118,12 +124,12 @@ def load_resources(
             if resolved is None:
                 warnings.append("telemetry_facts_entry_unresolved")
                 continue
-            telemetry_paths.append(resolved)
-    if override_enabled and primary_path is not None:
+            telemetry_facts_paths.append(resolved)
+    if runtime_override_enabled and primary_path is not None:
         sibling = primary_path.parent / "telemetry_facts.json"
         if sibling.is_file():
-            telemetry_paths.append(sibling.resolve())
-    telemetry_paths = list(dict.fromkeys(sorted(telemetry_paths)))
+            telemetry_facts_paths.append(sibling.resolve())
+    telemetry_facts_paths = list(dict.fromkeys(sorted(telemetry_facts_paths)))
 
     schema_path = _resolve_optional(resolver, inputs.schema_paths)
     schema = _load_json_object(schema_path) if schema_path else None
@@ -133,7 +139,7 @@ def load_resources(
         context_plan=context_plan,
         primary_context=primary_context,
         primary_context_path=primary_path,
-        telemetry_facts_paths=tuple(telemetry_paths),
+        telemetry_facts_paths=tuple(telemetry_facts_paths),
         schema=schema,
         warning_codes=tuple(dict.fromkeys(warnings)),
     )

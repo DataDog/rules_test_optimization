@@ -21,13 +21,6 @@ from .models import FileResult, FileStatus, MAX_TEST_PAYLOAD_BYTES, PayloadType
 
 
 @dataclass(frozen=True)
-class PayloadTypeSummary:
-    succeeded: int = 0
-    failed: int = 0
-    skipped: int = 0
-
-
-@dataclass(frozen=True)
 class LegacyReportContext:
     """Pre-worker values needed to preserve every schema-v1 report section."""
 
@@ -144,7 +137,7 @@ class AggregateReport:
         deleted = sum(int(result.source_deleted) for result in self.results)
         discovered = sum(count for _payload_type, count in self.discovered_by_type)
         type_summaries = {
-            payload_type.value: _payload_type_summary(self.results, payload_type)
+            payload_type.value: _payload_type_counts(self.results, payload_type)
             for payload_type in PayloadType
         }
         failure_codes = Counter(
@@ -174,14 +167,7 @@ class AggregateReport:
                 "deleted": deleted,
                 "retained": max(0, eligible - deleted),
             },
-            "payload_types": {
-                key: {
-                    "succeeded": summary.succeeded,
-                    "failed": summary.failed,
-                    "skipped": summary.skipped,
-                }
-                for key, summary in type_summaries.items()
-            },
+            "payload_types": type_summaries,
             "discovered_by_type": {
                 payload_type.value: count
                 for payload_type, count in self.discovered_by_type
@@ -274,15 +260,15 @@ class AggregateReport:
         stats = self.statistics()
         status = "ok" if self.exit_code == 0 else "fail"
         reason_code, reason, next_steps = _result_reason(self, context)
-        legacy_types = _legacy_payload_type_counts(self)
-        upload_failures = sum(
-            values["failed"] for values in legacy_types.values()
+        legacy_counts = _legacy_payload_type_counts(self)
+        failed_payloads = sum(
+            counts["failed"] for counts in legacy_counts.values()
         )
         upload_attempted = not self.dry_run and stats["requests"]["attempted"] > 0
-        legacy_processed = sum(
-            values["processed"] for values in legacy_types.values()
+        successful_payloads = sum(
+            counts["processed"] for counts in legacy_counts.values()
         )
-        base = {
+        report_document = {
             "schema_version": 1,
             "tool": "dd-test-optimization-uploader",
             "status": status,
@@ -323,10 +309,10 @@ class AggregateReport:
                 "attempted": upload_attempted,
                 "dry_run": self.dry_run,
                 "payloads_attempted": (
-                    legacy_processed + upload_failures if upload_attempted else 0
+                    successful_payloads + failed_payloads if upload_attempted else 0
                 ),
-                "payloads_uploaded": legacy_processed if upload_attempted else 0,
-                "payloads_failed": upload_failures,
+                "payloads_uploaded": successful_payloads if upload_attempted else 0,
+                "payloads_failed": failed_payloads,
             },
             "payloads": {
                 "test_outputs_dirs": context.test_outputs_dirs,
@@ -335,11 +321,11 @@ class AggregateReport:
                     "coverage": stats["discovered_by_type"]["coverage"],
                     "telemetry": stats["discovered_by_type"]["telemetry"],
                 },
-                "tests": legacy_types["tests"],
-                "coverage": legacy_types["coverage"],
-                "telemetry": legacy_types["telemetry"],
+                "tests": legacy_counts["tests"],
+                "coverage": legacy_counts["coverage"],
+                "telemetry": legacy_counts["telemetry"],
             },
-            "upload_failures": upload_failures,
+            "upload_failures": failed_payloads,
         }
         # New sections are copied verbatim from the same aggregate used by
         # stdout so legacy and explicit source/request counters cannot drift.
@@ -353,8 +339,8 @@ class AggregateReport:
             "warnings",
             "failures",
         ):
-            base[key] = stats[key]
-        return base
+            report_document[key] = stats[key]
+        return report_document
 
 
 def write_statistics_json(path: Path, report: AggregateReport) -> None:
@@ -423,20 +409,21 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
 def _legacy_payload_type_counts(
     report: AggregateReport,
 ) -> dict[str, dict[str, int]]:
-    values: dict[str, dict[str, int]] = {}
+    """Recreate schema-v1 counters, where processed means successful."""
+    counts_by_type: dict[str, dict[str, int]] = {}
     for payload_type, legacy_key in (
         (PayloadType.TEST, "tests"),
         (PayloadType.COVERAGE, "coverage"),
     ):
-        selected = tuple(
+        type_results = tuple(
             result
             for result in report.results
             if result.payload_type is payload_type
         )
-        values[legacy_key] = {
-            "processed": _status_count(selected, FileStatus.SUCCEEDED),
-            "failed": _status_count(selected, FileStatus.FAILED),
-            "skipped": _status_count(selected, FileStatus.SKIPPED),
+        counts_by_type[legacy_key] = {
+            "processed": _status_count(type_results, FileStatus.SUCCEEDED),
+            "failed": _status_count(type_results, FileStatus.FAILED),
+            "skipped": _status_count(type_results, FileStatus.SKIPPED),
         }
 
     telemetry = tuple(
@@ -460,12 +447,12 @@ def _legacy_payload_type_counts(
         )
         for result in telemetry
     )
-    values["telemetry"] = {
+    counts_by_type["telemetry"] = {
         "processed": telemetry_processed,
         "failed": telemetry_failed,
         "skipped": _status_count(telemetry, FileStatus.SKIPPED),
     }
-    return values
+    return counts_by_type
 
 
 def _result_reason(
@@ -511,15 +498,14 @@ def _result_reason(
     return "ok", "Uploader completed successfully.", ()
 
 
-def _payload_type_summary(
+def _payload_type_counts(
     results: tuple[FileResult, ...], payload_type: PayloadType
-) -> PayloadTypeSummary:
+) -> dict[str, int]:
     selected = tuple(result for result in results if result.payload_type is payload_type)
-    return PayloadTypeSummary(
-        succeeded=_status_count(selected, FileStatus.SUCCEEDED),
-        failed=_status_count(selected, FileStatus.FAILED),
-        skipped=_status_count(selected, FileStatus.SKIPPED),
-    )
+    return {
+        status.value: _status_count(selected, status)
+        for status in FileStatus
+    }
 
 
 def _status_count(results: Iterable[FileResult], status: FileStatus) -> int:

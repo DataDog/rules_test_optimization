@@ -32,10 +32,6 @@ class TelemetryDirective:
     synthetic_seq_id: int = 0
     synthetic_timestamp: int = 0
 
-    @property
-    def request_count(self) -> int:
-        return 1 + int(self.create_synthetic)
-
 
 @dataclass(frozen=True)
 class TelemetryPlan:
@@ -54,7 +50,9 @@ class TelemetryPlan:
 
 
 @dataclass(frozen=True)
-class _Candidate:
+class _TelemetrySource:
+    """Identity needed to choose which tracer stream receives rule facts."""
+
     path_key: str
     service_name: str
     language_name: str
@@ -64,7 +62,9 @@ class _Candidate:
 
 
 @dataclass(frozen=True)
-class _Facts:
+class _TelemetryFacts:
+    """Rule-generated metrics waiting to be attached to a tracer stream."""
+
     path_key: str
     service_name: str
     runtime_name: str
@@ -82,42 +82,42 @@ def build_telemetry_plan(
 ) -> TelemetryPlan:
     """Match rule facts to tracer streams without materializing outbound files."""
     warnings: list[str] = []
-    candidates = _load_candidates(tasks, warnings)
+    sources = _load_sources(tasks, warnings)
     provider_suffix = _provider_suffix(primary_context)
-    if not candidates:
+    if not sources:
         return TelemetryPlan(
             provider_suffix=provider_suffix,
             warning_codes=_unique_codes(warnings),
         )
 
-    grouped_candidates: dict[tuple[str, str], list[_Candidate]] = {}
-    for candidate in candidates:
-        grouped_candidates.setdefault(
-            (candidate.service_name, candidate.language_name), []
-        ).append(candidate)
+    grouped_sources: dict[tuple[str, str], list[_TelemetrySource]] = {}
+    for source in sources:
+        grouped_sources.setdefault(
+            (source.service_name, source.language_name), []
+        ).append(source)
 
-    grouped_facts: dict[tuple[str, str], list[_Facts]] = {}
+    grouped_facts: dict[tuple[str, str], list[_TelemetryFacts]] = {}
     for facts_path in sorted(facts_paths, key=lambda item: str(item)):
         facts = _load_facts(facts_path, warnings)
         if facts is None:
             continue
-        matching = [
-            candidate
-            for candidate in candidates
-            if candidate.service_name == facts.service_name
+        matching_sources = [
+            source for source in sources if source.service_name == facts.service_name
         ]
-        if not matching:
+        if not matching_sources:
             warnings.append("telemetry_facts_anchor_missing")
             continue
-        languages = sorted({candidate.language_name for candidate in matching})
+        languages = sorted({source.language_name for source in matching_sources})
+        # Facts only identify a runtime. Use it as a language discriminator
+        # when one service emitted telemetry from multiple languages.
         if len(languages) == 1:
             language_name = languages[0]
         else:
             selected_languages = sorted(
                 {
-                    candidate.language_name
-                    for candidate in matching
-                    if candidate.language_name == facts.runtime_name
+                    source.language_name
+                    for source in matching_sources
+                    if source.language_name == facts.runtime_name
                 }
             )
             if len(selected_languages) != 1:
@@ -128,11 +128,11 @@ def build_telemetry_plan(
 
     directives: dict[str, TelemetryDirective] = {}
     for group_key in sorted(grouped_facts):
-        group_candidates = sorted(
-            grouped_candidates.get(group_key, ()),
+        group_sources = sorted(
+            grouped_sources.get(group_key, ()),
             key=lambda item: item.path_key,
         )
-        if not group_candidates:
+        if not group_sources:
             continue
         facts_entries = sorted(
             grouped_facts[group_key],
@@ -146,8 +146,8 @@ def build_telemetry_plan(
             continue
         env_override = environments[0] if environments else ""
         if env_override:
-            for candidate in group_candidates:
-                directives[candidate.path_key] = TelemetryDirective(
+            for source in group_sources:
+                directives[source.path_key] = TelemetryDirective(
                     env_override=env_override
                 )
 
@@ -161,9 +161,11 @@ def build_telemetry_plan(
         if not messages:
             continue
 
-        streams: dict[str, list[_Candidate]] = {}
-        for candidate in group_candidates:
-            streams.setdefault(candidate.runtime_id, []).append(candidate)
+        streams: dict[str, list[_TelemetrySource]] = {}
+        for source in group_sources:
+            streams.setdefault(source.runtime_id, []).append(source)
+        # Prefer a stream that can accept the facts in an existing batch;
+        # otherwise synthesize one request beside the best available stream.
         chosen_stream = max(
             streams.values(),
             key=lambda items: (
@@ -171,12 +173,12 @@ def build_telemetry_plan(
                 _stream_best_path(items),
             ),
         )
-        batch_candidates = [
-            candidate
-            for candidate in chosen_stream
-            if candidate.request_type == "message-batch"
+        batch_sources = [
+            source
+            for source in chosen_stream
+            if source.request_type == "message-batch"
         ]
-        anchor = max(batch_candidates or chosen_stream, key=lambda item: item.path_key)
+        anchor = max(batch_sources or chosen_stream, key=lambda item: item.path_key)
         current = directives.get(anchor.path_key, TelemetryDirective())
         encoded_messages = strict_json_dumps(
             messages,
@@ -192,9 +194,9 @@ def build_telemetry_plan(
         else:
             max_seq_id = max(
                 (
-                    candidate.seq_id
-                    for candidate in chosen_stream
-                    if candidate.seq_id is not None
+                    source.seq_id
+                    for source in chosen_stream
+                    if source.seq_id is not None
                 ),
                 default=0,
             )
@@ -213,10 +215,10 @@ def build_telemetry_plan(
     )
 
 
-def _load_candidates(
+def _load_sources(
     tasks: Iterable[FileTask], warnings: list[str]
-) -> tuple[_Candidate, ...]:
-    candidates: list[_Candidate] = []
+) -> tuple[_TelemetrySource, ...]:
+    sources: list[_TelemetrySource] = []
     telemetry_tasks = sorted(
         (task for task in tasks if task.payload_type is PayloadType.TELEMETRY),
         key=lambda task: str(task.source_path),
@@ -236,8 +238,8 @@ def _load_candidates(
         if not service_name or not language_name or not api_version or not request_type:
             continue
         seq_id = payload.get("seq_id")
-        candidates.append(
-            _Candidate(
+        sources.append(
+            _TelemetrySource(
                 path_key=_path_key(task.source_path),
                 service_name=service_name,
                 language_name=language_name,
@@ -250,10 +252,10 @@ def _load_candidates(
                 request_type=request_type,
             )
         )
-    return tuple(candidates)
+    return tuple(sources)
 
 
-def _load_facts(path: Path, warnings: list[str]) -> _Facts | None:
+def _load_facts(path: Path, warnings: list[str]) -> _TelemetryFacts | None:
     payload = _read_json_object(path)
     if payload is None:
         warnings.append("telemetry_facts_invalid")
@@ -263,7 +265,7 @@ def _load_facts(path: Path, warnings: list[str]) -> _Facts | None:
         return None
     counts = payload.get("counts")
     distributions = payload.get("distributions")
-    return _Facts(
+    return _TelemetryFacts(
         path_key=_path_key(path),
         service_name=_string(payload.get("service_name")),
         runtime_name=_string(payload.get("runtime_name")),
@@ -341,12 +343,12 @@ def _build_inner_messages(
     return messages
 
 
-def _stream_best_path(items: Iterable[_Candidate]) -> str:
-    candidates = tuple(items)
+def _stream_best_path(items: Iterable[_TelemetrySource]) -> str:
+    sources = tuple(items)
     batches = sorted(
-        item.path_key for item in candidates if item.request_type == "message-batch"
+        item.path_key for item in sources if item.request_type == "message-batch"
     )
-    return batches[-1] if batches else max(item.path_key for item in candidates)
+    return batches[-1] if batches else max(item.path_key for item in sources)
 
 
 def _provider_suffix(context: Mapping[str, Any] | None) -> str:

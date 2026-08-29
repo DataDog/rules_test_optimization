@@ -111,6 +111,14 @@ class _TestRequest:
     content_encoding: str | None = None
 
 
+@dataclass(frozen=True)
+class _TelemetryRequest:
+    """One telemetry body paired with the headers derived from that body."""
+
+    body: Path
+    headers: dict[str, str]
+
+
 def common_headers(
     runtime: WorkerRuntime,
     payload: Mapping[str, Any] | None = None,
@@ -294,7 +302,7 @@ def _process_test(
         warnings,
     )
 
-    base = dict(
+    test_result_fields = dict(
         task_id=task.task_id,
         source_path=task.display_path,
         payload_type=task.payload_type,
@@ -317,7 +325,7 @@ def _process_test(
         return FileResult(
             status=FileStatus.SUCCEEDED,
             warning_codes=_unique_codes(warnings),
-            **base,
+            **test_result_fields,
         )
 
     requests_attempted = 0
@@ -366,7 +374,7 @@ def _process_test(
                 warning_codes=_unique_codes(warnings),
                 failure_code=failure_code,
                 failure_message=failure_message,
-                **base,
+                **test_result_fields,
             )
         requests_succeeded += 1
 
@@ -383,7 +391,7 @@ def _process_test(
         retries=retries,
         source_deleted=deleted,
         warning_codes=_unique_codes(final_warnings),
-        **base,
+        **test_result_fields,
     )
 
 
@@ -572,7 +580,7 @@ def _process_coverage(
     except OSError as exc:
         return _failed(task, "coverage_payload_read_failed", type(exc).__name__)
 
-    base = dict(
+    coverage_result_fields = dict(
         task_id=task.task_id,
         source_path=task.display_path,
         payload_type=task.payload_type,
@@ -611,7 +619,7 @@ def _process_coverage(
             task,
             f"dry-run prepared {prepared.content_length}-byte coverage multipart body",
         )
-        return FileResult(status=FileStatus.SUCCEEDED, **base)
+        return FileResult(status=FileStatus.SUCCEEDED, **coverage_result_fields)
 
     result = transport.post_prepared_multipart(
         runtime.endpoints.coverage_url,
@@ -635,7 +643,7 @@ def _process_coverage(
             retries=result.retries,
             failure_code=failure_code,
             failure_message=failure_message,
-            **base,
+            **coverage_result_fields,
         )
 
     deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
@@ -647,7 +655,7 @@ def _process_coverage(
         retries=result.retries,
         source_deleted=deleted,
         warning_codes=(cleanup_warning,) if cleanup_warning else (),
-        **base,
+        **coverage_result_fields,
     )
 
 
@@ -694,7 +702,7 @@ def _process_telemetry(
             failure_message=metadata_failure,
         )
 
-    bodies: list[tuple[Path, dict[str, Any]]] = [(source_body, payload)]
+    requests = [_TelemetryRequest(source_body, _telemetry_headers(runtime, payload))]
     if directive.create_synthetic:
         synthetic = _build_synthetic_telemetry(payload, directive, warnings)
         if synthetic is not None:
@@ -704,58 +712,56 @@ def _process_telemetry(
             )
             synthetic_path = task_directory / "telemetry_synthetic.json"
             synthetic_path.write_bytes(_compact_json_line(synthetic))
-            bodies.append((synthetic_path, synthetic))
-    prepared_headers = tuple(
-        _telemetry_headers(runtime, body_payload)
-        for _body_path, body_payload in bodies
-    )
-    _debug(runtime, task, f"prepared {len(bodies)} telemetry request(s)")
+            requests.append(
+                _TelemetryRequest(synthetic_path, _telemetry_headers(runtime, synthetic))
+            )
+    _debug(runtime, task, f"prepared {len(requests)} telemetry request(s)")
     if _debug_enabled(runtime):
-        for index, (body_path, _body_payload) in enumerate(bodies, start=1):
+        for index, request in enumerate(requests, start=1):
             try:
-                body_bytes = body_path.stat().st_size
+                body_bytes = request.body.stat().st_size
             except OSError as exc:
                 _debug(
                     runtime,
                     task,
-                    f"telemetry request={index}/{len(bodies)} size unavailable: "
+                    f"telemetry request={index}/{len(requests)} size unavailable: "
                     f"{type(exc).__name__}",
                 )
             else:
                 _debug(
                     runtime,
                     task,
-                    f"telemetry request={index}/{len(bodies)} bytes={body_bytes}",
+                    f"telemetry request={index}/{len(requests)} bytes={body_bytes}",
                 )
 
-    base = dict(
+    telemetry_result_fields = dict(
         task_id=task.task_id,
         source_path=task.display_path,
         payload_type=task.payload_type,
-        requests_planned=len(bodies),
+        requests_planned=len(requests),
     )
     if runtime.dry_run:
-        for (body_path, _body_payload), headers in zip(bodies, prepared_headers):
+        for request in requests:
             prepare_json_request(
                 runtime.endpoints.telemetry_url,
-                headers,
-                body_path,
+                request.headers,
+                request.body,
             )
         _debug(runtime, task, "dry-run completed telemetry preparation without network")
         return FileResult(
             status=FileStatus.SUCCEEDED,
             warning_codes=_unique_codes(warnings),
-            **base,
+            **telemetry_result_fields,
         )
 
     requests_attempted = 0
     requests_succeeded = 0
     retries = 0
-    for (body_path, _body_payload), headers in zip(bodies, prepared_headers):
+    for request in requests:
         result = transport.post_json(
             runtime.endpoints.telemetry_url,
-            headers,
-            body_path,
+            request.headers,
+            request.body,
         )
         requests_attempted += result.attempts
         retries += result.retries
@@ -778,7 +784,7 @@ def _process_telemetry(
                 warning_codes=_unique_codes(warnings),
                 failure_code=failure_code,
                 failure_message=failure_message,
-                **base,
+                **telemetry_result_fields,
             )
         requests_succeeded += 1
 
@@ -793,7 +799,7 @@ def _process_telemetry(
         retries=retries,
         source_deleted=deleted,
         warning_codes=_unique_codes(warnings),
-        **base,
+        **telemetry_result_fields,
     )
 
 

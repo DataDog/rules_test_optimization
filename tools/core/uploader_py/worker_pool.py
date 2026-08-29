@@ -87,8 +87,7 @@ def run_file_workers(
             f"failed to initialize worker transport: {type(exc).__name__}"
         ) from exc
 
-    sentinel = object()
-    task_queue: Queue[FileTask | object] = Queue(maxsize=max(1, worker_count * 2))
+    task_queue: Queue[FileTask | None] = Queue(maxsize=max(1, worker_count * 2))
     result_queue: Queue[FileResult] = Queue()
     activity_lock = threading.Lock()
     shutdown_event = threading.Event()
@@ -101,7 +100,7 @@ def run_file_workers(
             logger.debug("worker=%s started", threading.current_thread().name)
         while True:
             try:
-                item = task_queue.get(timeout=0.1)
+                task = task_queue.get(timeout=0.1)
             except Empty:
                 if shutdown_event.is_set():
                     if logger is not None:
@@ -112,11 +111,10 @@ def run_file_workers(
                     return
                 continue
             try:
-                if item is sentinel:
+                if task is None:
                     if logger is not None:
                         logger.debug("worker=%s stopped", threading.current_thread().name)
                     return
-                task = item
                 if shutdown_event.is_set():
                     if logger is not None:
                         logger.debug(
@@ -211,7 +209,7 @@ def run_file_workers(
                     task.display_path,
                 )
         for _ in started_threads:
-            task_queue.put(sentinel)
+            task_queue.put(None)
         task_queue.join()
         for thread in started_threads:
             thread.join()
@@ -221,8 +219,8 @@ def run_file_workers(
         # Stop scheduling queued files, but let already-owned files finish
         # their current pipeline. Their normal cleanup contract still applies;
         # every not-yet-owned source remains untouched. Workers observe the
-        # shutdown event after finishing owned work, so no new sentinels are
-        # added here: some or all normal sentinels may already have been
+        # shutdown event after finishing owned work, so no new stop markers are
+        # added here: some or all normal markers may already have been
         # consumed when the interrupt arrives.
         stop_started_workers()
         interrupted_run = _collect_run(

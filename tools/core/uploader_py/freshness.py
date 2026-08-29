@@ -7,7 +7,7 @@
 """Pre-worker BEP staging and freshness selection.
 
 The doctor remains the source of truth for the non-trivial BEP and artifact
-carrier formats.  This module loads that runtime once, snapshots its result in
+carrier formats. This module loads that runtime once, snapshots its result in
 immutable uploader models, and keeps all filesystem and policy decisions out
 of worker threads.
 """
@@ -48,6 +48,8 @@ class RemoteOutput:
 
 @dataclass(frozen=True)
 class FreshnessPlan:
+    """Immutable authorization snapshot used by discovery and postflight checks."""
+
     selected_source: str = "none"
     eligibility_enabled: bool = False
     eligible_outputs: frozenset[tuple[str, str]] = frozenset()
@@ -62,6 +64,8 @@ class FreshnessPlan:
 
 @dataclass(frozen=True)
 class FreshnessPreparation:
+    """Freshness plan plus any staged artifacts owned by this invocation."""
+
     plan: FreshnessPlan
     scan_roots: tuple[ScanRoot, ...]
     staged_roots: tuple[Path, ...] = ()
@@ -175,6 +179,7 @@ def prepare_freshness(
         except SystemExit as exc:
             raise FreshnessError(_doctor_failure(doctor, exc)) from exc
         except BaseException:
+            # Staging must not survive interrupts or unexpected doctor errors.
             if staged and staging_base is not None:
                 doctor._cleanup_staged_bep_run_roots(
                     staged,
@@ -196,6 +201,7 @@ def prepare_freshness(
             },
         )
     except BaseException:
+        # Planning failures must obey the same ownership cleanup contract.
         if staged and doctor is not None and staging_base is not None:
             doctor._cleanup_staged_bep_run_roots(
                 staged,
