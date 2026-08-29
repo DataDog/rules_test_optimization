@@ -96,35 +96,38 @@ def enrich_test_payload(
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
-    star = metadata.get("*")
-    if not isinstance(star, dict):
-        star = {}
+    global_metadata = metadata.get("*")
+    if not isinstance(global_metadata, dict):
+        global_metadata = {}
 
-    normalized_star = {
+    normalized_global_metadata = {
         "runtime-id": _first_nonempty_string(
-            star.get("runtime-id"),
+            global_metadata.get("runtime-id"),
             context.get("runtime-id"),
             context.get("runtime.id"),
             context.get("runtime_id"),
             runtime_id,
         ),
         "language": _first_nonempty_string(
-            star.get("language"),
+            global_metadata.get("language"),
             context.get("language"),
             context.get("runtime.name"),
             context.get("runtime_name"),
             "bazel",
         ),
         "library_version": _first_nonempty_string(
-            star.get("library_version"),
+            global_metadata.get("library_version"),
             rules_version,
         ),
     }
-    environment = _first_nonempty_string(star.get("env"), context.get("env"))
+    environment = _first_nonempty_string(
+        global_metadata.get("env"),
+        context.get("env"),
+    )
     if environment:
-        normalized_star["env"] = environment
+        normalized_global_metadata["env"] = environment
 
-    normalized_metadata: dict[str, Any] = {"*": normalized_star}
+    normalized_metadata: dict[str, Any] = {"*": normalized_global_metadata}
     for key in TOP_LEVEL_EVENT_METADATA_KEYS:
         if key in metadata and metadata[key] is not None:
             normalized_metadata[key] = metadata[key]

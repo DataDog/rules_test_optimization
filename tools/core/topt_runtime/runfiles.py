@@ -72,10 +72,10 @@ def _manifest_line(line: str, *, first_line: bool) -> tuple[str, str] | None:
         if separator_index <= 0:
             return None
         key = _decode_manifest_field(encoded[:separator_index])
-        value = _decode_manifest_field(encoded[separator_index + 1 :])
-        if not value:
+        path_text = _decode_manifest_field(encoded[separator_index + 1 :])
+        if not path_text:
             return None
-        return key.replace("\\", "/"), value
+        return key.replace("\\", "/"), path_text
     space_index = normalized.find(" ")
     tab_index = normalized.find("\t")
     indexes = [index for index in (space_index, tab_index) if index >= 0]
@@ -85,10 +85,10 @@ def _manifest_line(line: str, *, first_line: bool) -> tuple[str, str] | None:
     if separator_index <= 0:
         return None
     key = normalized[:separator_index]
-    value = normalized[separator_index + 1 :].strip()
-    if not value:
+    path_text = normalized[separator_index + 1 :].strip()
+    if not path_text:
         return None
-    return key.replace("\\", "/"), value
+    return key.replace("\\", "/"), path_text
 
 
 def _decode_manifest_field(value: str) -> str:
@@ -108,10 +108,10 @@ def _load_manifest(path: Path | None) -> Mapping[str, Path]:
                 if entry is None:
                     continue
                 key, raw_value = entry
-                value = Path(raw_value)
-                if not value.is_absolute():
-                    value = path.parent / value
-                entries.setdefault(key, value)
+                resolved_path = Path(raw_value)
+                if not resolved_path.is_absolute():
+                    resolved_path = path.parent / resolved_path
+                entries.setdefault(key, resolved_path)
     except OSError as exc:
         raise RunfileResolutionError(
             f"failed to read runfiles manifest {path}: {type(exc).__name__}"
@@ -120,15 +120,15 @@ def _load_manifest(path: Path | None) -> Mapping[str, Path]:
 
 
 def _unique_existing_directories(paths: Iterable[Path]) -> tuple[Path, ...]:
-    result: list[Path] = []
+    directories: list[Path] = []
     seen: set[Path] = set()
     for raw_path in paths:
         path = raw_path.resolve()
         if path in seen or not path.is_dir():
             continue
         seen.add(path)
-        result.append(path)
-    return tuple(result)
+        directories.append(path)
+    return tuple(directories)
 
 
 def _safe_workspace_name(raw: str) -> str | None:
@@ -235,7 +235,7 @@ class RunfilesResolver:
             raise RunfileResolutionError("no runfile path was provided")
 
         logical_candidates: list[str] = []
-        errors: list[RunfileResolutionError] = []
+        candidate_errors: list[RunfileResolutionError] = []
         for raw in requested:
             direct = Path(raw)
             direct_candidate = direct if direct.is_absolute() else self.cwd / direct
@@ -246,7 +246,7 @@ class RunfilesResolver:
             try:
                 logical_candidates.extend(runfile_candidates(raw))
             except RunfileResolutionError as exc:
-                errors.append(exc)
+                candidate_errors.append(exc)
 
         candidates = tuple(dict.fromkeys(logical_candidates))
         for root in self.roots:
@@ -259,8 +259,8 @@ class RunfilesResolver:
         if manifest_match is not None:
             return manifest_match
 
-        if not candidates and errors:
-            raise errors[0]
+        if not candidates and candidate_errors:
+            raise candidate_errors[0]
         rendered = ", ".join(repr(raw) for raw in requested)
         raise RunfileResolutionError(f"runfile not found for: {rendered}")
 
@@ -277,15 +277,15 @@ class RunfilesResolver:
     def _resolve_manifest(self, candidates: tuple[str, ...]) -> Path | None:
         lookup_candidates = self._root_candidates(candidates)
         for candidate in lookup_candidates:
-            match = self.manifest_entries.get(candidate)
-            if match is not None and match.is_file():
-                return match.resolve()
+            matched_path = self.manifest_entries.get(candidate)
+            if matched_path is not None and matched_path.is_file():
+                return matched_path.resolve()
 
         # Preserve the legacy fallback for manifests that add an unknown main
         # repository prefix to otherwise valid keys.
         for candidate in lookup_candidates:
             suffix = f"/{candidate}"
-            for key, match in self.manifest_entries.items():
-                if key.endswith(suffix) and match.is_file():
-                    return match.resolve()
+            for key, matched_path in self.manifest_entries.items():
+                if key.endswith(suffix) and matched_path.is_file():
+                    return matched_path.resolve()
         return None

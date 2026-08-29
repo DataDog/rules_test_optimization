@@ -19,9 +19,8 @@ from typing import Iterable
 
 from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
-from .discovery import DiscoveryResult
+from .discovery import DiscoveryResult, count_tasks_by_payload_type
 from .json_utils import strict_json_loads
-from .models import PayloadType
 
 
 class ExpectedTargetsError(ValueError):
@@ -117,17 +116,10 @@ def select_expected_outputs(
         for task in discovery.tasks
         if (task.output_key or "") in target_by_output_key
     )
-    counts = tuple(
-        (
-            payload_type,
-            sum(int(task.payload_type is payload_type) for task in selected_tasks),
-        )
-        for payload_type in PayloadType
-    )
     return DiscoveryResult(
         outputs=selected_outputs,
         tasks=selected_tasks,
-        discovered_by_type=counts,
+        discovered_by_type=count_tasks_by_payload_type(selected_tasks),
         warning_codes=discovery.warning_codes,
     )
 

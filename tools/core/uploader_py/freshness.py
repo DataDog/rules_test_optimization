@@ -26,9 +26,9 @@ from typing import Iterable
 from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
 from .config import UploaderConfig
-from .discovery import DiscoveryResult, ScanRoot
+from .discovery import DiscoveryResult, ScanRoot, count_tasks_by_payload_type
 from .json_utils import strict_json_loads
-from .models import FileResult, FileStatus, FileTask, PayloadType
+from .models import FileResult, FileStatus, FileTask
 
 
 class FreshnessError(RuntimeError):
@@ -307,17 +307,10 @@ def filter_discovery_for_freshness(
         for task in discovery.tasks
         if (task.output_key or "") in selected_keys
     )
-    counts = tuple(
-        (
-            payload_type,
-            sum(int(task.payload_type is payload_type) for task in selected_tasks),
-        )
-        for payload_type in PayloadType
-    )
     filtered = DiscoveryResult(
         outputs=tuple(selected_outputs),
         tasks=selected_tasks,
-        discovered_by_type=counts,
+        discovered_by_type=count_tasks_by_payload_type(selected_tasks),
         warning_codes=tuple(
             dict.fromkeys(
                 discovery.warning_codes

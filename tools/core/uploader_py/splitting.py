@@ -95,16 +95,16 @@ def prepare_test_chunks(
         return (_write_chunk(task_directory, 1, full_body, 0, len(events)),)
 
     prefix, suffix = _event_array_frame(payload_object)
-    base_size = len(prefix) + len(suffix)
-    if base_size > limit_bytes:
+    envelope_size = len(prefix) + len(suffix)
+    if envelope_size > limit_bytes:
         raise TestPayloadSplitError(
             "test_payload_envelope_exceeds_payload_limit",
-            f"test payload envelope is {base_size} bytes; limit is {limit_bytes}",
+            f"test payload envelope is {envelope_size} bytes; limit is {limit_bytes}",
         )
 
     serialized_events = tuple(compact_json_bytes(event) for event in events)
     for event_index, event_body in enumerate(serialized_events):
-        event_size = base_size + len(event_body)
+        event_size = envelope_size + len(event_body)
         if event_size > limit_bytes:
             raise TestPayloadSplitError(
                 "single_event_exceeds_payload_limit",
@@ -114,26 +114,26 @@ def prepare_test_chunks(
                 ),
             )
 
-    ranges: list[tuple[int, int]] = []
-    range_start = 0
-    current_size = base_size
+    event_ranges: list[tuple[int, int]] = []
+    chunk_start = 0
+    chunk_size = envelope_size
     for event_index, event_body in enumerate(serialized_events):
-        separator_size = 0 if event_index == range_start else 1
-        candidate_size = current_size + separator_size + len(event_body)
+        separator_size = 0 if event_index == chunk_start else 1
+        candidate_size = chunk_size + separator_size + len(event_body)
         if candidate_size <= limit_bytes:
-            current_size = candidate_size
+            chunk_size = candidate_size
             continue
-        ranges.append((range_start, event_index))
-        range_start = event_index
-        current_size = base_size + len(event_body)
-    ranges.append((range_start, len(serialized_events)))
+        event_ranges.append((chunk_start, event_index))
+        chunk_start = event_index
+        chunk_size = envelope_size + len(event_body)
+    event_ranges.append((chunk_start, len(serialized_events)))
 
-    prepared: list[PreparedTestChunk] = []
-    for chunk_index, (event_start, event_end) in enumerate(ranges, start=1):
+    chunks: list[PreparedTestChunk] = []
+    for chunk_index, (event_start, event_end) in enumerate(event_ranges, start=1):
         body = prefix + b",".join(serialized_events[event_start:event_end]) + suffix
         if len(body) > limit_bytes:
             raise AssertionError("internal split invariant violated: chunk exceeds byte limit")
-        prepared.append(
+        chunks.append(
             _write_chunk(
                 task_directory,
                 chunk_index,
@@ -142,22 +142,22 @@ def prepare_test_chunks(
                 event_end,
             )
         )
-    return tuple(prepared)
+    return tuple(chunks)
 
 
 def _event_array_frame(payload: Mapping[str, Any]) -> tuple[bytes, bytes]:
-    before: list[bytes] = []
-    after: list[bytes] = []
-    destination = before
+    fields_before_events: list[bytes] = []
+    fields_after_events: list[bytes] = []
+    destination_fields = fields_before_events
     found_events = False
     for key, value in payload.items():
         encoded_key = compact_json_bytes(key)
         if key == "events":
             found_events = True
-            destination = after
+            destination_fields = fields_after_events
             continue
         encoded_entry = encoded_key + b":" + compact_json_bytes(value)
-        destination.append(encoded_entry)
+        destination_fields.append(encoded_entry)
     if not found_events:
         raise TestPayloadSplitError(
             "test_payload_without_events",
@@ -165,12 +165,12 @@ def _event_array_frame(payload: Mapping[str, Any]) -> tuple[bytes, bytes]:
         )
 
     prefix = b"{"
-    if before:
-        prefix += b",".join(before) + b","
+    if fields_before_events:
+        prefix += b",".join(fields_before_events) + b","
     prefix += compact_json_bytes("events") + b":["
     suffix = b"]"
-    if after:
-        suffix += b"," + b",".join(after)
+    if fields_after_events:
+        suffix += b"," + b",".join(fields_after_events)
     suffix += b"}"
     return prefix, suffix
 

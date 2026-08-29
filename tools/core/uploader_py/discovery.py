@@ -64,6 +64,17 @@ class QuiescenceResult:
     elapsed_seconds: float
 
 
+def count_tasks_by_payload_type(
+    tasks: Iterable[FileTask],
+) -> tuple[tuple[PayloadType, int], ...]:
+    """Count supported tasks once in the stable public payload-type order."""
+    counts = {payload_type: 0 for payload_type in PayloadType}
+    for task in tasks:
+        if task.payload_type in counts:
+            counts[task.payload_type] += 1
+    return tuple(counts.items())
+
+
 def resolve_local_testlogs_root(
     *,
     explicit: Path | None,
@@ -95,11 +106,11 @@ def discover_file_tasks(
     selected_for_staging = frozenset(
         key.replace("\\", "/").lstrip("/") for key in staged_output_keys if key
     )
-    candidates: dict[str, list[DiscoveredOutput]] = {}
+    outputs_by_key: dict[str, list[DiscoveredOutput]] = {}
     for scan_root in normalized_roots:
         for output_path in _find_test_outputs(scan_root.path, max_depth=max_depth):
             output_key = output_path.relative_to(scan_root.path).as_posix()
-            candidates.setdefault(output_key, []).append(
+            outputs_by_key.setdefault(output_key, []).append(
                 DiscoveredOutput(
                     path=output_path,
                     output_key=output_key,
@@ -110,18 +121,18 @@ def discover_file_tasks(
 
     warnings: list[str] = []
     outputs: list[DiscoveredOutput] = []
-    for output_key in sorted(candidates):
-        choices = candidates[output_key]
+    for output_key in sorted(outputs_by_key):
+        candidate_outputs = outputs_by_key[output_key]
         if output_key in selected_for_staging:
-            staged = [choice for choice in choices if choice.staged]
-            if staged:
-                outputs.append(staged[0])
+            staged_outputs = [output for output in candidate_outputs if output.staged]
+            if staged_outputs:
+                outputs.append(staged_outputs[0])
                 continue
             warnings.append("selected_staged_output_missing")
             continue
-        outputs.append(choices[0])
+        outputs.append(candidate_outputs[0])
 
-    task_values: list[tuple[Path, str, PayloadType, DiscoveredOutput]] = []
+    discovered_sources: list[tuple[Path, str, PayloadType, DiscoveredOutput]] = []
     seen_sources: set[str] = set()
     for output in outputs:
         for payload_type, relative_directory in _PAYLOAD_SUBDIRECTORIES:
@@ -141,7 +152,9 @@ def discover_file_tasks(
                 seen_sources.add(source_key)
                 relative_source = source_path.relative_to(output.path).as_posix()
                 display_path = f"{output.output_key}/{relative_source}"
-                task_values.append((source_path, display_path, payload_type, output))
+                discovered_sources.append(
+                    (source_path, display_path, payload_type, output)
+                )
 
     tasks = tuple(
         FileTask(
@@ -153,23 +166,16 @@ def discover_file_tasks(
             output_key=output.output_key,
         )
         for index, (source_path, display_path, payload_type, output) in enumerate(
-            task_values,
+            discovered_sources,
             start=1,
         )
-    )
-    counts = tuple(
-        (
-            payload_type,
-            sum(int(task.payload_type is payload_type) for task in tasks),
-        )
-        for payload_type in PayloadType
     )
     if max_depth > 0 and not outputs:
         warnings.append("max_depth_may_be_too_shallow")
     return DiscoveryResult(
         outputs=tuple(outputs),
         tasks=tasks,
-        discovered_by_type=counts,
+        discovered_by_type=count_tasks_by_payload_type(tasks),
         warning_codes=tuple(dict.fromkeys(warnings)),
     )
 

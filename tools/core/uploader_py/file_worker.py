@@ -131,20 +131,21 @@ def common_headers(
 
     if payload is not None:
         metadata = payload.get("metadata")
-        star = metadata.get("*") if isinstance(metadata, dict) else None
-        if isinstance(star, dict):
-            language = _nonempty_string(star.get("language")) or language
+        global_metadata = metadata.get("*") if isinstance(metadata, dict) else None
+        if isinstance(global_metadata, dict):
+            language = _nonempty_string(global_metadata.get("language")) or language
             tracer_version = (
-                _nonempty_string(star.get("library_version")) or tracer_version
+                _nonempty_string(global_metadata.get("library_version"))
+                or tracer_version
             )
             language_version = (
-                _nonempty_string(star.get("language_version"))
-                or _nonempty_string(star.get("runtime_version"))
+                _nonempty_string(global_metadata.get("language_version"))
+                or _nonempty_string(global_metadata.get("runtime_version"))
                 or language_version
             )
             language_interpreter = (
-                _nonempty_string(star.get("language_interpreter"))
-                or _nonempty_string(star.get("runtime_name"))
+                _nonempty_string(global_metadata.get("language_interpreter"))
+                or _nonempty_string(global_metadata.get("runtime_name"))
                 or language_interpreter
             )
 
