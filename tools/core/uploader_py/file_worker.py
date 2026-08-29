@@ -339,22 +339,23 @@ def _process_test(
             f"uploading test chunk {chunk.index}/{len(requests)} "
             f"({chunk.size_bytes} bytes)",
         )
-        result = transport.post_json(
+        http_result = transport.post_json(
             runtime.endpoints.test_url,
             headers,
             request.body,
             content_encoding=request.content_encoding,
         )
-        requests_attempted += result.attempts
-        retries += result.retries
+        requests_attempted += http_result.attempts
+        retries += http_result.retries
         _debug(
             runtime,
             task,
-            f"test chunk {chunk.index} completed after {result.attempts} attempt(s)",
+            f"test chunk {chunk.index} completed after "
+            f"{http_result.attempts} attempt(s)",
         )
-        if not result.succeeded:
+        if not http_result.succeeded:
             failure_code, failure_message = _http_failure(
-                result,
+                http_result,
                 payload_type=task.payload_type,
                 payload_limit_context=(
                     f"chunk={chunk.index}/{len(requests)} "
@@ -407,16 +408,18 @@ def _enrich_and_validate_test(
         warnings.append(sidecar_warning)
     repo_key = payload_repo_key(bazel_metadata)
     context_selection = runtime.context_plan.select(repo_key)
+    if sidecar_warning:
+        sidecar_state = "invalid"
+    elif bazel_metadata is not None:
+        sidecar_state = "loaded"
+    else:
+        sidecar_state = "absent"
     _debug(
         runtime,
         task,
         "Bazel sidecar=%s context_repo=%s context_selected=%s context_warning=%s"
         % (
-            "invalid"
-            if sidecar_warning
-            else "loaded"
-            if bazel_metadata is not None
-            else "absent",
+            sidecar_state,
             repr(repo_key[:256]) if repo_key is not None else "none",
             "yes" if context_selection.values is not None else "no",
             context_selection.warning_code or "none",
@@ -621,7 +624,7 @@ def _process_coverage(
         )
         return FileResult(status=FileStatus.SUCCEEDED, **coverage_result_fields)
 
-    result = transport.post_prepared_multipart(
+    http_result = transport.post_prepared_multipart(
         runtime.endpoints.coverage_url,
         headers,
         prepared,
@@ -629,18 +632,18 @@ def _process_coverage(
     _debug(
         runtime,
         task,
-        f"coverage request completed after {result.attempts} attempt(s)",
+        f"coverage request completed after {http_result.attempts} attempt(s)",
     )
-    if not result.succeeded:
+    if not http_result.succeeded:
         failure_code, failure_message = _http_failure(
-            result,
+            http_result,
             payload_type=task.payload_type,
         )
         return FileResult(
             status=FileStatus.FAILED,
-            requests_attempted=result.attempts,
+            requests_attempted=http_result.attempts,
             requests_failed=1,
-            retries=result.retries,
+            retries=http_result.retries,
             failure_code=failure_code,
             failure_message=failure_message,
             **coverage_result_fields,
@@ -650,9 +653,9 @@ def _process_coverage(
     _debug(runtime, task, f"coverage cleanup completed source_deleted={deleted}")
     return FileResult(
         status=FileStatus.SUCCEEDED,
-        requests_attempted=result.attempts,
+        requests_attempted=http_result.attempts,
         requests_succeeded=1,
-        retries=result.retries,
+        retries=http_result.retries,
         source_deleted=deleted,
         warning_codes=(cleanup_warning,) if cleanup_warning else (),
         **coverage_result_fields,
@@ -702,7 +705,9 @@ def _process_telemetry(
             failure_message=metadata_failure,
         )
 
-    requests = [_TelemetryRequest(source_body, _telemetry_headers(runtime, payload))]
+    requests: list[_TelemetryRequest] = [
+        _TelemetryRequest(source_body, _telemetry_headers(runtime, payload))
+    ]
     if directive.create_synthetic:
         synthetic = _build_synthetic_telemetry(payload, directive, warnings)
         if synthetic is not None:
@@ -758,21 +763,22 @@ def _process_telemetry(
     requests_succeeded = 0
     retries = 0
     for request in requests:
-        result = transport.post_json(
+        http_result = transport.post_json(
             runtime.endpoints.telemetry_url,
             request.headers,
             request.body,
         )
-        requests_attempted += result.attempts
-        retries += result.retries
+        requests_attempted += http_result.attempts
+        retries += http_result.retries
         _debug(
             runtime,
             task,
-            f"telemetry request completed after {result.attempts} attempt(s)",
+            "telemetry request completed after "
+            f"{http_result.attempts} attempt(s)",
         )
-        if not result.succeeded:
+        if not http_result.succeeded:
             failure_code, failure_message = _http_failure(
-                result,
+                http_result,
                 payload_type=task.payload_type,
             )
             return FileResult(
@@ -1047,12 +1053,12 @@ def _cleanup_source(path: Path, keep_payloads: bool) -> tuple[bool, str | None]:
 
 
 def _http_failure(
-    result: HttpResult,
+    http_result: HttpResult,
     *,
     payload_type: PayloadType,
     payload_limit_context: str | None = None,
 ) -> tuple[str, str]:
-    if result.status_code == 413:
+    if http_result.status_code == 413:
         if payload_type is PayloadType.TEST and payload_limit_context:
             return (
                 "payload_limit_contract_mismatch",
@@ -1063,9 +1069,9 @@ def _http_failure(
             f"HTTP 413 for unsplit {payload_type.value} payload; "
             f"{payload_type.value} splitting is not supported",
         )
-    if result.status_code is not None:
-        return "upload_http_error", f"HTTP {result.status_code}"
-    return "upload_transport_error", result.transport_error or "transport error"
+    if http_result.status_code is not None:
+        return "upload_http_error", f"HTTP {http_result.status_code}"
+    return "upload_transport_error", http_result.transport_error or "transport error"
 
 
 def _event_count(payload: Mapping[str, Any]) -> int:

@@ -32,21 +32,9 @@ Why generated launchers/configuration:
 Developer navigation:
 - Starlark test helpers (manifest/CODEOWNERS parsing parity) near the top.
 - `_uploader_impl` builds both script templates and wires rule outputs.
-- Script templates contain the runtime behavior for discovery, enrichment,
-  uploads, retries, and locking.
+- `uploader_py` owns current runtime behavior; legacy generated scripts remain
+  here only as a rollout fallback.
 """
-
-# Usage pattern:
-#   bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
-#
-# Key features:
-# - Discovers all test.outputs/ directories in bazel-testlogs automatically
-# - Supports sharded tests (shard_N_of_M/) and retries (run_N_of_M/)
-# - Uploads test payloads to CI Test Cycle intake
-# - Uploads coverage payloads to Code Coverage intake
-# - Deletes payloads after successful upload (unless DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1)
-# - Uses workspace-level lock to prevent concurrent uploaders
-# - Enriches payloads with context.json metadata
 
 load(
     "//tools/core:common_utils.bzl",

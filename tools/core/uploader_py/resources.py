@@ -58,44 +58,46 @@ def load_resources(
     """Resolve contexts, telemetry facts, and schema once with warning fallback."""
     warnings: list[str] = []
     override_path = _existing_file(inputs.context_override)
-    override_context = _load_json_object(override_path) if override_path else None
-    if inputs.context_override is not None and override_context is None:
+    override_values = _load_json_object(override_path) if override_path else None
+    if inputs.context_override is not None and override_values is None:
         warnings.append("context_override_invalid")
 
     context_records: list[ContextRecord] = []
-    primary_path: Path | None = None
-    runtime_override_enabled = override_context is not None
-    if override_context is not None:
-        context_records.append(ContextRecord.create("__runtime_override__", override_context))
-        primary_path = override_path
+    primary_context_path: Path | None = None
+    runtime_override_enabled = override_values is not None
+    if override_values is not None:
+        context_records.append(
+            ContextRecord.create("__runtime_override__", override_values)
+        )
+        primary_context_path = override_path
     else:
-        manifest = _resolve_optional(resolver, inputs.context_manifest_paths)
-        if inputs.context_manifest_paths and manifest is None:
+        context_manifest = _resolve_optional(resolver, inputs.context_manifest_paths)
+        if inputs.context_manifest_paths and context_manifest is None:
             warnings.append("context_manifest_unresolved")
-        if manifest is not None:
+        if context_manifest is not None:
             seen_repo_keys: set[str] = set()
             for repo_key, short_path, artifact_path in _context_manifest_entries(
-                manifest,
+                context_manifest,
                 warnings,
             ):
                 normalized_repo_key = repo_key.rsplit("+", 1)[-1]
                 if normalized_repo_key in seen_repo_keys:
                     warnings.append("context_manifest_duplicate_repo")
                     continue
-                resolved = _resolve_optional(
+                context_path = _resolve_optional(
                     resolver,
                     (artifact_path, short_path),
                 )
-                context = _load_json_object(resolved) if resolved else None
-                if context is None:
+                context_values = _load_json_object(context_path) if context_path else None
+                if context_values is None:
                     warnings.append("context_entry_invalid")
                     continue
                 seen_repo_keys.add(normalized_repo_key)
                 context_records.append(
-                    ContextRecord.create(normalized_repo_key, context)
+                    ContextRecord.create(normalized_repo_key, context_values)
                 )
-                if primary_path is None:
-                    primary_path = resolved
+                if primary_context_path is None:
+                    primary_context_path = context_path
 
     primary_context_record = context_records[0] if context_records else None
     primary_context = (
@@ -120,13 +122,13 @@ def load_resources(
             warnings,
             "telemetry_facts_manifest_invalid",
         ):
-            resolved = _resolve_optional(resolver, (artifact_path, short_path))
-            if resolved is None:
+            facts_path = _resolve_optional(resolver, (artifact_path, short_path))
+            if facts_path is None:
                 warnings.append("telemetry_facts_entry_unresolved")
                 continue
-            telemetry_facts_paths.append(resolved)
-    if runtime_override_enabled and primary_path is not None:
-        sibling = primary_path.parent / "telemetry_facts.json"
+            telemetry_facts_paths.append(facts_path)
+    if runtime_override_enabled and primary_context_path is not None:
+        sibling = primary_context_path.parent / "telemetry_facts.json"
         if sibling.is_file():
             telemetry_facts_paths.append(sibling.resolve())
     telemetry_facts_paths = list(dict.fromkeys(sorted(telemetry_facts_paths)))
@@ -138,7 +140,7 @@ def load_resources(
     return LoadedResources(
         context_plan=context_plan,
         primary_context=primary_context,
-        primary_context_path=primary_path,
+        primary_context_path=primary_context_path,
         telemetry_facts_paths=tuple(telemetry_facts_paths),
         schema=schema,
         warning_codes=tuple(dict.fromkeys(warnings)),

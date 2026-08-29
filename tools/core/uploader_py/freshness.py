@@ -28,7 +28,7 @@ from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 from .config import UploaderConfig
 from .discovery import DiscoveryResult, ScanRoot
 from .json_utils import strict_json_loads
-from .models import FileResult, FileStatus, PayloadType
+from .models import FileResult, FileStatus, FileTask, PayloadType
 
 
 class FreshnessError(RuntimeError):
@@ -251,7 +251,7 @@ def filter_discovery_for_freshness(
     selected_outputs = []
     task_label_by_output: dict[str, str] = {}
     skipped: list[str] = []
-    tasks_by_output: dict[str, list[object]] = {}
+    tasks_by_output: dict[str, list[FileTask]] = {}
     for task in discovery.tasks:
         tasks_by_output.setdefault(task.output_key or "", []).append(task)
 

@@ -182,20 +182,20 @@ class AggregateReport:
                 "source_files_split": sum(
                     int(result.chunks_created > 1) for result in self.results
                 ),
-                "chunks_created": _sum(self.results, "chunks_created"),
-                "chunks_uploaded": _sum(self.results, "chunks_uploaded"),
-                "chunks_failed": _sum(self.results, "chunks_failed"),
+                "chunks_created": sum(result.chunks_created for result in self.results),
+                "chunks_uploaded": sum(result.chunks_uploaded for result in self.results),
+                "chunks_failed": sum(result.chunks_failed for result in self.results),
                 "oversized_single_events": sum(
                     int(result.failure_code == "single_event_exceeds_payload_limit")
                     for result in self.results
                 ),
             },
             "requests": {
-                "planned": _sum(self.results, "requests_planned"),
-                "attempted": _sum(self.results, "requests_attempted"),
-                "succeeded": _sum(self.results, "requests_succeeded"),
-                "failed": _sum(self.results, "requests_failed"),
-                "retries": _sum(self.results, "retries"),
+                "planned": sum(result.requests_planned for result in self.results),
+                "attempted": sum(result.requests_attempted for result in self.results),
+                "succeeded": sum(result.requests_succeeded for result in self.results),
+                "failed": sum(result.requests_failed for result in self.results),
+                "retries": sum(result.retries for result in self.results),
             },
             "warnings": dict(sorted(warning_codes.items())),
             "failures": dict(sorted(failure_codes.items())),
@@ -211,8 +211,8 @@ class AggregateReport:
         concurrency = stats["concurrency"]
 
         def type_value(name: str) -> str:
-            values = payload_types[name]
-            return f"{values['succeeded']}/{values['failed']}/{values['skipped']}"
+            counts = payload_types[name]
+            return f"{counts['succeeded']}/{counts['failed']}/{counts['skipped']}"
 
         return (
             (
@@ -438,7 +438,7 @@ def _legacy_payload_type_counts(
             if result.status is FileStatus.SUCCEEDED
         )
     else:
-        telemetry_processed = _sum(telemetry, "requests_succeeded")
+        telemetry_processed = sum(result.requests_succeeded for result in telemetry)
     telemetry_failed = sum(
         (
             result.requests_failed
@@ -501,16 +501,14 @@ def _result_reason(
 def _payload_type_counts(
     results: tuple[FileResult, ...], payload_type: PayloadType
 ) -> dict[str, int]:
-    selected = tuple(result for result in results if result.payload_type is payload_type)
+    type_results = tuple(
+        result for result in results if result.payload_type is payload_type
+    )
     return {
-        status.value: _status_count(selected, status)
+        status.value: _status_count(type_results, status)
         for status in FileStatus
     }
 
 
 def _status_count(results: Iterable[FileResult], status: FileStatus) -> int:
     return sum(int(result.status is status) for result in results)
-
-
-def _sum(results: Iterable[FileResult], field_name: str) -> int:
-    return sum(int(getattr(result, field_name)) for result in results)

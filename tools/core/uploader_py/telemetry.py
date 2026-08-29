@@ -127,15 +127,15 @@ def build_telemetry_plan(
         grouped_facts.setdefault((facts.service_name, language_name), []).append(facts)
 
     directives: dict[str, TelemetryDirective] = {}
-    for group_key in sorted(grouped_facts):
+    for stream_key in sorted(grouped_facts):
         group_sources = sorted(
-            grouped_sources.get(group_key, ()),
+            grouped_sources.get(stream_key, ()),
             key=lambda item: item.path_key,
         )
         if not group_sources:
             continue
         facts_entries = sorted(
-            grouped_facts[group_key],
+            grouped_facts[stream_key],
             key=lambda item: item.path_key,
         )
         environments = sorted(
@@ -178,16 +178,18 @@ def build_telemetry_plan(
             for source in chosen_stream
             if source.request_type == "message-batch"
         ]
-        anchor = max(batch_sources or chosen_stream, key=lambda item: item.path_key)
-        current = directives.get(anchor.path_key, TelemetryDirective())
+        anchor_source = max(
+            batch_sources or chosen_stream, key=lambda item: item.path_key
+        )
+        current_directive = directives.get(anchor_source.path_key, TelemetryDirective())
         encoded_messages = strict_json_dumps(
             messages,
             ensure_ascii=False,
             separators=(",", ":"),
         ).encode("utf-8")
-        if anchor.request_type == "message-batch":
-            directives[anchor.path_key] = replace(
-                current,
+        if anchor_source.request_type == "message-batch":
+            directives[anchor_source.path_key] = replace(
+                current_directive,
                 messages_json=encoded_messages,
                 append_messages=True,
             )
@@ -200,8 +202,8 @@ def build_telemetry_plan(
                 ),
                 default=0,
             )
-            directives[anchor.path_key] = replace(
-                current,
+            directives[anchor_source.path_key] = replace(
+                current_directive,
                 messages_json=encoded_messages,
                 create_synthetic=True,
                 synthetic_seq_id=max_seq_id + 1,
