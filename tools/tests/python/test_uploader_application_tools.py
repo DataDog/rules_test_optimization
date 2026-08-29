@@ -542,7 +542,7 @@ class ApplicationTests(unittest.TestCase):
             locks = []
 
             class RecordingLock:
-                def __init__(self, workspace: Path) -> None:
+                def __init__(self, workspace: str) -> None:
                     self.workspace = workspace
                     self.acquired = False
                     locks.append(self)
@@ -576,6 +576,7 @@ class ApplicationTests(unittest.TestCase):
                 )
 
             self.assertEqual(0, exit_code)
+            self.assertEqual(config.lock_workspace, locks[0].workspace)
             self.assertEqual(["acquire", "report", "release"], events)
 
             events.clear()

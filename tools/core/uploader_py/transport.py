@@ -292,8 +292,23 @@ def _bounded_response(stream, limit: int) -> tuple[bytes, bool]:
 
 
 def _validate_url(url: str) -> None:
-    parsed = urlsplit(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+    try:
+        parsed = urlsplit(url)
+        hostname = parsed.hostname or ""
+        # Accessing port performs urllib's numeric and range validation.
+        _ = parsed.port
+    except (TypeError, ValueError) as exc:
+        raise HttpTransportError(
+            "upload URL must be an absolute HTTP(S) URL"
+        ) from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or any(
+            ord(character) <= 32 or ord(character) == 127
+            for character in hostname
+        )
+    ):
         raise HttpTransportError("upload URL must be an absolute HTTP(S) URL")
     if parsed.username is not None or parsed.password is not None:
         raise HttpTransportError("upload URL must not contain credentials/userinfo")

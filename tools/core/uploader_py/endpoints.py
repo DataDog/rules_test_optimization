@@ -65,7 +65,17 @@ def _validated_base_url(raw_url: str, variable_name: str) -> str:
     base = raw_url.rstrip("/")
     try:
         parsed = urlsplit(base)
-        valid = parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
+        hostname = parsed.hostname or ""
+        # Accessing port performs urllib's numeric and range validation.
+        _ = parsed.port
+        valid = (
+            parsed.scheme.lower() in {"http", "https"}
+            and bool(hostname)
+            and not any(
+                ord(character) <= 32 or ord(character) == 127
+                for character in hostname
+            )
+        )
     except (TypeError, ValueError):
         valid = False
         parsed = None

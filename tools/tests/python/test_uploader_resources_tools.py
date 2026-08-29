@@ -122,7 +122,7 @@ class ResourceLoadingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             bad_override = root / "bad-context.json"
-            bad_override.write_text("[]", encoding="utf-8")
+            bad_override.write_text('{"env":NaN}', encoding="utf-8")
             bad_schema = root / "bad-schema.json"
             bad_schema.write_text("not-json", encoding="utf-8")
             resolver = RunfilesResolver.from_environment(environ={}, cwd=root)

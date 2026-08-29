@@ -17,6 +17,7 @@ from typing import Iterable
 from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
 from .discovery import DiscoveryResult
+from .json_utils import strict_json_loads
 from .models import PayloadType
 
 
@@ -130,7 +131,7 @@ def select_expected_outputs(
 
 def _load_target_file(path: Path) -> tuple[str, ...]:
     try:
-        value = json.loads(path.read_bytes().decode("utf-8-sig"))
+        value = strict_json_loads(path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ExpectedTargetsError("expected_targets_file is not valid JSON") from exc
     if not isinstance(value, dict) or set(value) != {"schema_version", "targets"}:

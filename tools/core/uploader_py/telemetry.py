@@ -14,6 +14,7 @@ from pathlib import Path
 import time
 from typing import Any, Callable, Iterable, Mapping
 
+from .json_utils import strict_json_dumps, strict_json_loads
 from .models import FileTask, PayloadType
 
 
@@ -174,7 +175,7 @@ def build_telemetry_plan(
         ]
         anchor = max(batch_candidates or chosen_stream, key=lambda item: item.path_key)
         current = directives.get(anchor.path_key, TelemetryDirective())
-        encoded_messages = json.dumps(
+        encoded_messages = strict_json_dumps(
             messages,
             ensure_ascii=False,
             separators=(",", ":"),
@@ -273,7 +274,7 @@ def _load_facts(path: Path, warnings: list[str]) -> _Facts | None:
 
 def _read_json_object(path: Path) -> dict[str, Any] | None:
     try:
-        value = json.loads(path.read_bytes().decode("utf-8-sig"))
+        value = strict_json_loads(path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None

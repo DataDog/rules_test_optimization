@@ -27,6 +27,7 @@ from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
 from .config import UploaderConfig
 from .discovery import DiscoveryResult, ScanRoot
+from .json_utils import strict_json_loads
 from .models import FileResult, FileStatus, PayloadType
 
 
@@ -509,7 +510,7 @@ def _parse_execution_log(path: Path) -> set[tuple[str, str]]:
         if not raw_line.strip():
             continue
         try:
-            value = json.loads(raw_line)
+            value = strict_json_loads(raw_line)
         except json.JSONDecodeError as exc:
             raise FreshnessError(
                 f"invalid execution log JSON in {path}:{line_number}: {exc}"
@@ -555,7 +556,7 @@ def _execution_output_key(raw: str) -> str:
 def _read_target_label(output_dir: Path) -> str | None:
     metadata_file = output_dir / "bazel_target_metadata.json"
     try:
-        value = json.loads(metadata_file.read_text(encoding="utf-8-sig"))
+        value = strict_json_loads(metadata_file.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None
     label = value.get("bazel.target") if isinstance(value, dict) else None

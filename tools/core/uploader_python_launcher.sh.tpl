@@ -9,6 +9,7 @@ set -euo pipefail
 
 launcher_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 launcher_path="$launcher_dir/$(basename "${BASH_SOURCE[0]}")"
+export DD_TEST_OPTIMIZATION_UPLOADER_LAUNCHER_DIR="$launcher_dir"
 
 if [[ -z "${RUNFILES_MANIFEST_FILE:-}" || ! -f "$RUNFILES_MANIFEST_FILE" ]]; then
   for manifest_candidate in \

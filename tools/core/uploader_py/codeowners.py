@@ -9,13 +9,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 import os
 from pathlib import Path
 import re
 from typing import Any, MutableMapping
 from urllib.parse import unquote
 
+from .json_utils import strict_json_dumps
 
 CODEOWNERS_LOCATIONS = (
     "CODEOWNERS",
@@ -50,7 +50,11 @@ class CodeOwnersMatch:
     def json_value(self) -> str | None:
         if not self.owners:
             return None
-        return json.dumps(self.owners, ensure_ascii=False, separators=(",", ":"))
+        return strict_json_dumps(
+            self.owners,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
 
 
 @dataclass(frozen=True)

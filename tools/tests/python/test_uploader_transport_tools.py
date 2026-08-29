@@ -21,6 +21,8 @@ import threading
 import time
 from typing import Iterator
 import unittest
+from unittest import mock
+from urllib.error import URLError
 
 
 def _runfile(rel_path: str) -> Path:
@@ -95,6 +97,13 @@ class _RecordingHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+
+class _Response(io.BytesIO):
+    def __init__(self, body: bytes = b"ok", *, status: int = 200) -> None:
+        super().__init__(body)
+        self.status = status
+        self.headers: dict[str, str] = {}
 
 
 @contextmanager
@@ -193,6 +202,47 @@ class HttpTransportTests(unittest.TestCase):
         self.assertEqual([2.0, 2.0, 2.0], waits)
         self.assertEqual(4, len(server.records))  # type: ignore[attr-defined]
 
+    def test_each_retryable_http_status_retries_then_succeeds(self) -> None:
+        for status in (408, 500, 502, 503, 504):
+            with self.subTest(status=status), _server(
+                {"status": status},
+                {"status": 200},
+            ) as (server, base):
+                waits: list[float] = []
+                result = HttpTransport(sleeper=waits.append).post_json(
+                    base,
+                    {},
+                    b"{}",
+                )
+
+                self.assertTrue(result.succeeded)
+                self.assertEqual(2, result.attempts)
+                self.assertEqual([2.0], waits)
+                self.assertEqual(2, len(server.records))  # type: ignore[attr-defined]
+
+    def test_transient_connection_and_timeout_retry_then_succeed(self) -> None:
+        for first_error, error_name in (
+            (URLError(ConnectionRefusedError("refused")), "ConnectionRefusedError"),
+            (TimeoutError("timed out"), "TimeoutError"),
+        ):
+            with self.subTest(error=error_name):
+                waits: list[float] = []
+                transport = HttpTransport(sleeper=waits.append)
+                opener = mock.Mock()
+                opener.open.side_effect = [first_error, _Response()]
+                transport._opener = opener
+
+                result = transport.post_json(
+                    "http://localhost:8126/upload",
+                    {},
+                    b"{}",
+                )
+
+                self.assertTrue(result.succeeded)
+                self.assertEqual(2, result.attempts)
+                self.assertEqual([2.0], waits)
+                self.assertEqual(2, opener.open.call_count)
+
     def test_debug_logs_attempt_and_retry_without_url_secrets(self) -> None:
         stream = io.StringIO()
         logger = configure_logging(debug=True, secrets=("api-secret",), stream=stream)
@@ -218,7 +268,7 @@ class HttpTransportTests(unittest.TestCase):
         self.assertNotIn("api-secret", output)
 
     def test_413_and_other_permanent_4xx_are_never_retried(self) -> None:
-        for status in (400, 401, 413):
+        for status in (400, 401, 403, 404, 413):
             with self.subTest(status=status), _server({"status": status}) as (server, base):
                 waits: list[float] = []
                 result = HttpTransport(sleeper=waits.append).post_json(base, {}, b"{}")
@@ -227,6 +277,22 @@ class HttpTransportTests(unittest.TestCase):
                 self.assertEqual(1, result.attempts)
                 self.assertEqual([], waits)
                 self.assertEqual(1, len(server.records))  # type: ignore[attr-defined]
+
+    def test_gzip_request_body_is_byte_identical_across_retry(self) -> None:
+        original = b'{"events":[{"value":"payload"}]}'
+        with _server({"status": 500}, {"status": 200}) as (server, base):
+            result = HttpTransport(sleeper=lambda _delay: None).post_json(
+                f"{base}/gzip-retry",
+                {},
+                original,
+                gzip_body=True,
+            )
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(2, result.attempts)
+        first, second = server.records  # type: ignore[attr-defined]
+        self.assertEqual(first["body"], second["body"])
+        self.assertEqual(original, gzip.decompress(first["body"]))
 
     def test_multipart_has_exact_length_and_reopens_file_for_retry(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
@@ -339,6 +405,15 @@ class HttpTransportTests(unittest.TestCase):
                 {},
                 b"{}",
             )
+        for url in (
+            "http://localhost:notaport/upload",
+            "http://localhost:65536/upload",
+        ):
+            with self.subTest(url=url), self.assertRaisesRegex(
+                HttpTransportError,
+                "absolute HTTP",
+            ):
+                HttpTransport(max_attempts=1).post_json(url, {}, b"{}")
         with self.assertRaisesRegex(HttpTransportError, "header value"):
             HttpTransport(max_attempts=1).post_json(
                 "https://example.test/upload",

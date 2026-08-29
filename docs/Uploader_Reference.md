@@ -207,9 +207,13 @@ This mode requires a host Python 3.10 or newer on Linux, macOS, and Windows at
 `bazel run` time. The launcher resolves `DD_TEST_OPTIMIZATION_PYTHON`, then
 `PYTHON`, then `python3`, then `python`. Each worker owns one payload file and
 performs its enrichment, validation, preflight split at the conservative
-4.5 MiB threshold, and upload/retries independently. The rule-level `workers`
-value defaults to `4`; `DD_TEST_OPTIMIZATION_WORKERS` overrides it at runtime
-and `--workers=<positive-integer>` has highest precedence. Leave
+`4_718_592`-byte (4.5 MiB) threshold, and upload/retries independently. Every
+worker can process test, coverage, or telemetry payloads; chunks and other
+derived requests belonging to one source remain sequential. Non-standard JSON
+numbers (`NaN` and positive/negative `Infinity`) are rejected before HTTP. The
+rule-level `workers` value defaults to `4`; `DD_TEST_OPTIMIZATION_WORKERS`
+overrides it at runtime and `--workers=<positive-integer>` has highest
+precedence. Leave
 `use_python_uploader = False` (the default) to retain the legacy Bash or
 PowerShell implementation during rollout.
 
@@ -707,11 +711,30 @@ payload discovery/quiescence before proceeding.
 
 ## Reliability
 
-- HTTP requests use a 60-second timeout
+### Python uploader
+
+- Python mode uses a 10-second connection timeout and a 60-second socket-I/O
+  timeout.
+- Each logical request makes at most four total attempts: the initial attempt
+  plus up to three retries, normally separated by 2 seconds.
+- Connection failures, timeouts, HTTP `408`, HTTP `429`, and HTTP `5xx` are
+  retryable. `Retry-After` is honored when the backend supplies it.
+- Other HTTP `4xx` responses are terminal after the first attempt. In
+  particular, `413` indicates that the preventive split contract was violated;
+  it is never retried and never triggers adaptive splitting.
+- JSON, gzip, telemetry, and multipart bodies are prepared once per logical
+  request and replayed byte-for-byte for every retry.
+- The temporary legacy Bash/curl and PowerShell implementations remain
+  available only during the opt-in rollout window. The normalized policy above
+  is the Python uploader contract on Linux, macOS, and Windows.
+
+### Legacy Bash and PowerShell uploaders
+
+- HTTP requests use a 60-second timeout.
 - Failed requests are retried up to 3 times with a 2-second delay between
-  attempts
+  attempts.
 - Both transient errors (connection issues) and HTTP errors (4xx/5xx) trigger
-  retries
+  retries.
 - After enrichment, test payloads larger than 4,500,000 bytes are split by
   their top-level `events` array before compression and transport. Each part
   preserves the original top-level envelope and remains at or below the split
@@ -733,7 +756,7 @@ payload discovery/quiescence before proceeding.
   characters of the response body, and the uncompressed, compressed, and
   transmitted byte counts. Response logging does not require debug mode.
 - Behavior is consistent across Linux/macOS (bash/curl) and Windows
-  (PowerShell-only runtime path; no Git Bash requirement)
+  (PowerShell-only runtime path; no Git Bash requirement).
 
 ## Metadata enrichment (`context.json`)
 
@@ -744,9 +767,12 @@ payload discovery/quiescence before proceeding.
   4. if multiple bundled contexts exist and no match is found, skip only the `context.json` merge for that payload and continue uploading
   5. if no bundled context resolves, upload without context enrichment
 - When a `context.json` file is available, the uploader enriches each test
-  payload by merging all non-null keys from `context.json` into each event's
-  `content.meta` or `content.metrics`, and it also normalizes top-level
-  `metadata.*` runtime tags.
+  payload by merging its keys into each event's `content.meta` or
+  `content.metrics`, and it also normalizes top-level `metadata.*` runtime
+  tags. Numbers become metrics; strings and booleans become meta values; other
+  JSON values use their compact JSON representation. For legacy compatibility,
+  JSON `null` therefore becomes the meta string `"null"` rather than being
+  omitted.
 - Bazel sidecar metadata from `bazel_target_metadata.json` is merged separately.
   If a multi-context payload has no repo match, those Bazel sidecar tags remain
   and only the `context.json` merge is skipped.

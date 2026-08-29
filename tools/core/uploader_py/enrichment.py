@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -19,6 +18,7 @@ from .codeowners import (
     CodeOwnersMatcher,
     enrich_payload_codeowners,
 )
+from .json_utils import strict_json_dumps
 
 
 TOP_LEVEL_EVENT_METADATA_KEYS = (
@@ -186,4 +186,8 @@ def _merge_flat_metadata(
         elif isinstance(value, str):
             meta[key] = value
         else:
-            meta[key] = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+            meta[key] = strict_json_dumps(
+                value,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )

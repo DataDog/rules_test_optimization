@@ -14,6 +14,7 @@ $script:LauncherPath = $MyInvocation.MyCommand.Path
 $script:LauncherDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:LauncherBase = [System.IO.Path]::GetFileNameWithoutExtension($script:LauncherPath)
 $script:BatchLauncherPath = Join-Path $script:LauncherDir "$script:LauncherBase.bat"
+$env:DD_TEST_OPTIMIZATION_UPLOADER_LAUNCHER_DIR = $script:LauncherDir
 
 foreach ($manifestCandidate in @(
     $env:RUNFILES_MANIFEST_FILE,

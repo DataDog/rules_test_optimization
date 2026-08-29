@@ -16,6 +16,7 @@ from typing import Any, Iterable
 from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
 from .enrichment import ContextPlan, ContextRecord
+from .json_utils import strict_json_loads
 
 
 @dataclass(frozen=True)
@@ -199,7 +200,7 @@ def _load_json_object(path: Path | None) -> dict[str, Any] | None:
     if path is None:
         return None
     try:
-        value = json.loads(path.read_bytes().decode("utf-8-sig"))
+        value = strict_json_loads(path.read_bytes().decode("utf-8-sig"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return None
     return value if isinstance(value, dict) else None

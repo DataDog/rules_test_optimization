@@ -46,6 +46,8 @@ in this release.
 | Doctor reports msgpack payloads | tracer is not in Bazel JSON file mode | Doctor failures |
 | Doctor reports missing Git or Bazel metadata | sync metadata context or sidecar metadata is absent | Doctor failures |
 | Uploaded tests miss Git or Bazel tags | run uploader dry-run enrichment validation | Uploader enrichment dry-run |
+| Python uploader cannot start | Python 3.10+ discovery and override | Python uploader cannot resolve Python |
+| Test payload split or `413` failure | enriched size, individual event size, fixed threshold | Python uploader split and `413` failures |
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
 | CI failure requires log archaeology | archive the support bundle from the failing run | Collect diagnostic reports |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
@@ -743,8 +745,68 @@ prove per-module selection. If this fails:
 
 1. Ensure the uploader target has the right `data = ["@...//:test_optimization_context"]`.
 2. Ensure `bazel_target_metadata.json` exists beside the payloads.
-3. Ensure `jq` is available on Linux/macOS when using `--validate-enrichment`.
+3. When using the temporary legacy Bash uploader, ensure `jq` is available on
+   Linux/macOS. Python uploader mode does not require `jq`.
 4. Use `--expected-enriched-tag=<tag>` for repository-specific required tags.
+
+## Python uploader cannot resolve Python
+
+**Symptom**: The generated uploader prints `Python 3.10 or newer was not found`
+or reports that the discovered interpreter is older than 3.10.
+
+**Solution**:
+
+1. Confirm the uploader target has `use_python_uploader = True`; the legacy
+   rollout path has different prerequisites.
+2. Set `DD_TEST_OPTIMIZATION_PYTHON` to an explicit Python 3.10+ executable.
+   `PYTHON`, `python3`, and `python` are tried afterward, in that order.
+3. On Windows, set the environment variable before invoking `bazel run`:
+   ```powershell
+   $env:DD_TEST_OPTIMIZATION_PYTHON = "C:\Python312\python.exe"
+   bazel run //:dd_upload_payloads -- --dry-run
+   ```
+4. On Linux/macOS:
+   ```bash
+   DD_TEST_OPTIMIZATION_PYTHON=/usr/local/bin/python3.12 \
+     bazel run //:dd_upload_payloads -- --dry-run
+   ```
+
+The launcher only resolves runfiles, the interpreter, and the generated config;
+all enrichment and upload behavior remains in the shared Python runtime.
+
+## Python uploader split and `413` failures
+
+Python mode calculates the compact UTF-8 size after enrichment and before any
+HTTP request. Test bodies larger than `4_718_592` bytes (4.5 MiB) are split
+deterministically by event while preserving event order and all non-event
+top-level fields.
+
+- `single_event_exceeds_payload_limit`: one enriched event cannot fit by
+  itself. Reduce the producing tracer/event metadata; increasing or overriding
+  the uploader threshold is intentionally unsupported.
+- `test_payload_not_json_serializable` or `invalid_test_json`: the source or an
+  enriched value is not standards-compliant JSON. In particular, `NaN` and
+  positive/negative `Infinity` are rejected.
+- `payload_limit_contract_mismatch` after HTTP `413`: every prepared chunk was
+  already at or below 4.5 MiB, so the backend limit or request contract differs
+  from the uploader contract. The uploader retains the source, stops later
+  chunks, does not retry `413`, and does not split adaptively.
+
+Reproduce preparation without backend traffic or deletion:
+
+```bash
+bazel run //:dd_upload_payloads -- \
+  --dry-run --allow-cached-payload-uploads --debug
+```
+
+```powershell
+bazel run //:dd_upload_payloads -- `
+  --dry-run --allow-cached-payload-uploads --debug
+```
+
+Inspect the final `split`, `requests`, and `cleanup` statistics and, when
+configured, the schema-v1 JSON report. Do not retry a retained `413` payload
+unchanged; first reconcile the configured 4.5 MiB contract with the backend.
 
 ## Non-standard bazel-testlogs location
 

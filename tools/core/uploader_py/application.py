@@ -77,7 +77,7 @@ def run_uploader(
     clock: Callable[[], float] = time.monotonic,
 ) -> int:
     """Execute one locked uploader invocation and release after reporting."""
-    workspace_lock = WorkspaceLock(config.workspace)
+    workspace_lock = WorkspaceLock(config.lock_workspace)
     try:
         return _run_uploader_with_lock(
             config,

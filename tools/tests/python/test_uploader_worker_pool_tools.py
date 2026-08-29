@@ -74,6 +74,55 @@ def _tasks(count: int) -> tuple[FileTask, ...]:
 
 
 class WorkerPoolTests(unittest.TestCase):
+    def test_bounded_task_queue_applies_backpressure(self) -> None:
+        first_started = threading.Event()
+        release_first = threading.Event()
+        blocked_put_observed = threading.Event()
+        completed_runs = []
+
+        class ObservedQueue(Queue):
+            def put(self, item, block=True, timeout=None):
+                if self.maxsize > 0 and self.full():
+                    blocked_put_observed.set()
+                return super().put(item, block=block, timeout=timeout)
+
+        def processor(task, _runtime, _transport):
+            if task.task_id == "0000":
+                first_started.set()
+                release_first.wait(timeout=2)
+            return FileResult(
+                task_id=task.task_id,
+                source_path=task.display_path,
+                payload_type=task.payload_type,
+                status=FileStatus.SUCCEEDED,
+            )
+
+        def run_pool() -> None:
+            completed_runs.append(
+                run_file_workers_with_stats(
+                    _tasks(6),
+                    workers=1,
+                    runtime=object(),
+                    transport_factory=object,
+                    process_file=processor,
+                )
+            )
+
+        with mock.patch("uploader_py.worker_pool.Queue", ObservedQueue):
+            runner = threading.Thread(target=run_pool)
+            runner.start()
+            try:
+                self.assertTrue(first_started.wait(timeout=2))
+                self.assertTrue(blocked_put_observed.wait(timeout=2))
+                self.assertTrue(runner.is_alive())
+            finally:
+                release_first.set()
+                runner.join(timeout=3)
+
+        self.assertFalse(runner.is_alive())
+        self.assertEqual(1, len(completed_runs))
+        self.assertEqual(6, len(completed_runs[0].results))
+
     def test_keyboard_interrupt_drains_unowned_tasks_and_joins_workers(self) -> None:
         tasks = _tasks(8)
         processed: list[str] = []

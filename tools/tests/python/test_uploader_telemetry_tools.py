@@ -160,6 +160,29 @@ def _runtime(root: Path, plan, *, dry_run: bool = False) -> WorkerRuntime:
 
 
 class TelemetryWorkerTests(unittest.TestCase):
+    def test_non_finite_telemetry_json_fails_before_http(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source = root / "telemetry.json"
+            source.write_text(
+                '{"api_version":"v2","request_type":"app-started",'
+                '"runtime_id":"runtime-a","application":{},"payload":NaN}',
+                encoding="utf-8",
+            )
+            task = _task(source)
+            transport = _Transport()
+
+            result = process_file(
+                task,
+                _runtime(root, build_telemetry_plan((task,), ())),
+                transport,
+            )
+
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertEqual("invalid_telemetry_json", result.failure_code)
+            self.assertEqual([], transport.calls)
+            self.assertTrue(source.exists())
+
     def test_primary_body_is_task_local_and_stable_across_retry(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

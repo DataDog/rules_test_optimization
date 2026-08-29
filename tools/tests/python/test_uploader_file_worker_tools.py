@@ -170,6 +170,23 @@ def _test_task(source: Path, outputs: Path | None = None) -> FileTask:
 
 
 class FileWorkerTests(unittest.TestCase):
+    def test_non_finite_test_json_fails_before_enrichment_or_http(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source = root / "events.json"
+            source.write_text(
+                '{"events":[{"content":{"metrics":{"invalid":NaN}}}]}',
+                encoding="utf-8",
+            )
+            transport = _FakeTransport()
+
+            result = process_file(_test_task(source), _runtime(root), transport)
+
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertEqual("invalid_test_json", result.failure_code)
+            self.assertEqual([], transport.json_calls)
+            self.assertTrue(source.exists())
+
     def test_task_temporary_cleanup_failure_preserves_successful_upload(self) -> None:
         @contextmanager
         def cleanup_failure(invocation_root, _task_id, *, on_cleanup_error):
@@ -312,6 +329,39 @@ class FileWorkerTests(unittest.TestCase):
             self.assertTrue(
                 all(len(call["body"]) <= MAX_TEST_PAYLOAD_BYTES for call in transport.json_calls)
             )
+
+    def test_failed_middle_chunk_retains_source_and_stops_later_chunks(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source = root / "events.json"
+            source.write_text(
+                json.dumps(
+                    {
+                        "events": [
+                            {"content": {"meta": {"value": "x" * 2_400_000}}},
+                            {"content": {"meta": {"value": "y" * 2_400_000}}},
+                            {"content": {"meta": {"value": "z" * 2_400_000}}},
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            transport = _FakeTransport(
+                HttpResult(200, 1),
+                HttpResult(503, 4),
+                HttpResult(200, 1),
+            )
+
+            result = process_file(_test_task(source), _runtime(root), transport)
+
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertEqual(3, result.chunks_created)
+            self.assertEqual(1, result.chunks_uploaded)
+            self.assertEqual(1, result.chunks_failed)
+            self.assertEqual(2, len(transport.json_calls))
+            self.assertEqual(5, result.requests_attempted)
+            self.assertEqual(3, result.retries)
+            self.assertTrue(source.exists())
 
     def test_413_is_terminal_and_source_is_kept(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

@@ -204,6 +204,10 @@ class LauncherTests(unittest.TestCase):
                 self.assertNotIn("codeowners", text.lower())
                 self.assertNotIn("multipart", text.lower())
                 self.assertNotIn("payloads/tests", text.lower())
+                self.assertIn(
+                    "DD_TEST_OPTIMIZATION_UPLOADER_LAUNCHER_DIR",
+                    text,
+                )
                 if relative.endswith(".ps1.tpl"):
                     self.assertIn(
                         "$script:BatchLauncherPath.runfiles_manifest",

@@ -54,6 +54,8 @@ class CoordinatorSettings:
     api_key: str
     proxy_environment: tuple[tuple[str, str], ...] = ()
     codeowners_file: Path | None = None
+    invocation_cwd: Path | None = None
+    launcher_directory: Path | None = None
 
     @classmethod
     def from_config(cls, config: UploaderConfig) -> "CoordinatorSettings":
@@ -71,6 +73,8 @@ class CoordinatorSettings:
             api_key=config.api_key,
             proxy_environment=config.proxy_environment,
             codeowners_file=config.codeowners_file,
+            invocation_cwd=config.invocation_cwd,
+            launcher_directory=config.launcher_directory,
         )
 
 
@@ -97,7 +101,8 @@ def execute_discovery(
         explicit_path=settings.codeowners_file,
         workspace_root=settings.workspace,
         context_workspace=resources.context_workspace,
-        cwd=settings.workspace,
+        cwd=settings.invocation_cwd,
+        launcher_directory=settings.launcher_directory,
     )
     telemetry_plan = build_telemetry_plan(
         discovery.tasks,

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-import json
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
+from .json_utils import strict_json_dumps
 from .models import FileResult, FileStatus, MAX_TEST_PAYLOAD_BYTES, PayloadType
 
 
@@ -361,7 +361,7 @@ def write_statistics_json(path: Path, report: AggregateReport) -> None:
     temporary = parent / f".{path.name}.tmp"
     try:
         temporary.write_text(
-            json.dumps(
+            strict_json_dumps(
                 report.statistics(),
                 ensure_ascii=False,
                 indent=2,
@@ -394,7 +394,13 @@ def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
     temporary = parent / f".{path.name}.tmp"
     try:
         temporary.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            strict_json_dumps(
+                payload,
+                ensure_ascii=False,
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n",
             encoding="utf-8",
         )
         temporary.replace(path)

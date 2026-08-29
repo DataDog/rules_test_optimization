@@ -56,6 +56,7 @@ CORE_DIR = _runfile("tools/core/uploader_main.py").parent
 if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 
+from uploader_py.codeowners import load_codeowners_matcher  # noqa: E402
 from uploader_py.coordinator import (  # noqa: E402
     CoordinatorSettings,
     emit_outcome,
@@ -115,6 +116,65 @@ def _write_payload(output: Path, kind: str, name: str, value: object) -> Path:
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_coordinator_passes_cwd_and_launcher_codeowners_fallbacks(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            workspace = root / "workspace"
+            invocation_cwd = root / "cwd"
+            launcher_directory = root / "launcher"
+            for directory in (workspace, invocation_cwd, launcher_directory):
+                directory.mkdir()
+            launcher_codeowners = launcher_directory / "CODEOWNERS"
+            launcher_codeowners.write_text("* @launcher\n", encoding="utf-8")
+            captured = []
+
+            def capture_matcher(**kwargs):
+                matcher = load_codeowners_matcher(**kwargs)
+                captured.append(matcher)
+                return matcher
+
+            with mock.patch(
+                "uploader_py.coordinator.load_codeowners_matcher",
+                side_effect=capture_matcher,
+            ):
+                outcome = execute_discovery(
+                    discover_file_tasks(()),
+                    settings=CoordinatorSettings(
+                        workspace=workspace,
+                        workers=1,
+                        dry_run=True,
+                        validate_enrichment=False,
+                        expected_enriched_tags=(),
+                        gzip_payloads=False,
+                        keep_payloads=False,
+                        filter_prefix=False,
+                        rules_version="rules-1",
+                        uploader_version="uploader-1",
+                        api_key="",
+                        invocation_cwd=invocation_cwd,
+                        launcher_directory=launcher_directory,
+                    ),
+                    endpoints=EndpointSet(
+                        True,
+                        "datadoghq.com",
+                        "https://test",
+                        "https://coverage",
+                        "https://telemetry",
+                    ),
+                    resources=LoadedResources(
+                        ContextPlan(None),
+                        {},
+                        None,
+                        (),
+                        None,
+                    ),
+                    identifier_factory=lambda: "stable-id",
+                )
+
+            self.assertEqual(0, outcome.report.exit_code)
+            self.assertEqual(1, len(captured))
+            self.assertEqual(launcher_codeowners.resolve(), captured[0].source_path)
+
     def test_api_key_fingerprint_matches_sync_contract_and_warns_once(self) -> None:
         self.assertEqual("c1a2b2aa", api_key_fingerprint("abc"))
         self.assertEqual("43d28057", api_key_fingerprint("a&b"))

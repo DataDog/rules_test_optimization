@@ -84,6 +84,7 @@ from uploader_py.locking import (  # noqa: E402
     WorkspaceLockError,
     workspace_lock_name,
 )
+from uploader_py.json_utils import strict_json_dumps, strict_json_loads  # noqa: E402
 from uploader_py.models import (  # noqa: E402
     DEFAULT_WORKERS,
     MAX_TEST_PAYLOAD_BYTES,
@@ -220,6 +221,22 @@ class UploaderConfigTests(unittest.TestCase):
                 self.write_config(**{name: value})
                 load_rule_config(self.config_path)
 
+    def test_non_finite_numbers_are_rejected_as_non_standard_json(self) -> None:
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(constant=constant):
+                with self.assertRaises(json.JSONDecodeError):
+                    strict_json_loads(f'{{"value":{constant}}}')
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                strict_json_dumps({"value": value})
+
+        self.config_path.write_text(
+            '{"schema_version":1,"workers":NaN}',
+            encoding="utf-8",
+        )
+        with self.assertRaisesRegex(ConfigError, "invalid uploader config JSON"):
+            load_rule_config(self.config_path)
+
     def test_cli_environment_and_rule_precedence(self) -> None:
         self.write_config(debug=True, workers=2)
         config = self.parse(
@@ -245,6 +262,43 @@ class UploaderConfigTests(unittest.TestCase):
         config = self.parse()
         self.assertTrue(config.debug)
         self.assertEqual(2, config.workers)
+
+    def test_workspace_lock_scope_preserves_legacy_unresolved_path(self) -> None:
+        actual_workspace = self.root / "actual-workspace"
+        actual_workspace.mkdir()
+        workspace_link = self.root / "workspace-link"
+        try:
+            workspace_link.symlink_to(actual_workspace, target_is_directory=True)
+        except (OSError, NotImplementedError) as exc:
+            self.skipTest(f"directory symlinks unavailable: {exc}")
+
+        invocation_cwd = self.root / "invocation-cwd"
+        invocation_cwd.mkdir()
+        launcher_directory = self.root / "launcher"
+        launcher_directory.mkdir()
+        config = parse_uploader_config(
+            ["--config", str(self.config_path), "--dry-run"],
+            environ={
+                "BUILD_WORKSPACE_DIRECTORY": str(workspace_link),
+                "DD_TEST_OPTIMIZATION_UPLOADER_LAUNCHER_DIR": str(
+                    launcher_directory
+                ),
+            },
+            cwd=invocation_cwd,
+        )
+
+        self.assertEqual(actual_workspace.resolve(), config.workspace)
+        self.assertEqual(str(workspace_link), config.lock_workspace)
+        self.assertEqual(invocation_cwd.absolute(), config.invocation_cwd)
+        self.assertEqual(launcher_directory, config.launcher_directory)
+        self.assertEqual(
+            workspace_lock_name(str(workspace_link)),
+            workspace_lock_name(config.lock_workspace),
+        )
+        self.assertNotEqual(
+            workspace_lock_name(str(workspace_link)),
+            workspace_lock_name(config.workspace),
+        )
 
     def test_legacy_boolean_normalization_is_preserved(self) -> None:
         config = self.parse(
@@ -464,6 +518,9 @@ class UploaderConfigTests(unittest.TestCase):
                 ),
             },
             {"DD_TEST_OPTIMIZATION_AGENTLESS_URL": "not-an-absolute-url"},
+            {"DD_TEST_OPTIMIZATION_AGENTLESS_URL": "http://localhost:notaport"},
+            {"DD_TEST_OPTIMIZATION_AGENTLESS_URL": "http://localhost:65536"},
+            {"DD_TEST_OPTIMIZATION_AGENT_URL": "http://localhost:notaport"},
         )
         for environment in environments:
             with self.subTest(environment=tuple(environment)):
@@ -1173,6 +1230,32 @@ class UploaderContractCharacterizationTests(unittest.TestCase):
                 )
         self.assertEqual(0, result)
         self.assertIn("summary: mode=dry-run", stdout.getvalue())
+
+    def test_python_entrypoint_rejects_invalid_endpoint_during_dry_run(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config_path = root / "config.json"
+            config_path.write_text(
+                '{"schema_version":1,"quiescent_sec":0,"max_wait_sec":0}',
+                encoding="utf-8",
+            )
+            stderr = io.StringIO()
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "BUILD_WORKSPACE_DIRECTORY": str(root),
+                    "DD_TEST_OPTIMIZATION_AGENTLESS_URL": (
+                        "http://localhost:notaport"
+                    ),
+                },
+                clear=True,
+            ), mock.patch("sys.stderr", stderr):
+                result = uploader_main(
+                    ["--config", str(config_path), "--dry-run"]
+                )
+
+        self.assertEqual(2, result)
+        self.assertIn("absolute HTTP(S) URL", stderr.getvalue())
 
     def test_python_entrypoint_handles_runfiles_manifest_failure(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

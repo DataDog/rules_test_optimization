@@ -22,6 +22,7 @@ from validate_payload_schema import validate_payload as validate_schema_payload
 from .codeowners import CodeOwnersMatch, CodeOwnersMatcher
 from .endpoints import EndpointSet
 from .enrichment import ContextPlan, enrich_test_payload, payload_repo_key
+from .json_utils import strict_json_dumps, strict_json_loads
 from .models import (
     MAX_TEST_PAYLOAD_BYTES,
     FileResult,
@@ -821,7 +822,7 @@ def _telemetry_metadata_failure(payload: Mapping[str, Any]) -> str | None:
 
 def _decode_telemetry_messages(raw: bytes) -> list[Any] | None:
     try:
-        value = json.loads(raw.decode("utf-8"))
+        value = strict_json_loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         return None
     return copy.deepcopy(value) if isinstance(value, list) else None
@@ -889,7 +890,7 @@ def _rewrite_telemetry_provider_tags(
 
 def _compact_json_line(payload: Mapping[str, Any]) -> bytes:
     return (
-        json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
+        strict_json_dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n"
     ).encode("utf-8")
 
 
@@ -931,7 +932,7 @@ def _read_json_object_with_raw(
             type(exc).__name__,
         )
     try:
-        value = json.loads(raw.decode("utf-8-sig"))
+        value = strict_json_loads(raw.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         return None, None, (
             f"invalid_{label.lower().replace(' ', '_')}_json",

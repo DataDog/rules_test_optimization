@@ -9,10 +9,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from pathlib import Path
 from typing import Any, Mapping
 
+from .json_utils import strict_json_dumps
 from .models import MAX_TEST_PAYLOAD_BYTES
 
 
@@ -42,7 +42,11 @@ class PreparedTestChunk:
 def compact_json_bytes(value: Any) -> bytes:
     """Serialize using the one canonical uploader JSON representation."""
     try:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        return strict_json_dumps(
+            value,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
     except (TypeError, ValueError) as exc:
         raise TestPayloadSplitError(
             "test_payload_not_json_serializable",

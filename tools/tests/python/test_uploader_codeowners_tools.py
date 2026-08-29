@@ -273,6 +273,29 @@ class CodeOwnersDiscoveryTests(unittest.TestCase):
             self.assertEqual(workspace_file.resolve(), explicit.source_path)
             self.assertEqual(("@workspace",), explicit.match_source("any/file").owners)
 
+            context_file.unlink()
+            workspace_file.unlink()
+            from_cwd = load_codeowners_matcher(
+                explicit_path=None,
+                workspace_root=workspace,
+                context_workspace=str(context),
+                cwd=cwd,
+                launcher_directory=launcher,
+                windows_paths=False,
+            )
+            self.assertEqual(cwd_file.resolve(), from_cwd.source_path)
+
+            cwd_file.unlink()
+            from_launcher = load_codeowners_matcher(
+                explicit_path=None,
+                workspace_root=workspace,
+                context_workspace=str(context),
+                cwd=cwd,
+                launcher_directory=launcher,
+                windows_paths=False,
+            )
+            self.assertEqual(launcher_file.resolve(), from_launcher.source_path)
+
     def test_missing_or_unreadable_file_is_best_effort(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
