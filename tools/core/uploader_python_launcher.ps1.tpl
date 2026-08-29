@@ -128,8 +128,16 @@ function Resolve-UploaderRunfile {
 $python = $null
 foreach ($candidate in @($env:DD_TEST_OPTIMIZATION_PYTHON, $env:PYTHON, "python3", "python")) {
     if (-not $candidate) { continue }
-    $command = Get-Command $candidate -ErrorAction SilentlyContinue
-    if ($command) {
+    $command = Get-Command $candidate -CommandType Application `
+        -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $command) { continue }
+    try {
+        & $command.Source -c `
+            'import sys; raise SystemExit(sys.version_info < (3, 10))' *> $null
+    } catch {
+        continue
+    }
+    if ($LASTEXITCODE -eq 0) {
         $python = $command.Source
         break
     }

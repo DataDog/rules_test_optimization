@@ -105,8 +105,13 @@ resolve_runfile() {
 python_bin=""
 for candidate in "${DD_TEST_OPTIMIZATION_PYTHON:-}" "${PYTHON:-}" python3 python; do
   [[ -n "$candidate" ]] || continue
-  if command -v "$candidate" >/dev/null 2>&1; then
-    python_bin="$(command -v "$candidate")"
+  if ! python_path="$(command -v "$candidate" 2>/dev/null)"; then
+    continue
+  fi
+  if "$python_path" -c \
+    'import sys; raise SystemExit(sys.version_info < (3, 10))' \
+    >/dev/null 2>&1; then
+    python_bin="$python_path"
     break
   fi
 done
