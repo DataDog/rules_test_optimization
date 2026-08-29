@@ -379,6 +379,44 @@ class FileWorkerTests(unittest.TestCase):
             self.assertEqual(0, result.retries)
             self.assertTrue(source.exists())
 
+    def test_unsplit_payload_types_report_413_without_claiming_a_split(self) -> None:
+        cases = (
+            (PayloadType.COVERAGE, "coverage.json", b'{"files":[]}'),
+            (
+                PayloadType.TELEMETRY,
+                "telemetry.json",
+                (
+                    b'{"api_version":"v2","request_type":"app-started",'
+                    b'"runtime_id":"runtime","application":{},"payload":[]}'
+                ),
+            ),
+        )
+        for payload_type, filename, body in cases:
+            with self.subTest(payload_type=payload_type), tempfile.TemporaryDirectory() as raw_root:
+                root = Path(raw_root)
+                source = root / filename
+                source.write_bytes(body)
+                task = FileTask(
+                    task_id=f"{payload_type.value}-413",
+                    source_path=source,
+                    display_path=f"payloads/{payload_type.value}/{filename}",
+                    payload_type=payload_type,
+                )
+
+                result = process_file(
+                    task,
+                    _runtime(root),
+                    _FakeTransport(HttpResult(413, 1, body_excerpt=b"too large")),
+                )
+
+                self.assertEqual(FileStatus.FAILED, result.status)
+                self.assertEqual("upload_http_413", result.failure_code)
+                self.assertIn(f"unsplit {payload_type.value} payload", result.failure_message)
+                self.assertNotIn("preventive split", result.failure_message)
+                self.assertEqual(1, result.requests_attempted)
+                self.assertEqual(0, result.retries)
+                self.assertTrue(source.exists())
+
     def test_gzip_failure_warns_and_falls_back_to_exact_json(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

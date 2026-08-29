@@ -31,7 +31,7 @@ from .reporting import (
 from .resources import LoadedResources
 from .telemetry import build_telemetry_plan
 from .temporary import invocation_temporary_directory
-from .transport import HttpTransport
+from .transport import HttpTransport, validate_proxy_environment
 from .worker_pool import (
     WorkerPoolInterrupted,
     WorkerPoolRun,
@@ -97,6 +97,7 @@ def execute_discovery(
 ) -> CoordinatorOutcome:
     """Run already-authorized tasks; workers never mutate coordinator state."""
     started = clock()
+    validate_proxy_environment(settings.proxy_environment)
     matcher = load_codeowners_matcher(
         explicit_path=settings.codeowners_file,
         workspace_root=settings.workspace,

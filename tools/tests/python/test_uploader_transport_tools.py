@@ -60,8 +60,10 @@ if str(CORE_DIR) not in sys.path:
     sys.path.insert(0, str(CORE_DIR))
 
 from uploader_py.transport import (  # noqa: E402
+    DEFAULT_MAX_RETRY_DELAY_SECONDS,
     HttpTransport,
     HttpTransportError,
+    _retry_after_seconds,
     prepare_coverage_multipart,
 )
 from uploader_py.logging_utils import configure_logging  # noqa: E402
@@ -201,6 +203,21 @@ class HttpTransportTests(unittest.TestCase):
         self.assertEqual(3, exhausted.retries)
         self.assertEqual([2.0, 2.0, 2.0], waits)
         self.assertEqual(4, len(server.records))  # type: ignore[attr-defined]
+
+    def test_retry_after_delay_is_finite_and_capped(self) -> None:
+        self.assertEqual(3.0, _retry_after_seconds("3", 0.0))
+
+        excessive_values = (
+            ("86400", 0.0),
+            ("Wed, 02 Jan 2030 00:00:00 GMT", 1_893_456_000.0),
+            ("9" * 400, 0.0),
+        )
+        for value, now in excessive_values:
+            with self.subTest(value=value[:40]):
+                self.assertEqual(
+                    DEFAULT_MAX_RETRY_DELAY_SECONDS,
+                    _retry_after_seconds(value, now),
+                )
 
     def test_each_retryable_http_status_retries_then_succeeds(self) -> None:
         for status in (408, 500, 502, 503, 504):
@@ -397,6 +414,33 @@ class HttpTransportTests(unittest.TestCase):
         self.assertEqual(1, len(origin.records))  # type: ignore[attr-defined]
         self.assertEqual(0, len(proxy.records))  # type: ignore[attr-defined]
 
+    def test_invalid_effective_proxy_is_rejected_before_any_request(self) -> None:
+        for proxy in (
+            "http://localhost:notaport",
+            "http://localhost:65536",
+            "socks5://localhost:1080",
+            "http://localhost/proxy-path",
+            "http://user:%FF@localhost:8080",
+        ):
+            with self.subTest(proxy=proxy), self.assertRaisesRegex(
+                HttpTransportError,
+                "invalid HTTP proxy configuration",
+            ):
+                HttpTransport(
+                    max_attempts=1,
+                    proxy_environment=(("http_proxy", proxy),),
+                )
+
+        # Lowercase proxy variables retain their existing precedence over an
+        # ignored uppercase value, so only the effective proxy is validated.
+        HttpTransport(
+            max_attempts=1,
+            proxy_environment=(
+                ("HTTP_PROXY", "http://localhost:notaport"),
+                ("http_proxy", "http://localhost:8080"),
+            ),
+        )
+
     def test_system_tls_verification_and_input_guards_are_enabled(self) -> None:
         self.assertTrue(HttpTransport(max_attempts=1).verifies_tls)
         with self.assertRaisesRegex(HttpTransportError, "must not contain credentials"):
@@ -408,6 +452,9 @@ class HttpTransportTests(unittest.TestCase):
         for url in (
             "http://localhost:notaport/upload",
             "http://localhost:65536/upload",
+            "http://localhost/path with space",
+            "http://localhost/%ZZ",
+            "http://exa%mple.invalid/upload",
         ):
             with self.subTest(url=url), self.assertRaisesRegex(
                 HttpTransportError,

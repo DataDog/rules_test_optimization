@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from .config import ConfigError, UploaderConfig
 
@@ -18,6 +18,7 @@ from .config import ConfigError, UploaderConfig
 _VALID_HOSTNAME_RE = re.compile(
     r"^[a-z0-9]([a-z0-9-]*[a-z0-9])?([.][a-z0-9]([a-z0-9-]*[a-z0-9])?)*$"
 )
+_INVALID_PERCENT_ESCAPE_RE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 
 
 @dataclass(frozen=True)
@@ -60,32 +61,41 @@ def normalize_dd_site(raw_site: str) -> str:
     return site
 
 
+def parse_http_url(raw_url: str) -> SplitResult:
+    """Parse one network-ready absolute HTTP(S) URL.
+
+    urllib accepts some values during parsing that ``http.client`` rejects only
+    when it starts a request. Keeping this small preflight shared by endpoint
+    configuration and request preparation makes dry-run reject those values too.
+    """
+    if not isinstance(raw_url, str) or not raw_url:
+        raise ValueError("HTTP URL must be a non-empty string")
+    if any(ord(character) < 33 or ord(character) > 126 for character in raw_url):
+        raise ValueError("HTTP URL must contain only printable ASCII characters")
+    if _INVALID_PERCENT_ESCAPE_RE.search(raw_url):
+        raise ValueError("HTTP URL contains an invalid percent escape")
+
+    parsed = urlsplit(raw_url)
+    hostname = parsed.hostname or ""
+    # Accessing port performs urllib's numeric and range validation.
+    _ = parsed.port
+    if parsed.scheme.lower() not in {"http", "https"} or not hostname:
+        raise ValueError("HTTP URL must be absolute")
+    return parsed
+
+
 def _validated_base_url(raw_url: str, variable_name: str) -> str:
     """Validate an endpoint override without echoing sensitive URL components."""
     base = raw_url.rstrip("/")
     try:
-        parsed = urlsplit(base)
-        hostname = parsed.hostname or ""
-        # Accessing port performs urllib's numeric and range validation.
-        _ = parsed.port
-        valid = (
-            parsed.scheme.lower() in {"http", "https"}
-            and bool(hostname)
-            and not any(
-                ord(character) <= 32 or ord(character) == 127
-                for character in hostname
-            )
-        )
+        parsed = parse_http_url(base)
     except (TypeError, ValueError):
-        valid = False
         parsed = None
-    if not valid:
+    if parsed is None:
         raise ConfigError(f"{variable_name} must be an absolute HTTP(S) URL")
-    if parsed is not None and (
-        parsed.username is not None or parsed.password is not None
-    ):
+    if parsed.username is not None or parsed.password is not None:
         raise ConfigError(f"{variable_name} must not contain credentials/userinfo")
-    if parsed is not None and (parsed.query or parsed.fragment):
+    if parsed.query or parsed.fragment:
         raise ConfigError(f"{variable_name} must not contain a query or fragment")
     return base
 

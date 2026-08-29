@@ -209,8 +209,9 @@ This mode requires a host Python 3.10 or newer on Linux, macOS, and Windows at
 performs its enrichment, validation, preflight split at the conservative
 `4_718_592`-byte (4.5 MiB) threshold, and upload/retries independently. Every
 worker can process test, coverage, or telemetry payloads; chunks and other
-derived requests belonging to one source remain sequential. Non-standard JSON
-numbers (`NaN` and positive/negative `Infinity`) are rejected before HTTP. The
+derived requests belonging to one source remain sequential. Test and telemetry
+JSON reject non-standard numbers (`NaN` and positive/negative `Infinity`) before
+HTTP; coverage bodies remain opaque JSON/msgpack multipart parts. The
 rule-level `workers` value defaults to `4`; `DD_TEST_OPTIMIZATION_WORKERS`
 overrides it at runtime and `--workers=<positive-integer>` has highest
 precedence. Leave
@@ -718,10 +719,14 @@ payload discovery/quiescence before proceeding.
 - Each logical request makes at most four total attempts: the initial attempt
   plus up to three retries, normally separated by 2 seconds.
 - Connection failures, timeouts, HTTP `408`, HTTP `429`, and HTTP `5xx` are
-  retryable. `Retry-After` is honored when the backend supplies it.
-- Other HTTP `4xx` responses are terminal after the first attempt. In
-  particular, `413` indicates that the preventive split contract was violated;
-  it is never retried and never triggers adaptive splitting.
+  retryable. `Retry-After` is honored when the backend supplies it, with a
+  60-second safety cap per retry so a response cannot stall a worker
+  indefinitely.
+- Other HTTP `4xx` responses are terminal after the first attempt. For test
+  payloads, `413` indicates that the preventive split contract was violated.
+  Coverage and telemetry are not split, so their `413` failures use the
+  `upload_http_413` reason instead. No `413` is retried or triggers adaptive
+  splitting.
 - JSON, gzip, telemetry, and multipart bodies are prepared once per logical
   request and replayed byte-for-byte for every retry.
 - The temporary legacy Bash/curl and PowerShell implementations remain

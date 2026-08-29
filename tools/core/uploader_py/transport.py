@@ -17,6 +17,7 @@ import gzip
 import http.client
 import io
 import logging
+import math
 import os
 from pathlib import Path
 import secrets
@@ -25,7 +26,7 @@ import ssl
 import time
 from typing import BinaryIO, Callable, Iterable, Mapping
 from urllib.error import HTTPError, URLError
-from urllib.parse import unquote, urlsplit
+from urllib.parse import SplitResult, unquote
 from urllib.request import (
     HTTPHandler,
     HTTPRedirectHandler,
@@ -36,6 +37,7 @@ from urllib.request import (
     proxy_bypass_environment,
 )
 
+from .endpoints import parse_http_url
 from .logging_utils import redact_url
 
 
@@ -43,6 +45,7 @@ DEFAULT_CONNECT_TIMEOUT_SECONDS = 10.0
 DEFAULT_REQUEST_TIMEOUT_SECONDS = 60.0
 DEFAULT_MAX_ATTEMPTS = 4
 DEFAULT_RETRY_DELAY_SECONDS = 2.0
+DEFAULT_MAX_RETRY_DELAY_SECONDS = 60.0
 DEFAULT_RESPONSE_LIMIT_BYTES = 2_000
 RETRYABLE_HTTP_STATUSES = frozenset({408, 429})
 
@@ -177,16 +180,18 @@ class _SnapshotProxyHandler(ProxyHandler):
 
         original_type = request.type
         raw_proxy = proxy if "://" in proxy else f"{original_type}://{proxy}"
-        parsed = urlsplit(raw_proxy)
-        resolved_type = parsed.scheme or original_type
-        if resolved_type not in {"http", "https"} or not parsed.hostname:
+        try:
+            parsed = _parsed_proxy_url(raw_proxy, original_type)
+            proxy_port = parsed.port
+        except (TypeError, ValueError):
             raise URLError("invalid proxy configuration")
+        resolved_type = parsed.scheme or original_type
 
         host_port = parsed.hostname
         if ":" in host_port and not host_port.startswith("["):
             host_port = f"[{host_port}]"
-        if parsed.port is not None:
-            host_port = f"{host_port}:{parsed.port}"
+        if proxy_port is not None:
+            host_port = f"{host_port}:{proxy_port}"
         if parsed.username is not None:
             credentials = f"{unquote(parsed.username)}:{unquote(parsed.password or '')}"
             encoded = base64.b64encode(credentials.encode("utf-8")).decode("ascii")
@@ -264,7 +269,33 @@ def _proxy_configuration(
         for scheme in ("http", "https")
         if values.get(f"{scheme}_proxy")
     }
+    for scheme, proxy in proxies.items():
+        try:
+            _parsed_proxy_url(proxy, scheme)
+        except (TypeError, ValueError) as exc:
+            raise HttpTransportError(
+                f"invalid {scheme.upper()} proxy configuration"
+            ) from exc
     return proxies, values.get("no_proxy", "")
+
+
+def _parsed_proxy_url(raw_proxy: str, default_scheme: str) -> SplitResult:
+    """Parse the proxy forms accepted by standard proxy environment variables."""
+    candidate = raw_proxy if "://" in raw_proxy else f"{default_scheme}://{raw_proxy}"
+    parsed = parse_http_url(candidate)
+    if parsed.scheme.lower() not in {"http", "https"}:
+        raise ValueError("proxy scheme must be HTTP(S)")
+    if parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
+        raise ValueError("proxy URL must not contain a request path")
+    for credential in (parsed.username, parsed.password):
+        if credential is not None:
+            unquote(credential, encoding="utf-8", errors="strict")
+    return parsed
+
+
+def validate_proxy_environment(environment: Iterable[tuple[str, str]]) -> None:
+    """Reject a known-invalid effective proxy before workers start."""
+    _proxy_configuration(environment)
 
 
 def _retryable_status(status_code: int) -> bool:
@@ -276,14 +307,31 @@ def _retry_after_seconds(value: str | None, now: float) -> float | None:
         return None
     normalized = value.strip()
     if normalized.isdecimal():
-        return float(normalized)
+        try:
+            delay = float(normalized)
+        except (OverflowError, ValueError):
+            return None
+        return _bounded_retry_after_seconds(delay)
     try:
         parsed = parsedate_to_datetime(normalized)
     except (TypeError, ValueError, OverflowError):
         return None
     if parsed.tzinfo is None:
         return None
-    return max(0.0, parsed.timestamp() - now)
+    try:
+        delay = parsed.timestamp() - now
+    except (OSError, OverflowError, ValueError):
+        return None
+    return _bounded_retry_after_seconds(delay)
+
+
+def _bounded_retry_after_seconds(delay: float) -> float | None:
+    """Keep server-controlled retry waits finite and operationally bounded."""
+    if math.isnan(delay):
+        return None
+    if not math.isfinite(delay):
+        return DEFAULT_MAX_RETRY_DELAY_SECONDS if delay > 0 else 0.0
+    return min(max(0.0, delay), DEFAULT_MAX_RETRY_DELAY_SECONDS)
 
 
 def _bounded_response(stream, limit: int) -> tuple[bytes, bool]:
@@ -293,23 +341,11 @@ def _bounded_response(stream, limit: int) -> tuple[bytes, bool]:
 
 def _validate_url(url: str) -> None:
     try:
-        parsed = urlsplit(url)
-        hostname = parsed.hostname or ""
-        # Accessing port performs urllib's numeric and range validation.
-        _ = parsed.port
+        parsed = parse_http_url(url)
     except (TypeError, ValueError) as exc:
         raise HttpTransportError(
             "upload URL must be an absolute HTTP(S) URL"
         ) from exc
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not hostname
-        or any(
-            ord(character) <= 32 or ord(character) == 127
-            for character in hostname
-        )
-    ):
-        raise HttpTransportError("upload URL must be an absolute HTTP(S) URL")
     if parsed.username is not None or parsed.password is not None:
         raise HttpTransportError("upload URL must not contain credentials/userinfo")
 

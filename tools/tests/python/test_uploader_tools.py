@@ -520,6 +520,13 @@ class UploaderConfigTests(unittest.TestCase):
             {"DD_TEST_OPTIMIZATION_AGENTLESS_URL": "not-an-absolute-url"},
             {"DD_TEST_OPTIMIZATION_AGENTLESS_URL": "http://localhost:notaport"},
             {"DD_TEST_OPTIMIZATION_AGENTLESS_URL": "http://localhost:65536"},
+            {
+                "DD_TEST_OPTIMIZATION_AGENTLESS_URL": (
+                    "http://localhost/path with space"
+                )
+            },
+            {"DD_TEST_OPTIMIZATION_AGENTLESS_URL": "http://exa%mple.invalid"},
+            {"DD_TEST_OPTIMIZATION_AGENT_URL": "http://localhost/%ZZ"},
             {"DD_TEST_OPTIMIZATION_AGENT_URL": "http://localhost:notaport"},
         )
         for environment in environments:

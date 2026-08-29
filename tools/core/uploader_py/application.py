@@ -52,6 +52,7 @@ from .models import PayloadType
 from .reporting import AggregateReport, LegacyReportContext
 from .resources import ResourceInputs, load_resources
 from .temporary import TemporaryDirectoryError
+from .transport import HttpTransportError
 from .worker_pool import WorkerPoolError
 
 
@@ -61,6 +62,7 @@ _CONTROLLED_ERRORS = (
     ExpectedTargetsError,
     FreshnessError,
     TemporaryDirectoryError,
+    HttpTransportError,
     WorkerPoolError,
     WorkspaceLockError,
 )

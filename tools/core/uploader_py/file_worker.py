@@ -467,6 +467,7 @@ def _process_test(
         if not result.succeeded:
             failure_code, failure_message = _http_failure(
                 result,
+                payload_type=task.payload_type,
                 payload_limit_context=(
                     f"chunk={chunk.index}/{len(chunks)} "
                     f"uncompressed_bytes={chunk.size_bytes} "
@@ -583,7 +584,10 @@ def _process_coverage(
         f"coverage request completed after {result.attempts} attempt(s)",
     )
     if not result.succeeded:
-        failure_code, failure_message = _http_failure(result)
+        failure_code, failure_message = _http_failure(
+            result,
+            payload_type=task.payload_type,
+        )
         return FileResult(
             status=FileStatus.FAILED,
             requests_attempted=result.attempts,
@@ -718,7 +722,10 @@ def _process_telemetry(
             f"telemetry request completed after {result.attempts} attempt(s)",
         )
         if not result.succeeded:
-            failure_code, failure_message = _http_failure(result)
+            failure_code, failure_message = _http_failure(
+                result,
+                payload_type=task.payload_type,
+            )
             return FileResult(
                 status=FileStatus.FAILED,
                 requests_attempted=requests_attempted,
@@ -995,15 +1002,20 @@ def _cleanup_source(path: Path, keep_payloads: bool) -> tuple[bool, str | None]:
 def _http_failure(
     result: HttpResult,
     *,
+    payload_type: PayloadType,
     payload_limit_context: str | None = None,
 ) -> tuple[str, str]:
     if result.status_code == 413:
-        if payload_limit_context:
+        if payload_type is PayloadType.TEST and payload_limit_context:
             return (
                 "payload_limit_contract_mismatch",
                 f"HTTP 413 after preventive split; {payload_limit_context}",
             )
-        return "upload_http_413", "HTTP 413 after preventive split"
+        return (
+            "upload_http_413",
+            f"HTTP 413 for unsplit {payload_type.value} payload; "
+            f"{payload_type.value} splitting is not supported",
+        )
     if result.status_code is not None:
         return "upload_http_error", f"HTTP {result.status_code}"
     return "upload_transport_error", result.transport_error or "transport error"

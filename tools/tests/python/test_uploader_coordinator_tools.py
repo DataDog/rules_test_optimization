@@ -72,7 +72,11 @@ from uploader_py.enrichment import ContextPlan, ContextRecord  # noqa: E402
 from uploader_py.logging_utils import configure_logging  # noqa: E402
 from uploader_py.models import FileResult, FileStatus  # noqa: E402
 from uploader_py.resources import LoadedResources  # noqa: E402
-from uploader_py.transport import HttpResult, HttpTransport  # noqa: E402
+from uploader_py.transport import (  # noqa: E402
+    HttpResult,
+    HttpTransport,
+    HttpTransportError,
+)
 from uploader_py.worker_pool import WorkerPoolInterrupted, WorkerPoolRun  # noqa: E402
 
 
@@ -116,6 +120,47 @@ def _write_payload(output: Path, kind: str, name: str, value: object) -> Path:
 
 
 class CoordinatorTests(unittest.TestCase):
+    def test_invalid_proxy_is_rejected_before_dry_run_workers_start(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            with self.assertRaisesRegex(
+                HttpTransportError,
+                "invalid HTTP proxy configuration",
+            ):
+                execute_discovery(
+                    discover_file_tasks(()),
+                    settings=CoordinatorSettings(
+                        workspace=root,
+                        workers=1,
+                        dry_run=True,
+                        validate_enrichment=False,
+                        expected_enriched_tags=(),
+                        gzip_payloads=False,
+                        keep_payloads=False,
+                        filter_prefix=False,
+                        rules_version="rules-1",
+                        uploader_version="uploader-1",
+                        api_key="",
+                        proxy_environment=(
+                            ("http_proxy", "http://localhost:notaport"),
+                        ),
+                    ),
+                    endpoints=EndpointSet(
+                        True,
+                        "datadoghq.com",
+                        "https://test.invalid",
+                        "https://coverage.invalid",
+                        "https://telemetry.invalid",
+                    ),
+                    resources=LoadedResources(
+                        ContextPlan(None),
+                        {},
+                        None,
+                        (),
+                        None,
+                    ),
+                )
+
     def test_coordinator_passes_cwd_and_launcher_codeowners_fallbacks(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
