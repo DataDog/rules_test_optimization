@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Endpoint and DD_SITE normalization shared by every worker."""
+"""Normalize and validate intake endpoints before workers start.
+
+One endpoint policy keeps agentless and EVP routing consistent across payload types.
+"""
 
 from __future__ import annotations
 

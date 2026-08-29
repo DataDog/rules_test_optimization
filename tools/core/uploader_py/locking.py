@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Cross-platform, workspace-scoped uploader process locking."""
+"""Provide one cross-platform process lock per Bazel workspace.
+
+Serializing invocations prevents races over source deletion and staging cleanup.
+"""
 
 from __future__ import annotations
 

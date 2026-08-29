@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Bounded file-worker execution with no cross-file worker coordination."""
+"""Schedule complete file pipelines on a bounded pool of homogeneous workers.
+
+The pool owns queueing and metrics while file workers remain mutually independent.
+"""
 
 from __future__ import annotations
 
@@ -61,32 +64,12 @@ def run_file_workers(
     transport_factory: Callable[[], TransportType],
     process_file: FileProcessor[RuntimeType, TransportType],
     logger: logging.Logger | None = None,
-) -> tuple[FileResult, ...]:
+) -> WorkerPoolRun:
     """Process each source exactly once through one complete worker pipeline.
 
-    Results are returned in intake order for deterministic reports. Workers do
-    not mutate aggregate counters or wait for results from other source files.
+    Results are returned in intake order for deterministic reports. The pool
+    owns aggregate concurrency metrics; file workers remain independent.
     """
-    return run_file_workers_with_stats(
-        tasks,
-        workers=workers,
-        runtime=runtime,
-        transport_factory=transport_factory,
-        process_file=process_file,
-        logger=logger,
-    ).results
-
-
-def run_file_workers_with_stats(
-    tasks: Iterable[FileTask],
-    *,
-    workers: int,
-    runtime: RuntimeType,
-    transport_factory: Callable[[], TransportType],
-    process_file: FileProcessor[RuntimeType, TransportType],
-    logger: logging.Logger | None = None,
-) -> WorkerPoolRun:
-    """Run the bounded pool and return metrics never mutated by file workers."""
     if workers <= 0:
         raise WorkerPoolError("workers must be positive")
     planned_tasks = tuple(tasks)

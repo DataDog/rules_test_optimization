@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Owned temporary directories for one uploader invocation and its tasks."""
+"""Create owned temporary directories for an invocation and its tasks.
+
+Explicit ownership makes retry bodies isolated and cleanup failures reportable.
+"""
 
 from __future__ import annotations
 

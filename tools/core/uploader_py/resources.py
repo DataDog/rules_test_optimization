@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Resolve and load immutable invocation resources before worker startup."""
+"""Resolve contexts, telemetry facts, and schema before workers start.
+
+Loading once removes runfiles I/O and mutable resource selection from workers.
+"""
 
 from __future__ import annotations
 

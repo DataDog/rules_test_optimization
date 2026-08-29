@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Deterministic preventive splitting for enriched test JSON payloads."""
+"""Split enriched test JSON deterministically before any HTTP request.
+
+Preventive size enforcement avoids a known 413 while preserving event order.
+"""
 
 from __future__ import annotations
 

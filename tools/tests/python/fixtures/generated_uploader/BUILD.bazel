@@ -4,6 +4,9 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+# Materialize both rollout implementations for generated-launcher smoke tests.
+# The fixture catches analysis/runfiles regressions that unit imports cannot expose.
+
 load("//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 dd_payload_uploader(

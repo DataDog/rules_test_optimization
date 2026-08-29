@@ -5,51 +5,22 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Parity tests for the invocation-wide Python CODEOWNERS matcher."""
+"""Characterize the invocation-wide Python CODEOWNERS matcher.
+
+Parity and concurrent-read coverage keep the shared matcher safe for all workers.
+"""
 
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
-import os
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 
+from uploader_test_support import add_uploader_runtime_to_path
 
-def _runfile(rel_path: str) -> Path:
-    test_srcdir = os.environ.get("TEST_SRCDIR", "")
-    test_workspace = os.environ.get("TEST_WORKSPACE", "")
-    workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
-    candidates: list[Path] = []
-    if test_srcdir and test_workspace:
-        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
-    if test_srcdir:
-        candidates.append(Path(test_srcdir) / rel_path)
-    if workspace_dir:
-        candidates.append(Path(workspace_dir) / rel_path)
-    for parent in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
-        if (parent / "MODULE.bazel").exists() or (parent / ".git").exists():
-            candidates.append(parent / rel_path)
-            break
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
-    if manifest_path and Path(manifest_path).is_file():
-        keys = {rel_path, f"{test_workspace}/{rel_path}"}
-        with Path(manifest_path).open("r", encoding="utf-8") as handle:
-            for line in handle:
-                key, separator, value = line.rstrip("\n").partition(" ")
-                if separator and key in keys:
-                    return Path(value)
-    raise FileNotFoundError(f"runfile not found: {rel_path}")
-
-
-CORE_DIR = _runfile("tools/core/uploader_main.py").parent
-if str(CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(CORE_DIR))
+add_uploader_runtime_to_path()
 
 from uploader_py.codeowners import (  # noqa: E402
     CodeOwnersMatcher,

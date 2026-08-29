@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Small immutable values shared by uploader coordinator and workers."""
+"""Define immutable values exchanged by the coordinator and workers.
+
+Explicit result models replace shared counters and make aggregation deterministic.
+"""
 
 from __future__ import annotations
 

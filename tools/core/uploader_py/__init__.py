@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Cross-platform Datadog Test Optimization uploader runtime."""
+"""Expose the stable public surface of the cross-platform uploader package.
+
+The narrow package boundary prevents callers from depending on internal stages.
+"""
 
 from .models import MAX_TEST_PAYLOAD_BYTES
 

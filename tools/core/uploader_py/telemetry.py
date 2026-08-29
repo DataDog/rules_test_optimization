@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Build a read-only, per-source telemetry augmentation plan before workers."""
+"""Build immutable telemetry directives for every discovered source.
+
+Planning once preserves cross-file correlation without synchronizing workers.
+"""
 
 from __future__ import annotations
 

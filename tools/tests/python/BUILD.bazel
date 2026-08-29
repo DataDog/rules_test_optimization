@@ -4,6 +4,9 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+# Run repository Python tooling under one runfiles-complete Bazel test target.
+# Keeping the suite together makes host-side portability checks consistent.
+
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 sh_test(
@@ -39,6 +42,7 @@ sh_test(
         "test_uploader_tools.py",
         "test_uploader_transport_tools.py",
         "test_uploader_worker_pool_tools.py",
+        "uploader_test_support.py",
         "//modules/go/tools/onboardingpins:rules_go_forks_gen.go",
         "//third_party/rules_go_orchestrion:registry.json",
         "//third_party/rules_go_orchestrion:workspace_runtime_profile",

@@ -5,7 +5,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Minimal bootstrap for the cross-platform Test Optimization uploader."""
+"""Bootstrap the shared uploader package from a stable Bazel entrypoint.
+
+Keeping this file behavior-free lets both platform launchers invoke one runtime.
+"""
 
 from uploader_py.main import main
 

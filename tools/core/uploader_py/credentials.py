@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Warning-only fetch/upload credential parity without exposing credentials."""
+"""Compare fetch and upload credential fingerprints without exposing secrets.
+
+The warning-only preflight detects configuration drift outside request processing.
+"""
 
 from __future__ import annotations
 

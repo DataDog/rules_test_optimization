@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Complete, isolated processing pipeline for one uploader source file."""
+"""Run the complete isolated pipeline for one uploader source file.
+
+One worker owns enrichment through cleanup so files need no cross-worker sync.
+"""
 
 from __future__ import annotations
 
@@ -30,7 +33,12 @@ from .models import (
     FileTask,
     PayloadType,
 )
-from .splitting import TestPayloadSplitError, compact_json_bytes, prepare_test_chunks
+from .splitting import (
+    PreparedTestChunk,
+    TestPayloadSplitError,
+    compact_json_bytes,
+    prepare_test_chunks,
+)
 from .telemetry import TelemetryDirective, TelemetryPlan
 from .temporary import task_temporary_directory
 from .transport import (
@@ -60,17 +68,6 @@ class WorkerTransport(Protocol):
         *,
         gzip_body: bool = False,
         content_encoding: str | None = None,
-    ) -> HttpResult: ...
-
-    def post_multipart(
-        self,
-        url: str,
-        headers: Mapping[str, str],
-        *,
-        event_body: bytes,
-        coverage_path: Path,
-        coverage_filename: str,
-        coverage_content_type: str,
     ) -> HttpResult: ...
 
     def post_prepared_multipart(
@@ -103,6 +100,15 @@ class WorkerRuntime:
     telemetry_session_id: str = ""
     telemetry_plan: TelemetryPlan = field(default_factory=TelemetryPlan)
     logger: logging.Logger | None = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class _TestRequest:
+    """One bounded test chunk and its exact outbound representation."""
+
+    chunk: PreparedTestChunk
+    body: Path
+    content_encoding: str | None = None
 
 
 def common_headers(
@@ -263,6 +269,131 @@ def _process_test(
         return _skipped(task, "test_payload_without_events")
 
     warnings: list[str] = []
+    failure = _enrich_and_validate_test(task, runtime, payload, warnings)
+    if failure is not None:
+        return failure
+
+    try:
+        chunks = prepare_test_chunks(payload, task_directory)
+    except TestPayloadSplitError as exc:
+        return FileResult(
+            task_id=task.task_id,
+            source_path=task.display_path,
+            payload_type=task.payload_type,
+            status=FileStatus.FAILED,
+            events=_event_count(payload),
+            warning_codes=_unique_codes(warnings),
+            failure_code=exc.code,
+            failure_message=str(exc),
+        )
+    requests = _prepare_test_requests(
+        task,
+        runtime,
+        chunks,
+        task_directory,
+        warnings,
+    )
+
+    base = dict(
+        task_id=task.task_id,
+        source_path=task.display_path,
+        payload_type=task.payload_type,
+        events=_event_count(payload),
+        chunks_created=len(requests),
+        requests_planned=len(requests),
+    )
+    headers = common_headers(runtime, payload)
+    if not runtime.endpoints.agentless:
+        headers["X-Datadog-EVP-Subdomain"] = "citestcycle-intake"
+    if runtime.dry_run:
+        for request in requests:
+            prepare_json_request(
+                runtime.endpoints.test_url,
+                headers,
+                request.body,
+                content_encoding=request.content_encoding,
+            )
+        _debug(runtime, task, "dry-run completed without network or source cleanup")
+        return FileResult(
+            status=FileStatus.SUCCEEDED,
+            warning_codes=_unique_codes(warnings),
+            **base,
+        )
+
+    requests_attempted = 0
+    requests_succeeded = 0
+    retries = 0
+    for request in requests:
+        chunk = request.chunk
+        _debug(
+            runtime,
+            task,
+            f"uploading test chunk {chunk.index}/{len(requests)} "
+            f"({chunk.size_bytes} bytes)",
+        )
+        result = transport.post_json(
+            runtime.endpoints.test_url,
+            headers,
+            request.body,
+            content_encoding=request.content_encoding,
+        )
+        requests_attempted += result.attempts
+        retries += result.retries
+        _debug(
+            runtime,
+            task,
+            f"test chunk {chunk.index} completed after {result.attempts} attempt(s)",
+        )
+        if not result.succeeded:
+            failure_code, failure_message = _http_failure(
+                result,
+                payload_type=task.payload_type,
+                payload_limit_context=(
+                    f"chunk={chunk.index}/{len(requests)} "
+                    f"uncompressed_bytes={chunk.size_bytes} "
+                    f"outbound_bytes={request.body.stat().st_size} "
+                    f"threshold_bytes={MAX_TEST_PAYLOAD_BYTES}"
+                ),
+            )
+            return FileResult(
+                status=FileStatus.FAILED,
+                chunks_uploaded=requests_succeeded,
+                chunks_failed=1,
+                requests_attempted=requests_attempted,
+                requests_succeeded=requests_succeeded,
+                requests_failed=1,
+                retries=retries,
+                warning_codes=_unique_codes(warnings),
+                failure_code=failure_code,
+                failure_message=failure_message,
+                **base,
+            )
+        requests_succeeded += 1
+
+    deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
+    _debug(runtime, task, f"test cleanup completed source_deleted={deleted}")
+    final_warnings = list(warnings)
+    if cleanup_warning:
+        final_warnings.append(cleanup_warning)
+    return FileResult(
+        status=FileStatus.SUCCEEDED,
+        chunks_uploaded=len(requests),
+        requests_attempted=requests_attempted,
+        requests_succeeded=requests_succeeded,
+        retries=retries,
+        source_deleted=deleted,
+        warning_codes=_unique_codes(final_warnings),
+        **base,
+    )
+
+
+def _enrich_and_validate_test(
+    task: FileTask,
+    runtime: WorkerRuntime,
+    payload: dict[str, Any],
+    warnings: list[str],
+) -> FileResult | None:
+    """Enrich one mutable test payload and validate its prepared shape."""
     bazel_metadata, sidecar_warning = _load_bazel_metadata(task)
     if sidecar_warning:
         warnings.append(sidecar_warning)
@@ -297,6 +428,7 @@ def _process_test(
     except (TypeError, ValueError, OSError) as exc:
         _debug(runtime, task, f"enrichment failed with {type(exc).__name__}")
         return _failed(task, "test_enrichment_failed", type(exc).__name__)
+
     warnings.extend(enrichment.warning_codes)
     _debug(
         runtime,
@@ -326,7 +458,6 @@ def _process_test(
                     len(match.owners),
                 ),
             )
-    if _debug_enabled(runtime):
         try:
             enriched_bytes = len(compact_json_bytes(payload))
         except TestPayloadSplitError as exc:
@@ -366,20 +497,17 @@ def _process_test(
                 failure_message=",".join(missing_tags),
             )
         _debug(runtime, task, "expected enrichment tags validated")
+    return None
 
-    try:
-        chunks = prepare_test_chunks(payload, task_directory)
-    except TestPayloadSplitError as exc:
-        return FileResult(
-            task_id=task.task_id,
-            source_path=task.display_path,
-            payload_type=task.payload_type,
-            status=FileStatus.FAILED,
-            events=_event_count(payload),
-            warning_codes=_unique_codes(warnings),
-            failure_code=exc.code,
-            failure_message=str(exc),
-        )
+
+def _prepare_test_requests(
+    task: FileTask,
+    runtime: WorkerRuntime,
+    chunks: tuple[PreparedTestChunk, ...],
+    task_directory: Path,
+    warnings: list[str],
+) -> tuple[_TestRequest, ...]:
+    """Choose JSON or deterministic gzip for every pre-split request body."""
     _debug(
         runtime,
         task,
@@ -392,123 +520,35 @@ def _process_test(
             f"chunk={chunk.index}/{len(chunks)} bytes={chunk.size_bytes} "
             f"events={chunk.event_count}",
         )
-    outbound_chunks: list[tuple[Path, bool]] = []
+
+    requests: list[_TestRequest] = []
     for chunk in chunks:
         if not runtime.gzip_payloads:
-            outbound_chunks.append((chunk.path, False))
+            requests.append(_TestRequest(chunk, chunk.path))
             continue
         gzip_path = task_directory / f"test_chunk_{chunk.index:04d}.json.gz"
         try:
             gzip_path.write_bytes(gzip.compress(chunk.path.read_bytes(), mtime=0))
         except OSError as exc:
             warnings.append("gzip_preparation_failed")
-            outbound_chunks.append((chunk.path, False))
+            requests.append(_TestRequest(chunk, chunk.path))
             _debug(
                 runtime,
                 task,
                 f"gzip preparation failed with {type(exc).__name__}; using JSON",
             )
-            continue
-        outbound_chunks.append((gzip_path, True))
+        else:
+            requests.append(_TestRequest(chunk, gzip_path, "gzip"))
+
     if runtime.gzip_payloads:
-        compressed_chunks = sum(int(is_gzipped) for _path, is_gzipped in outbound_chunks)
+        compressed = sum(request.content_encoding == "gzip" for request in requests)
         _debug(
             runtime,
             task,
             "gzip preparation completed compressed=%d fallback_json=%d"
-            % (compressed_chunks, len(outbound_chunks) - compressed_chunks),
+            % (compressed, len(requests) - compressed),
         )
-
-    base = dict(
-        task_id=task.task_id,
-        source_path=task.display_path,
-        payload_type=task.payload_type,
-        events=_event_count(payload),
-        chunks_created=len(chunks),
-        requests_planned=len(chunks),
-        warning_codes=_unique_codes(warnings),
-    )
-    headers = common_headers(runtime, payload)
-    if not runtime.endpoints.agentless:
-        headers["X-Datadog-EVP-Subdomain"] = "citestcycle-intake"
-    if runtime.dry_run:
-        for outbound_path, chunk_is_gzipped in outbound_chunks:
-            prepare_json_request(
-                runtime.endpoints.test_url,
-                headers,
-                outbound_path,
-                content_encoding="gzip" if chunk_is_gzipped else None,
-            )
-        _debug(runtime, task, "dry-run completed without network or source cleanup")
-        return FileResult(status=FileStatus.SUCCEEDED, **base)
-
-    requests_attempted = 0
-    requests_succeeded = 0
-    retries = 0
-    for chunk, (outbound_path, chunk_is_gzipped) in zip(chunks, outbound_chunks):
-        _debug(
-            runtime,
-            task,
-            f"uploading test chunk {chunk.index}/{len(chunks)} ({chunk.size_bytes} bytes)",
-        )
-        result = transport.post_json(
-            runtime.endpoints.test_url,
-            headers,
-            outbound_path,
-            content_encoding="gzip" if chunk_is_gzipped else None,
-        )
-        requests_attempted += result.attempts
-        retries += result.retries
-        _debug(
-            runtime,
-            task,
-            f"test chunk {chunk.index} completed after {result.attempts} attempt(s)",
-        )
-        if not result.succeeded:
-            failure_code, failure_message = _http_failure(
-                result,
-                payload_type=task.payload_type,
-                payload_limit_context=(
-                    f"chunk={chunk.index}/{len(chunks)} "
-                    f"uncompressed_bytes={chunk.size_bytes} "
-                    f"outbound_bytes={outbound_path.stat().st_size} "
-                    f"threshold_bytes={MAX_TEST_PAYLOAD_BYTES}"
-                ),
-            )
-            return FileResult(
-                status=FileStatus.FAILED,
-                chunks_uploaded=requests_succeeded,
-                chunks_failed=1,
-                requests_attempted=requests_attempted,
-                requests_succeeded=requests_succeeded,
-                requests_failed=1,
-                retries=retries,
-                failure_code=failure_code,
-                failure_message=failure_message,
-                **base,
-            )
-        requests_succeeded += 1
-
-    deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
-    _debug(runtime, task, f"test cleanup completed source_deleted={deleted}")
-    final_warnings = list(warnings)
-    if cleanup_warning:
-        final_warnings.append(cleanup_warning)
-    return FileResult(
-        task_id=task.task_id,
-        source_path=task.display_path,
-        payload_type=task.payload_type,
-        status=FileStatus.SUCCEEDED,
-        events=_event_count(payload),
-        chunks_created=len(chunks),
-        chunks_uploaded=len(chunks),
-        requests_planned=len(chunks),
-        requests_attempted=requests_attempted,
-        requests_succeeded=requests_succeeded,
-        retries=retries,
-        source_deleted=deleted,
-        warning_codes=_unique_codes(final_warnings),
-    )
+    return tuple(requests)
 
 
 def _process_coverage(
@@ -693,7 +733,6 @@ def _process_telemetry(
         source_path=task.display_path,
         payload_type=task.payload_type,
         requests_planned=len(bodies),
-        warning_codes=_unique_codes(warnings),
     )
     if runtime.dry_run:
         for (body_path, _body_payload), headers in zip(bodies, prepared_headers):
@@ -703,7 +742,11 @@ def _process_telemetry(
                 body_path,
             )
         _debug(runtime, task, "dry-run completed telemetry preparation without network")
-        return FileResult(status=FileStatus.SUCCEEDED, **base)
+        return FileResult(
+            status=FileStatus.SUCCEEDED,
+            warning_codes=_unique_codes(warnings),
+            **base,
+        )
 
     requests_attempted = 0
     requests_succeeded = 0
@@ -732,6 +775,7 @@ def _process_telemetry(
                 requests_succeeded=requests_succeeded,
                 requests_failed=1,
                 retries=retries,
+                warning_codes=_unique_codes(warnings),
                 failure_code=failure_code,
                 failure_message=failure_message,
                 **base,
@@ -743,16 +787,13 @@ def _process_telemetry(
     if cleanup_warning:
         warnings.append(cleanup_warning)
     return FileResult(
-        task_id=task.task_id,
-        source_path=task.display_path,
-        payload_type=task.payload_type,
         status=FileStatus.SUCCEEDED,
-        requests_planned=len(bodies),
         requests_attempted=requests_attempted,
         requests_succeeded=requests_succeeded,
         retries=retries,
         source_deleted=deleted,
         warning_codes=_unique_codes(warnings),
+        **base,
     )
 
 

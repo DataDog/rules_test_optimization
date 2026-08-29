@@ -5,59 +5,29 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Concurrency-contract tests for the bounded per-file worker pool."""
+"""Verify bounded concurrency and exactly-once ownership in the worker pool.
+
+Interrupt and ordering cases protect independent files from coordinator races.
+"""
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-import sys
 import threading
 import time
 import unittest
 from queue import Queue
 from unittest import mock
 
+from uploader_test_support import add_uploader_runtime_to_path
 
-def _runfile(rel_path: str) -> Path:
-    test_srcdir = os.environ.get("TEST_SRCDIR", "")
-    test_workspace = os.environ.get("TEST_WORKSPACE", "")
-    workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
-    candidates: list[Path] = []
-    if test_srcdir and test_workspace:
-        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
-    if test_srcdir:
-        candidates.append(Path(test_srcdir) / rel_path)
-    if workspace_dir:
-        candidates.append(Path(workspace_dir) / rel_path)
-    for parent in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
-        if (parent / "MODULE.bazel").exists() or (parent / ".git").exists():
-            candidates.append(parent / rel_path)
-            break
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
-    if manifest_path and Path(manifest_path).is_file():
-        keys = {rel_path, f"{test_workspace}/{rel_path}"}
-        with Path(manifest_path).open("r", encoding="utf-8") as handle:
-            for line in handle:
-                key, separator, value = line.rstrip("\n").partition(" ")
-                if separator and key in keys:
-                    return Path(value)
-    raise FileNotFoundError(f"runfile not found: {rel_path}")
-
-
-CORE_DIR = _runfile("tools/core/uploader_main.py").parent
-if str(CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(CORE_DIR))
+add_uploader_runtime_to_path()
 
 from uploader_py.models import FileResult, FileStatus, FileTask, PayloadType  # noqa: E402
 from uploader_py.worker_pool import (  # noqa: E402
     WorkerPoolError,
     WorkerPoolInterrupted,
     run_file_workers,
-    run_file_workers_with_stats,
 )
 
 
@@ -99,7 +69,7 @@ class WorkerPoolTests(unittest.TestCase):
 
         def run_pool() -> None:
             completed_runs.append(
-                run_file_workers_with_stats(
+                run_file_workers(
                     _tasks(6),
                     workers=1,
                     runtime=object(),
@@ -283,7 +253,7 @@ class WorkerPoolTests(unittest.TestCase):
             runtime=object(),
             transport_factory=object,
             process_file=processor,
-        )
+        ).results
 
         self.assertEqual([task.task_id for task in tasks], [result.task_id for result in results])
         self.assertEqual(3, maximum_active)
@@ -357,7 +327,7 @@ class WorkerPoolTests(unittest.TestCase):
             runtime=object(),
             transport_factory=object,
             process_file=processor,
-        )
+        ).results
         self.assertEqual(4, sum(result.status is FileStatus.SUCCEEDED for result in results))
         failure = results[2]
         self.assertEqual(FileStatus.FAILED, failure.status)
@@ -378,7 +348,7 @@ class WorkerPoolTests(unittest.TestCase):
             runtime=object(),
             transport_factory=transport_factory,
             process_file=lambda *_args: self.fail("processor should not run"),
-        )
+        ).results
         self.assertEqual((), results)
         self.assertEqual(0, calls)
 
@@ -401,7 +371,7 @@ class WorkerPoolTests(unittest.TestCase):
             runtime=object(),
             transport_factory=object,
             process_file=processor,
-        )
+        ).results
         self.assertEqual([task.task_id for task in tasks], [item[0] for item in observed])
         self.assertEqual(1, len({item[1] for item in observed}))
         self.assertEqual([task.task_id for task in tasks], [result.task_id for result in results])
@@ -418,7 +388,7 @@ class WorkerPoolTests(unittest.TestCase):
                 status=FileStatus.SUCCEEDED,
             )
 
-        run = run_file_workers_with_stats(
+        run = run_file_workers(
             _tasks(6),
             workers=3,
             runtime=object(),

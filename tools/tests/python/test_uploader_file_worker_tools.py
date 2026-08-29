@@ -5,7 +5,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Focused tests for one-file enrichment, split, and upload ownership."""
+"""Exercise complete enrichment, split, upload, and cleanup for one file.
+
+The suite protects the invariant that one worker owns every derived request.
+"""
 
 from __future__ import annotations
 
@@ -13,46 +16,14 @@ from contextlib import contextmanager
 import gzip
 from io import StringIO
 import json
-import os
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from uploader_test_support import add_uploader_runtime_to_path
 
-def _runfile(rel_path: str) -> Path:
-    test_srcdir = os.environ.get("TEST_SRCDIR", "")
-    test_workspace = os.environ.get("TEST_WORKSPACE", "")
-    workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
-    candidates: list[Path] = []
-    if test_srcdir and test_workspace:
-        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
-    if test_srcdir:
-        candidates.append(Path(test_srcdir) / rel_path)
-    if workspace_dir:
-        candidates.append(Path(workspace_dir) / rel_path)
-    for parent in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
-        if (parent / "MODULE.bazel").exists() or (parent / ".git").exists():
-            candidates.append(parent / rel_path)
-            break
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
-    if manifest_path and Path(manifest_path).is_file():
-        keys = {rel_path, f"{test_workspace}/{rel_path}"}
-        with Path(manifest_path).open("r", encoding="utf-8") as handle:
-            for line in handle:
-                key, separator, value = line.rstrip("\n").partition(" ")
-                if separator and key in keys:
-                    return Path(value)
-    raise FileNotFoundError(f"runfile not found: {rel_path}")
-
-
-CORE_DIR = _runfile("tools/core/uploader_main.py").parent
-if str(CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(CORE_DIR))
+add_uploader_runtime_to_path()
 
 from uploader_py.codeowners import CodeOwnersMatcher  # noqa: E402
 from uploader_py.endpoints import EndpointSet  # noqa: E402
@@ -90,28 +61,6 @@ class _FakeTransport:
                 "body": Path(body).read_bytes() if isinstance(body, Path) else body,
                 "gzip_body": gzip_body,
                 "content_encoding": content_encoding,
-            }
-        )
-        return self.results.pop(0) if self.results else HttpResult(200, 1)
-
-    def post_multipart(
-        self,
-        url,
-        headers,
-        *,
-        event_body,
-        coverage_path,
-        coverage_filename,
-        coverage_content_type,
-    ):
-        self.multipart_calls.append(
-            {
-                "url": url,
-                "headers": dict(headers),
-                "event_body": event_body,
-                "coverage": coverage_path.read_bytes(),
-                "coverage_filename": coverage_filename,
-                "coverage_content_type": coverage_content_type,
             }
         )
         return self.results.pop(0) if self.results else HttpResult(200, 1)

@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Small standard-library HTTP transport owned by one uploader worker."""
+"""Send exact reusable request bodies through one worker-local HTTP client.
+
+Per-worker transports provide concurrency without shared connection or retry state.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +21,6 @@ import http.client
 import io
 import logging
 import math
-import os
 from pathlib import Path
 import secrets
 import shutil
@@ -93,7 +95,7 @@ class PreparedHttpRequest:
 
     url: str
     headers: Mapping[str, str]
-    body_factory: Callable[[], BinaryIO | "_CompositeBody"]
+    body_factory: Callable[[], BinaryIO]
 
 
 class _RequestTimeoutHTTPConnection(http.client.HTTPConnection):
@@ -206,49 +208,6 @@ class _SnapshotProxyHandler(ProxyHandler):
         if not self._no_proxy:
             return False
         return proxy_bypass_environment(host, {"no": self._no_proxy})
-
-
-class _CompositeBody:
-    """Reopenable-at-factory, bounded-memory stream over bytes and files."""
-
-    def __init__(self, segments: Iterable[bytes | Path]) -> None:
-        self._segments = tuple(segments)
-        self._index = 0
-        self._byte_offset = 0
-        self._file: BinaryIO | None = None
-
-    def read(self, size: int = -1) -> bytes:
-        if size == 0:
-            return b""
-        remaining = size
-        chunks: list[bytes] = []
-        while self._index < len(self._segments) and (remaining < 0 or remaining > 0):
-            segment = self._segments[self._index]
-            if isinstance(segment, bytes):
-                end = None if remaining < 0 else self._byte_offset + remaining
-                chunk = segment[self._byte_offset : end]
-                self._byte_offset += len(chunk)
-                if self._byte_offset >= len(segment):
-                    self._index += 1
-                    self._byte_offset = 0
-            else:
-                if self._file is None:
-                    self._file = segment.open("rb")
-                chunk = self._file.read(remaining)
-                if not chunk:
-                    self._file.close()
-                    self._file = None
-                    self._index += 1
-                    continue
-            chunks.append(chunk)
-            if remaining >= 0:
-                remaining -= len(chunk)
-        return b"".join(chunks)
-
-    def close(self) -> None:
-        if self._file is not None:
-            self._file.close()
-            self._file = None
 
 
 def _proxy_configuration(
@@ -398,7 +357,7 @@ def prepare_json_request(
         try:
             if gzip_body:
                 compressed = gzip.compress(body.read_bytes(), mtime=0)
-                body_factory: Callable[[], BinaryIO | _CompositeBody] = (
+                body_factory: Callable[[], BinaryIO] = (
                     lambda: io.BytesIO(compressed)
                 )
                 body_length = len(compressed)
@@ -497,25 +456,21 @@ def prepare_coverage_multipart(
         filename=coverage_filename,
         content_type=coverage_content_type,
     )
-    segments: tuple[bytes | Path, ...] = (
-        event_header,
-        event_body,
-        b"\r\n",
-        coverage_header,
-        coverage_path,
-        f"\r\n--{boundary}--\r\n".encode("ascii"),
-    )
-    body = _CompositeBody(segments)
+    closing_boundary = f"\r\n--{boundary}--\r\n".encode("ascii")
     try:
         with output_path.open("wb") as handle:
-            shutil.copyfileobj(body, handle, length=64 * 1024)
-        content_length = output_path.stat().st_size
+            handle.write(event_header)
+            handle.write(event_body)
+            handle.write(b"\r\n")
+            handle.write(coverage_header)
+            with coverage_path.open("rb") as coverage:
+                shutil.copyfileobj(coverage, handle, length=64 * 1024)
+            handle.write(closing_boundary)
+            content_length = handle.tell()
     except OSError as exc:
         raise HttpTransportError(
             f"failed to prepare coverage request body: {type(exc).__name__}"
         ) from exc
-    finally:
-        body.close()
     return PreparedMultipartBody(
         path=output_path,
         content_type=f"multipart/form-data; boundary={boundary}",
@@ -613,67 +568,6 @@ class HttpTransport:
         )
         return self._post(prepared.url, prepared.headers, prepared.body_factory)
 
-    def post_multipart(
-        self,
-        url: str,
-        headers: Mapping[str, str],
-        *,
-        event_body: bytes,
-        coverage_path: Path,
-        coverage_filename: str,
-        coverage_content_type: str,
-    ) -> HttpResult:
-        """POST the fixed Datadog coverage multipart contract."""
-        _validate_url(url)
-        try:
-            coverage_size = coverage_path.stat().st_size
-        except OSError as exc:
-            raise HttpTransportError(
-                f"failed to prepare coverage request body: {type(exc).__name__}"
-            ) from exc
-
-        boundary = f"dd-topt-{secrets.token_hex(16)}"
-        event_header = _multipart_header(
-            boundary,
-            field_name="event",
-            filename="fileevent.json",
-            content_type="application/json",
-        )
-        coverage_header = _multipart_header(
-            boundary,
-            field_name="coveragex",
-            filename=coverage_filename,
-            content_type=coverage_content_type,
-        )
-        between = b"\r\n"
-        closing_boundary = f"\r\n--{boundary}--\r\n".encode("ascii")
-        segments: tuple[bytes | Path, ...] = (
-            event_header,
-            event_body,
-            between,
-            coverage_header,
-            coverage_path,
-            closing_boundary,
-        )
-        content_length = (
-            len(event_header)
-            + len(event_body)
-            + len(between)
-            + len(coverage_header)
-            + coverage_size
-            + len(closing_boundary)
-        )
-        request_headers = _controlled_headers(
-            headers,
-            content_type=f"multipart/form-data; boundary={boundary}",
-            content_length=content_length,
-        )
-        return self._post(
-            url,
-            request_headers,
-            lambda: _CompositeBody(segments),
-        )
-
     def post_prepared_multipart(
         self,
         url: str,
@@ -692,7 +586,7 @@ class HttpTransport:
         self,
         url: str,
         headers: Mapping[str, str],
-        body_factory: Callable[[], BinaryIO | _CompositeBody],
+        body_factory: Callable[[], BinaryIO],
     ) -> HttpResult:
         retry_delays: list[float] = []
         last_status: int | None = None

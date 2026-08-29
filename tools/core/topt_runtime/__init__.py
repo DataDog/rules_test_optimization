@@ -4,4 +4,7 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Shared, dependency-free runtime helpers for Test Optimization tools."""
+"""Dependency-free helpers shared by executable Test Optimization tools.
+
+This package keeps host-side infrastructure independent from uploader internals.
+"""

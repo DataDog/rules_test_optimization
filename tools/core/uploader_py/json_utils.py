@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Strict JSON helpers for bodies that must remain interoperable JSON."""
+"""Encode and decode strict, interoperable JSON for uploader contracts.
+
+Central validation rejects non-standard values before they reach split or HTTP code.
+"""
 
 from __future__ import annotations
 

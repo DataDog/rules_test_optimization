@@ -5,16 +5,17 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Mixed-protocol coordinator tests over the real worker pool."""
+"""Exercise mixed-protocol coordination over the real worker pool.
+
+These tests prove shared inputs and aggregation work across every payload type.
+"""
 
 from __future__ import annotations
 
 from contextlib import contextmanager
 from io import StringIO
 import json
-import os
 from pathlib import Path
-import sys
 import tempfile
 import threading
 import time
@@ -22,45 +23,14 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest import mock
 
+from uploader_test_support import add_uploader_runtime_to_path
 
-def _runfile(rel_path: str) -> Path:
-    workspace = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
-    test_srcdir = os.environ.get("TEST_SRCDIR", "")
-    test_workspace = os.environ.get("TEST_WORKSPACE", "")
-    candidates = []
-    if test_srcdir and test_workspace:
-        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
-    if test_srcdir:
-        candidates.append(Path(test_srcdir) / rel_path)
-    if workspace:
-        candidates.append(Path(workspace) / rel_path)
-    for parent in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
-        if (parent / "MODULE.bazel").exists() or (parent / ".git").exists():
-            candidates.append(parent / rel_path)
-            break
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
-    if manifest_path and Path(manifest_path).is_file():
-        keys = {rel_path, f"{test_workspace}/{rel_path}"}
-        with Path(manifest_path).open("r", encoding="utf-8") as handle:
-            for line in handle:
-                key, separator, value = line.rstrip("\n").partition(" ")
-                if separator and key in keys:
-                    return Path(value)
-    raise FileNotFoundError(f"runfile not found: {rel_path}")
-
-
-CORE_DIR = _runfile("tools/core/uploader_main.py").parent
-if str(CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(CORE_DIR))
+add_uploader_runtime_to_path()
 
 from uploader_py.codeowners import load_codeowners_matcher  # noqa: E402
 from uploader_py.coordinator import (  # noqa: E402
     CoordinatorSettings,
-    emit_outcome,
-    execute_discovery,
+    run_discovered_tasks,
 )
 from uploader_py.credentials import (  # noqa: E402
     api_key_fingerprint,
@@ -71,6 +41,7 @@ from uploader_py.endpoints import EndpointSet  # noqa: E402
 from uploader_py.enrichment import ContextPlan, ContextRecord  # noqa: E402
 from uploader_py.logging_utils import configure_logging  # noqa: E402
 from uploader_py.models import FileResult, FileStatus  # noqa: E402
+from uploader_py.reporting import emit_report  # noqa: E402
 from uploader_py.resources import LoadedResources  # noqa: E402
 from uploader_py.transport import (  # noqa: E402
     HttpResult,
@@ -102,9 +73,6 @@ class _MixedTransport:
         raw = Path(body).read_bytes()
         return self._record("json", raw)
 
-    def post_multipart(self, *_args, **_kwargs):
-        raise AssertionError("coordinator worker must use prepared multipart")
-
     def post_prepared_multipart(self, _url, _headers, prepared):
         return self._record("multipart", prepared.path.read_bytes())
 
@@ -127,7 +95,7 @@ class CoordinatorTests(unittest.TestCase):
                 HttpTransportError,
                 "invalid HTTP proxy configuration",
             ):
-                execute_discovery(
+                run_discovered_tasks(
                     discover_file_tasks(()),
                     settings=CoordinatorSettings(
                         workspace=root,
@@ -182,7 +150,7 @@ class CoordinatorTests(unittest.TestCase):
                 "uploader_py.coordinator.load_codeowners_matcher",
                 side_effect=capture_matcher,
             ):
-                outcome = execute_discovery(
+                report = run_discovered_tasks(
                     discover_file_tasks(()),
                     settings=CoordinatorSettings(
                         workspace=workspace,
@@ -216,7 +184,7 @@ class CoordinatorTests(unittest.TestCase):
                     identifier_factory=lambda: "stable-id",
                 )
 
-            self.assertEqual(0, outcome.report.exit_code)
+            self.assertEqual(0, report.exit_code)
             self.assertEqual(1, len(captured))
             self.assertEqual(launcher_codeowners.resolve(), captured[0].source_path)
 
@@ -264,7 +232,7 @@ class CoordinatorTests(unittest.TestCase):
             )
             stream = StringIO()
             secret = "upload-secret"
-            outcome = execute_discovery(
+            report = run_discovered_tasks(
                 discover_file_tasks(()),
                 settings=CoordinatorSettings(
                     workspace=root,
@@ -279,16 +247,22 @@ class CoordinatorTests(unittest.TestCase):
                     uploader_version="uploader-1",
                     api_key=secret,
                 ),
-                endpoints=EndpointSet(True, "datadoghq.com", "https://test", "https://coverage", "https://telemetry"),
+                endpoints=EndpointSet(
+                    True,
+                    "datadoghq.com",
+                    "https://test",
+                    "https://coverage",
+                    "https://telemetry",
+                ),
                 resources=resources,
                 logger=configure_logging(debug=True, secrets=(secret,), stream=stream),
                 identifier_factory=lambda: "stable-id",
             )
 
-            self.assertEqual(0, outcome.report.exit_code)
+            self.assertEqual(0, report.exit_code)
             self.assertIn(
                 "api_key_fingerprint_mismatch",
-                outcome.report.initialization_warning_codes,
+                report.initialization_warning_codes,
             )
             self.assertIn("DD_API_KEY mismatch", stream.getvalue())
             self.assertNotIn(secret, stream.getvalue())
@@ -314,10 +288,10 @@ class CoordinatorTests(unittest.TestCase):
             )
 
             with mock.patch(
-                "uploader_py.coordinator.run_file_workers_with_stats",
+                "uploader_py.coordinator.run_file_workers",
                 side_effect=interrupted,
             ):
-                outcome = execute_discovery(
+                report = run_discovered_tasks(
                     discovery,
                     settings=CoordinatorSettings(
                         workspace=root,
@@ -332,22 +306,28 @@ class CoordinatorTests(unittest.TestCase):
                         uploader_version="uploader-1",
                         api_key="",
                     ),
-                    endpoints=EndpointSet(True, "datadoghq.com", "https://test", "https://coverage", "https://telemetry"),
+                    endpoints=EndpointSet(
+                        True,
+                        "datadoghq.com",
+                        "https://test",
+                        "https://coverage",
+                        "https://telemetry",
+                    ),
                     resources=LoadedResources(ContextPlan(None), None, None, (), None),
                     identifier_factory=lambda: "stable-id",
                 )
 
-            stats = outcome.report.statistics()
-            self.assertEqual(130, outcome.report.exit_code)
+            stats = report.statistics()
+            self.assertEqual(130, report.exit_code)
             self.assertEqual(1, stats["files"]["processed"])
             self.assertEqual(1, stats["files"]["cancelled"])
             self.assertEqual(2, stats["files"]["eligible"])
             self.assertIn(
                 "invocation_interrupted",
-                outcome.report.initialization_warning_codes,
+                report.initialization_warning_codes,
             )
             stream = StringIO()
-            emit_outcome(outcome, stream=stream)
+            emit_report(report, stream=stream)
             self.assertIn("exit_code=130", stream.getvalue())
             self.assertIn("cancelled=1", stream.getvalue())
 
@@ -363,7 +343,7 @@ class CoordinatorTests(unittest.TestCase):
             cleanup_failure,
         ):
             root = Path(raw_root)
-            outcome = execute_discovery(
+            report = run_discovered_tasks(
                 discover_file_tasks(()),
                 settings=CoordinatorSettings(
                     workspace=root,
@@ -378,14 +358,20 @@ class CoordinatorTests(unittest.TestCase):
                     uploader_version="uploader-1",
                     api_key="",
                 ),
-                endpoints=EndpointSet(True, "datadoghq.com", "https://test", "https://coverage", "https://telemetry"),
+                endpoints=EndpointSet(
+                    True,
+                    "datadoghq.com",
+                    "https://test",
+                    "https://coverage",
+                    "https://telemetry",
+                ),
                 resources=LoadedResources(ContextPlan(None), None, None, (), None),
             )
 
-            self.assertEqual(0, outcome.report.exit_code)
+            self.assertEqual(0, report.exit_code)
             self.assertIn(
                 "invocation_temp_cleanup_failed",
-                outcome.report.initialization_warning_codes,
+                report.initialization_warning_codes,
             )
 
     def test_workers_one_uploads_all_protocols_through_real_http(self) -> None:
@@ -462,7 +448,7 @@ class CoordinatorTests(unittest.TestCase):
                     api_key="secret",
                 )
 
-                outcome = execute_discovery(
+                report = run_discovered_tasks(
                     discovery,
                     settings=settings,
                     endpoints=EndpointSet(
@@ -477,8 +463,8 @@ class CoordinatorTests(unittest.TestCase):
                     identifier_factory=lambda: "stable-id",
                 )
 
-                stats = outcome.report.statistics()
-                self.assertEqual(0, outcome.report.exit_code)
+                stats = report.statistics()
+                self.assertEqual(0, report.exit_code)
                 self.assertEqual(1, stats["concurrency"]["worker_threads"])
                 self.assertEqual(1, stats["concurrency"]["peak_active_workers"])
                 self.assertEqual(3, stats["files"]["succeeded"])
@@ -557,7 +543,7 @@ class CoordinatorTests(unittest.TestCase):
                     api_key="secret",
                 )
 
-                outcome = execute_discovery(
+                report = run_discovered_tasks(
                     discovery,
                     settings=settings,
                     endpoints=EndpointSet(True, "datadoghq.com", url, url, url),
@@ -565,11 +551,11 @@ class CoordinatorTests(unittest.TestCase):
                     transport_factory=HttpTransport,
                 )
 
-                self.assertEqual(0, outcome.report.exit_code)
+                self.assertEqual(0, report.exit_code)
                 self.assertEqual(8, Handler.calls)
                 self.assertGreater(Handler.peak, 1)
                 self.assertLessEqual(Handler.peak, 4)
-                self.assertEqual(4, outcome.report.peak_active_workers)
+                self.assertEqual(4, report.peak_active_workers)
                 self.assertTrue(all(not source.exists() for source in sources))
         finally:
             server.shutdown()
@@ -637,7 +623,7 @@ class CoordinatorTests(unittest.TestCase):
                 api_key="secret",
             )
 
-            outcome = execute_discovery(
+            report = run_discovered_tasks(
                 discovery,
                 settings=settings,
                 endpoints=EndpointSet(
@@ -652,8 +638,8 @@ class CoordinatorTests(unittest.TestCase):
                 identifier_factory=lambda: "stable-id",
             )
 
-            stats = outcome.report.statistics()
-            self.assertEqual(0, outcome.report.exit_code)
+            stats = report.statistics()
+            self.assertEqual(0, report.exit_code)
             self.assertEqual(3, stats["files"]["succeeded"])
             self.assertEqual(3, stats["concurrency"]["peak_active_workers"])
             self.assertEqual(3, stats["requests"]["attempted"])
@@ -673,7 +659,7 @@ class CoordinatorTests(unittest.TestCase):
 
             stream = StringIO()
             report_path = root / "report.json"
-            emit_outcome(outcome, stream=stream, report_json=report_path)
+            emit_report(report, stream=stream, report_json=report_path)
             self.assertIn("[dd-uploader] summary: mode=upload", stream.getvalue())
             self.assertEqual(stats, json.loads(report_path.read_text(encoding="utf-8")))
 
@@ -704,7 +690,7 @@ class CoordinatorTests(unittest.TestCase):
                 api_key="",
             )
 
-            outcome = execute_discovery(
+            report = run_discovered_tasks(
                 discovery,
                 settings=settings,
                 endpoints=EndpointSet(
@@ -719,8 +705,8 @@ class CoordinatorTests(unittest.TestCase):
                 identifier_factory=lambda: "stable-id",
             )
 
-            stats = outcome.report.statistics()
-            self.assertEqual(0, outcome.report.exit_code)
+            stats = report.statistics()
+            self.assertEqual(0, report.exit_code)
             self.assertEqual(1, stats["requests"]["planned"])
             self.assertEqual(0, stats["requests"]["attempted"])
             self.assertEqual([], calls)
@@ -750,7 +736,7 @@ class CoordinatorTests(unittest.TestCase):
                 api_key="",
             )
 
-            outcome = execute_discovery(
+            report = run_discovered_tasks(
                 discovery,
                 settings=settings,
                 endpoints=EndpointSet(
@@ -770,7 +756,7 @@ class CoordinatorTests(unittest.TestCase):
                 identifier_factory=lambda: "stable-id",
             )
 
-            self.assertEqual(1, outcome.report.exit_code)
+            self.assertEqual(1, report.exit_code)
             logs = stream.getvalue()
             self.assertIn("task=file-000001", logs)
             self.assertIn("failure_code=invalid_test", logs)

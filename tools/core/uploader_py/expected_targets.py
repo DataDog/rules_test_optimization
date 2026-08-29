@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Invocation-scoped expected-target validation before file scheduling."""
+"""Validate expected Bazel targets and select their discovered outputs.
+
+The pre-worker gate prevents unrelated or missing targets from entering the queue.
+"""
 
 from __future__ import annotations
 
@@ -154,7 +157,10 @@ def _load_target_file(path: Path) -> tuple[str, ...]:
 def _validate_label(value: object) -> str:
     if not isinstance(value, str):
         raise ExpectedTargetsError("expected target labels must be strings")
-    if value != value.strip() or any(ord(character) <= 32 or ord(character) == 127 for character in value):
+    contains_control_character = any(
+        ord(character) <= 32 or ord(character) == 127 for character in value
+    )
+    if value != value.strip() or contains_control_character:
         raise ExpectedTargetsError(f"invalid expected target label: {value!r}")
     if value.startswith("@") or not value.startswith("//"):
         raise ExpectedTargetsError(f"expected target must be local: {value!r}")

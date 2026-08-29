@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Command entrypoint for the Python uploader runtime."""
+"""Validate the host and enter the shared Python uploader runtime.
+
+Top-level error handling stays here so internal modules can use typed failures.
+"""
 
 from __future__ import annotations
 

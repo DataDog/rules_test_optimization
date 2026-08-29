@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Typed configuration and public CLI compatibility for the Python uploader."""
+"""Resolve rule, environment, and CLI settings into immutable configuration.
+
+One precedence boundary preserves the legacy interface across all worker threads.
+"""
 
 from __future__ import annotations
 

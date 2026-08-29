@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Deterministic testlogs discovery and one-task-per-source planning."""
+"""Build a deterministic one-task-per-source plan from Bazel testlogs.
+
+Discovery happens before scheduling so workers never race filesystem traversal.
+"""
 
 from __future__ import annotations
 

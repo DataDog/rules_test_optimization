@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Immutable runfiles lookup prepared once before uploader workers start."""
+"""Resolve Bazel runfiles into one immutable lookup snapshot.
+
+Centralizing lookup keeps launchers portable and workers isolated from env changes.
+"""
 
 from __future__ import annotations
 

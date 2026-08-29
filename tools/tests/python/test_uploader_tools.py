@@ -5,7 +5,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Focused tests for the Python parallel uploader foundation."""
+"""Characterize configuration, runfiles, locking, splitting, and startup.
+
+These foundation tests protect public compatibility below the upload pipelines.
+"""
 
 from __future__ import annotations
 
@@ -16,51 +19,18 @@ import io
 import json
 import os
 from pathlib import Path
-import sys
 import tempfile
 import threading
 import time
 import unittest
 from unittest import mock
 
+from uploader_test_support import (
+    add_uploader_runtime_to_path,
+    resolve_runfile as _runfile,
+)
 
-def _runfile(rel_path: str) -> Path:
-    test_srcdir = os.environ.get("TEST_SRCDIR", "")
-    test_workspace = os.environ.get("TEST_WORKSPACE", "")
-    workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
-    candidates: list[Path] = []
-    if test_srcdir and test_workspace:
-        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
-    if test_srcdir:
-        candidates.append(Path(test_srcdir) / rel_path)
-    if workspace_dir:
-        candidates.append(Path(workspace_dir) / rel_path)
-
-    here = Path(__file__).resolve().parent
-    for candidate in (here, *here.parents):
-        if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
-            candidates.append(candidate / rel_path)
-            break
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
-    if manifest_path and Path(manifest_path).exists():
-        keys = {rel_path}
-        if test_workspace:
-            keys.add(f"{test_workspace}/{rel_path}")
-        with Path(manifest_path).open("r", encoding="utf-8") as handle:
-            for line in handle:
-                key, separator, value = line.rstrip("\n").partition(" ")
-                if separator and key in keys and value:
-                    return Path(value)
-    raise FileNotFoundError(f"runfile not found: {rel_path}")
-
-
-CORE_DIR = _runfile("tools/core/uploader_main.py").parent
-if str(CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(CORE_DIR))
+add_uploader_runtime_to_path()
 
 from uploader_py.config import (  # noqa: E402
     ConfigError,

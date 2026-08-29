@@ -5,16 +5,22 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+# Resolve the shared Python entrypoint and generated config from Bazel runfiles.
+# Keeping upload behavior out of this launcher avoids a separate Unix runtime.
+
 set -euo pipefail
 
 launcher_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 launcher_path="$launcher_dir/$(basename "${BASH_SOURCE[0]}")"
 export DD_TEST_OPTIMIZATION_UPLOADER_LAUNCHER_DIR="$launcher_dir"
+runfiles_manifests=(
+  "${RUNFILES_MANIFEST_FILE:-}"
+  "$launcher_path.runfiles_manifest"
+  "$launcher_path.runfiles/MANIFEST"
+)
 
 if [[ -z "${RUNFILES_MANIFEST_FILE:-}" || ! -f "$RUNFILES_MANIFEST_FILE" ]]; then
-  for manifest_candidate in \
-    "$launcher_path.runfiles_manifest" \
-    "$launcher_path.runfiles/MANIFEST"; do
+  for manifest_candidate in "${runfiles_manifests[@]}"; do
     if [[ -f "$manifest_candidate" ]]; then
       RUNFILES_MANIFEST_FILE="$manifest_candidate"
       export RUNFILES_MANIFEST_FILE
@@ -71,12 +77,7 @@ resolve_runfile() {
     done
   done
 
-  local manifests=(
-    "${RUNFILES_MANIFEST_FILE:-}"
-    "$launcher_path.runfiles_manifest"
-    "$launcher_path.runfiles/MANIFEST"
-  )
-  for manifest in "${manifests[@]}"; do
+  for manifest in "${runfiles_manifests[@]}"; do
     [[ -n "$manifest" && -f "$manifest" ]] || continue
     while IFS= read -r line || [[ -n "$line" ]]; do
       if [[ "${line:0:1}" == " " ]]; then

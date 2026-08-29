@@ -5,7 +5,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Focused compatibility spike for the dependency-free uploader transport."""
+"""Exercise the dependency-free HTTP transport against loopback servers.
+
+Real requests protect retry, proxy, timeout, and exact-body behavior of stdlib HTTP.
+"""
 
 from __future__ import annotations
 
@@ -13,9 +16,7 @@ from contextlib import contextmanager
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
-import os
 from pathlib import Path
-import sys
 import tempfile
 import threading
 import time
@@ -24,40 +25,9 @@ import unittest
 from unittest import mock
 from urllib.error import URLError
 
+from uploader_test_support import add_uploader_runtime_to_path
 
-def _runfile(rel_path: str) -> Path:
-    test_srcdir = os.environ.get("TEST_SRCDIR", "")
-    test_workspace = os.environ.get("TEST_WORKSPACE", "")
-    workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
-    candidates: list[Path] = []
-    if test_srcdir and test_workspace:
-        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
-    if test_srcdir:
-        candidates.append(Path(test_srcdir) / rel_path)
-    if workspace_dir:
-        candidates.append(Path(workspace_dir) / rel_path)
-    for parent in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
-        if (parent / "MODULE.bazel").exists() or (parent / ".git").exists():
-            candidates.append(parent / rel_path)
-            break
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-
-    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
-    if manifest_path and Path(manifest_path).is_file():
-        keys = {rel_path, f"{test_workspace}/{rel_path}"}
-        with Path(manifest_path).open("r", encoding="utf-8") as handle:
-            for line in handle:
-                key, separator, value = line.rstrip("\n").partition(" ")
-                if separator and key in keys:
-                    return Path(value)
-    raise FileNotFoundError(f"runfile not found: {rel_path}")
-
-
-CORE_DIR = _runfile("tools/core/uploader_main.py").parent
-if str(CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(CORE_DIR))
+add_uploader_runtime_to_path()
 
 from uploader_py.transport import (  # noqa: E402
     DEFAULT_MAX_RETRY_DELAY_SECONDS,
@@ -311,32 +281,6 @@ class HttpTransportTests(unittest.TestCase):
         self.assertEqual(first["body"], second["body"])
         self.assertEqual(original, gzip.decompress(first["body"]))
 
-    def test_multipart_has_exact_length_and_reopens_file_for_retry(self) -> None:
-        with tempfile.TemporaryDirectory() as raw_root:
-            coverage = Path(raw_root) / "coverage payload.json"
-            coverage_bytes = b'{"files":[{"name":"a.go"}]}'
-            coverage.write_bytes(coverage_bytes)
-            waits: list[float] = []
-            with _server({"status": 500}, {"status": 200}) as (server, base):
-                result = HttpTransport(sleeper=waits.append).post_multipart(
-                    f"{base}/api/v2/citestcov",
-                    {},
-                    event_body=b'{"dummy":true}',
-                    coverage_path=coverage,
-                    coverage_filename="filecoveragex.json",
-                    coverage_content_type="application/json",
-                )
-
-        self.assertTrue(result.succeeded)
-        self.assertEqual(2, result.attempts)
-        self.assertEqual([2.0], waits)
-        first, second = server.records  # type: ignore[attr-defined]
-        self.assertEqual(first["body"], second["body"])
-        self.assertEqual(len(first["body"]), int(first["headers"]["content-length"]))
-        self.assertIn(b'name="event"; filename="fileevent.json"', first["body"])
-        self.assertIn(b'name="coveragex"; filename="filecoveragex.json"', first["body"])
-        self.assertIn(coverage_bytes, first["body"])
-
     def test_prepared_multipart_is_exact_and_reopened_for_retry(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -362,6 +306,9 @@ class HttpTransportTests(unittest.TestCase):
         self.assertEqual(first["body"], second["body"])
         self.assertEqual(prepared.content_length, len(first["body"]))
         self.assertEqual(prepared.content_type, first["headers"]["content-type"])
+        self.assertIn(b'name="event"; filename="fileevent.json"', first["body"])
+        self.assertIn(b'name="coveragex"; filename="filecoveragex.json"', first["body"])
+        self.assertIn(b'{"files":[]}', first["body"])
 
     def test_response_diagnostics_are_bounded(self) -> None:
         with _server({"status": 400, "body": b"x" * 100}) as (_server_instance, base):

@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Pure per-file context, Bazel metadata, and CODEOWNERS enrichment."""
+"""Apply context, Bazel metadata, and CODEOWNERS to one test payload.
+
+Keeping enrichment pure and isolated makes concurrent transformations testable.
+"""
 
 from __future__ import annotations
 

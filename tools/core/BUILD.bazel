@@ -4,6 +4,9 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+# Export host-side Test Optimization tools and their dependency-free runtimes.
+# The uploader sources are runfiles because consumers execute them after Bazel tests.
+
 exports_files(
     [
         "bep_artifact_stage_helper.py",

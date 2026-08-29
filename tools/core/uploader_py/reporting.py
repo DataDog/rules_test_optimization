@@ -4,14 +4,17 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Deterministic coordinator-only aggregation and final uploader statistics."""
+"""Aggregate results and render deterministic human and JSON reports.
+
+One report model prevents terminal output and machine-readable counters from drifting.
+"""
 
 from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, TextIO
 
 from .json_utils import strict_json_dumps
 from .models import FileResult, FileStatus, MAX_TEST_PAYLOAD_BYTES, PayloadType
@@ -356,27 +359,7 @@ class AggregateReport:
 
 def write_statistics_json(path: Path, report: AggregateReport) -> None:
     """Atomically write the aggregate statistics without partial JSON files."""
-    parent = path.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    temporary = parent / f".{path.name}.tmp"
-    try:
-        temporary.write_text(
-            strict_json_dumps(
-                report.statistics(),
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(path)
-    except OSError:
-        try:
-            temporary.unlink()
-        except OSError:
-            pass
-        raise
+    _write_json(path, report.statistics())
 
 
 def write_schema_v1_report(
@@ -386,6 +369,31 @@ def write_schema_v1_report(
 ) -> None:
     """Atomically write the backward-compatible public uploader report."""
     _write_json(path, report.schema_v1_report(context))
+
+
+def emit_report(
+    report: AggregateReport,
+    *,
+    stream: TextIO,
+    report_json: Path | None = None,
+    legacy_report_context: LegacyReportContext | None = None,
+) -> None:
+    """Render stdout and optional JSON from one immutable aggregate report."""
+    for line in report.human_lines():
+        print(line, file=stream)
+    if report_json is None:
+        return
+    try:
+        if legacy_report_context is None:
+            write_statistics_json(report_json, report)
+        else:
+            write_schema_v1_report(report_json, report, legacy_report_context)
+    except OSError as exc:
+        print(
+            "[dd-uploader] warning: failed to write uploader report: "
+            f"{type(exc).__name__}",
+            file=stream,
+        )
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
@@ -472,7 +480,8 @@ def _result_reason(
             "no_test_outputs_found",
             "No local or staged test.outputs directories were found.",
             (
-                "Use --artifact-source=bep with the matching --bep-json, or configure Bazel to materialize test outputs.",
+                "Use --artifact-source=bep with the matching --bep-json, or "
+                "configure Bazel to materialize test outputs.",
             ),
         )
     if stats["files"]["discovered"] == 0:

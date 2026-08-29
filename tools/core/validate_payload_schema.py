@@ -7,6 +7,9 @@
 
 """Validate payload JSON against a practical JSON Schema subset.
 
+The dependency-free API is shared by the CLI and uploader workers so dry-run
+validation needs neither a subprocess nor per-thread schema copies.
+
 Supported keywords include: `$ref`, `allOf`, `anyOf`, `if`/`then`/`else`,
 `type`, `const`, `enum`, `minimum`, `maximum`, `required`, `properties`,
 `patternProperties`, `additionalProperties`, `items`, and `additionalItems`.
@@ -52,7 +55,7 @@ class ValidationResult(NamedTuple):
 
 
 def _new_stats() -> Dict[str, int]:
-    """Internal helper for new stats behavior."""
+    """Create counters isolated to one validation run."""
     return {
         "nodes": 0,
         "refs": 0,
@@ -70,34 +73,43 @@ _STATS = _new_stats()
 
 
 def _reset_stats() -> None:
-    """Internal helper for reset stats behavior."""
+    """Reset the legacy CLI statistics snapshot between invocations."""
     global _STATS
     _STATS = _new_stats()
 
 
 def _debug_enabled() -> bool:
-    """Internal helper for debug enabled behavior."""
-    val = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_DEBUG")
-    if val is None:
-        val = os.getenv("DD_TEST_OPTIMIZATION_DEBUG")
-    if val is None:
+    """Read the schema-specific debug switch with uploader fallback."""
+    configured = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_DEBUG")
+    if configured is None:
+        configured = os.getenv("DD_TEST_OPTIMIZATION_DEBUG")
+    if configured is None:
         return False
-    return str(val).strip().lower() in _DEBUG_TRUTHY
+    return str(configured).strip().lower() in _DEBUG_TRUTHY
 
 
 def _debug(msg: str, debug: bool = False) -> None:
-    """Internal helper for debug behavior."""
+    """Emit schema diagnostics only when explicit debug is enabled."""
     if debug or _debug_enabled():
         print(f"[schema-validator][dbg] {msg}", file=sys.stderr)
 
 
 def _stat_inc(stats: Dict[str, int], key: str, n: int = 1) -> None:
-    """Internal helper for stat inc behavior."""
+    """Increment one validation counter."""
     stats[key] = stats.get(key, 0) + n
 
 
+def _format_stats(stats: Dict[str, int]) -> str:
+    """Render the stable debug summary shared by success and failure paths."""
+    return (
+        "stats: nodes={nodes} refs={refs} anyof={anyof} "
+        "anyof_matched={anyof_matched} anyof_failed={anyof_failed} "
+        "if={if} then={then} else={else} type_checks={type_checks}"
+    ).format(**stats)
+
+
 def _safe_size(path: str) -> Optional[int]:
-    """Internal helper for safe size behavior."""
+    """Read a file size without turning diagnostics into a failure."""
     try:
         return os.path.getsize(path)
     except OSError:
@@ -105,14 +117,14 @@ def _safe_size(path: str) -> Optional[int]:
 
 
 def _format_size(size: Optional[int]) -> str:
-    """Internal helper for format size behavior."""
+    """Render an optional byte count for debug output."""
     if size is None:
         return "unknown"
     return str(size)
 
 
 def _ensure_readable_file(path: str, label: str) -> Optional[str]:
-    """Internal helper for ensure readable file behavior."""
+    """Return an actionable error when a CLI input is not a regular file."""
     if not os.path.exists(path):
         return f"{label} file does not exist: {path}"
     if not os.path.isfile(path):
@@ -121,7 +133,7 @@ def _ensure_readable_file(path: str, label: str) -> Optional[str]:
 
 
 def _max_errors_from_env() -> int:
-    """Internal helper for max errors from env behavior."""
+    """Resolve and validate the environment-controlled error limit."""
     raw = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_MAX_ERRORS")
     if raw is None or raw.strip() == "":
         return DEFAULT_MAX_ERRORS
@@ -135,7 +147,7 @@ def _max_errors_from_env() -> int:
 
 
 def _unsupported_policy_from_env() -> str:
-    """Internal helper for unsupported policy from env behavior."""
+    """Resolve whether unsupported schema keywords fail or warn."""
     raw = os.getenv(_UNSUPPORTED_POLICY_ENV, "error")
     mode = str(raw).strip().lower()
     if not mode:
@@ -148,7 +160,7 @@ def _unsupported_policy_from_env() -> str:
 
 
 def _parse_args(argv: List[str]) -> argparse.Namespace:
-    """Internal helper for parse args behavior."""
+    """Parse the stable standalone validator CLI."""
     parser = argparse.ArgumentParser(
         prog = "validate_payload_schema.py",
         description = "Validate payload JSON against a schema JSON file.",
@@ -165,7 +177,7 @@ def _parse_args(argv: List[str]) -> argparse.Namespace:
 
 
 def _sample_keys(value: Any, limit: int = 12) -> str:
-    """Internal helper for sample keys behavior."""
+    """Render a bounded key sample without logging payload values."""
     if not isinstance(value, dict):
         return ""
     keys = list(value.keys())
@@ -175,12 +187,12 @@ def _sample_keys(value: Any, limit: int = 12) -> str:
 
 
 def _is_number(value: Any) -> bool:
-    """Internal helper for is number behavior."""
+    """Apply JSON number semantics, where booleans are not integers."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _is_type(value: Any, type_name: str) -> bool:
-    """Internal helper for is type behavior."""
+    """Match one supported JSON Schema type name."""
     if type_name == "object":
         return isinstance(value, dict)
     if type_name == "array":
@@ -198,37 +210,41 @@ def _is_type(value: Any, type_name: str) -> bool:
     return False
 
 
-def _resolve_ref(root: Dict[str, Any], ref: str, stats: Optional[Dict[str, int]] = None) -> Dict[str, Any]:
-    """Internal helper for resolve ref behavior."""
+def _resolve_ref(
+    root: Dict[str, Any],
+    ref: str,
+    stats: Optional[Dict[str, int]] = None,
+) -> Dict[str, Any]:
+    """Resolve one local JSON Pointer reference within the loaded schema."""
     if stats is not None:
         _stat_inc(stats, "refs")
     if not ref.startswith("#/"):
         raise ValueError(f"unsupported ref: {ref}")
     parts = ref[2:].split("/")
-    cur: Any = root
+    current: Any = root
     for part in parts:
         part = part.replace("~1", "/").replace("~0", "~")
-        if isinstance(cur, dict):
-            if part not in cur:
+        if isinstance(current, dict):
+            if part not in current:
                 raise ValueError(f"ref segment not found: {part!r} in {ref}")
-            cur = cur[part]
+            current = current[part]
             continue
-        if isinstance(cur, list):
+        if isinstance(current, list):
             if not part.isdigit():
                 raise ValueError(f"ref segment is not a list index: {part!r} in {ref}")
-            idx = int(part)
-            if idx < 0 or idx >= len(cur):
+            index = int(part)
+            if index < 0 or index >= len(current):
                 raise ValueError(f"ref index out of bounds: {part!r} in {ref}")
-            cur = cur[idx]
+            current = current[index]
             continue
         raise ValueError(f"ref traversal hit non-container at segment {part!r} in {ref}")
-    if not isinstance(cur, dict):
+    if not isinstance(current, dict):
         raise ValueError(f"ref did not resolve to an object: {ref}")
-    return cur
+    return current
 
 
 def _path_key(path: str, key: str) -> str:
-    """Internal helper for path key behavior."""
+    """Append one safely quoted object key to a diagnostic JSON path."""
     safe = key.replace("'", "\\'")
     return f"{path}['{safe}']"
 
@@ -245,7 +261,7 @@ def _validate(
     unsupported_policy: str = "error",
     warning_output: Optional[Callable[[str], None]] = None,
 ) -> None:
-    """Internal helper for validate behavior."""
+    """Recursively validate one value while accumulating bounded diagnostics."""
     if stats is None:
         stats = _new_stats()
     if warned_unsupported is None:
@@ -261,7 +277,8 @@ def _validate(
         if keyword in schema:
             if unsupported_policy == "error":
                 errors.append(
-                    f"{path}: unsupported JSON Schema keyword '{keyword}' is not supported by this validator"
+                    f"{path}: unsupported JSON Schema keyword '{keyword}' "
+                    "is not supported by this validator"
                 )
                 return
             if keyword not in warned_unsupported:
@@ -281,11 +298,17 @@ def _validate(
         except ValueError as exc:
             errors.append(f"{path}: {exc}")
             return
-        _validate(value, ref_schema, root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+        _validate(
+            value, ref_schema, root, path, errors, max_errors,
+            stats, warned_unsupported, unsupported_policy, warning_output,
+        )
         return
 
     for subschema in schema.get("allOf", []):
-        _validate(value, subschema, root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+        _validate(
+            value, subschema, root, path, errors, max_errors,
+            stats, warned_unsupported, unsupported_policy, warning_output,
+        )
         if len(errors) >= max_errors:
             return
 
@@ -293,7 +316,10 @@ def _validate(
         _stat_inc(stats, "anyof")
         for subschema in schema["anyOf"]:
             sub_errors: List[str] = []
-            _validate(value, subschema, root, path, sub_errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+            _validate(
+                value, subschema, root, path, sub_errors, max_errors,
+                stats, warned_unsupported, unsupported_policy, warning_output,
+            )
             if not sub_errors:
                 _stat_inc(stats, "anyof_matched")
                 break
@@ -305,25 +331,36 @@ def _validate(
     if "if" in schema:
         _stat_inc(stats, "if")
         cond_errors: List[str] = []
-        _validate(value, schema["if"], root, path, cond_errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+        _validate(
+            value, schema["if"], root, path, cond_errors, max_errors,
+            stats, warned_unsupported, unsupported_policy, warning_output,
+        )
         if not cond_errors:
             if "then" in schema:
                 _stat_inc(stats, "then")
-                _validate(value, schema["then"], root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+                _validate(
+                    value, schema["then"], root, path, errors, max_errors,
+                    stats, warned_unsupported, unsupported_policy, warning_output,
+                )
         else:
             if "else" in schema:
                 _stat_inc(stats, "else")
-                _validate(value, schema["else"], root, path, errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+                _validate(
+                    value, schema["else"], root, path, errors, max_errors,
+                    stats, warned_unsupported, unsupported_policy, warning_output,
+                )
 
     if "type" in schema:
         _stat_inc(stats, "type_checks")
-        type_spec = schema["type"]
-        if isinstance(type_spec, list):
-            ok = any(_is_type(value, t) for t in type_spec)
+        expected_types = schema["type"]
+        if isinstance(expected_types, list):
+            matches_type = any(
+                _is_type(value, expected_type) for expected_type in expected_types
+            )
         else:
-            ok = _is_type(value, type_spec)
-        if not ok:
-            errors.append(f"{path}: expected type {type_spec}")
+            matches_type = _is_type(value, expected_types)
+        if not matches_type:
+            errors.append(f"{path}: expected type {expected_types}")
             return
 
     if "const" in schema and value != schema["const"]:
@@ -356,47 +393,72 @@ def _validate(
                 if len(errors) >= max_errors:
                     return
 
-        props = schema.get("properties", {})
-        pattern_props = schema.get("patternProperties", {})
+        properties = schema.get("properties", {})
+        pattern_properties = schema.get("patternProperties", {})
         patterns = []
-        for pattern, subschema in pattern_props.items():
+        for pattern, subschema in pattern_properties.items():
             try:
                 patterns.append((re.compile(pattern), subschema))
             except re.error as exc:
                 errors.append(f"{path}: invalid patternProperties regex {pattern!r}: {exc}")
                 return
 
-        for key, val in value.items():
+        for key, property_value in value.items():
             matched = False
-            if key in props:
+            if key in properties:
                 matched = True
-                _validate(val, props[key], root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+                _validate(
+                    property_value, properties[key], root, _path_key(path, key),
+                    errors, max_errors, stats, warned_unsupported,
+                    unsupported_policy, warning_output,
+                )
             for regex, subschema in patterns:
                 if regex.search(key):
                     matched = True
-                    _validate(val, subschema, root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+                    _validate(
+                        property_value, subschema, root, _path_key(path, key),
+                        errors, max_errors, stats, warned_unsupported,
+                        unsupported_policy, warning_output,
+                    )
             if not matched:
-                addl = schema.get("additionalProperties", True)
-                if addl is False:
+                additional_properties = schema.get("additionalProperties", True)
+                if additional_properties is False:
                     errors.append(f"{path}: additional property '{key}' not allowed")
-                elif isinstance(addl, dict):
-                    _validate(val, addl, root, _path_key(path, key), errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+                elif isinstance(additional_properties, dict):
+                    _validate(
+                        property_value, additional_properties, root,
+                        _path_key(path, key), errors, max_errors, stats,
+                        warned_unsupported, unsupported_policy, warning_output,
+                    )
 
     if isinstance(value, list):
         items = schema.get("items")
         if isinstance(items, dict):
-            for idx, item in enumerate(value):
-                _validate(item, items, root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+            for index, item in enumerate(value):
+                _validate(
+                    item, items, root, f"{path}[{index}]", errors, max_errors,
+                    stats, warned_unsupported, unsupported_policy, warning_output,
+                )
         elif isinstance(items, list):
-            for idx, item in enumerate(value):
-                if idx < len(items):
-                    _validate(item, items[idx], root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+            for index, item in enumerate(value):
+                if index < len(items):
+                    _validate(
+                        item, items[index], root, f"{path}[{index}]",
+                        errors, max_errors, stats, warned_unsupported,
+                        unsupported_policy, warning_output,
+                    )
                 else:
                     additional_items = schema.get("additionalItems", True)
                     if additional_items is False:
-                        errors.append(f"{path}[{idx}]: additional item not allowed")
+                        errors.append(
+                            f"{path}[{index}]: additional item not allowed"
+                        )
                     elif isinstance(additional_items, dict):
-                        _validate(item, additional_items, root, f"{path}[{idx}]", errors, max_errors, stats, warned_unsupported, unsupported_policy, warning_output)
+                        _validate(
+                            item, additional_items, root, f"{path}[{index}]",
+                            errors, max_errors, stats, warned_unsupported,
+                            unsupported_policy, warning_output,
+                        )
 
 
 def validate_payload(
@@ -479,8 +541,8 @@ def main() -> int:
         return 2
 
     try:
-        with open(schema_path, "r", encoding="utf-8-sig") as f:
-            schema = json.load(f)
+        with open(schema_path, "r", encoding="utf-8-sig") as handle:
+            schema = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"error: failed to read schema: {exc}", file=sys.stderr)
         return 2
@@ -496,8 +558,8 @@ def main() -> int:
             _debug(f"schema required count: {len(schema.get('required', []))}", debug)
 
     try:
-        with open(payload_path, "r", encoding="utf-8-sig") as f:
-            payload = json.load(f)
+        with open(payload_path, "r", encoding="utf-8-sig") as handle:
+            payload = json.load(handle)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"error: failed to read payload JSON: {exc}", file=sys.stderr)
         return 2
@@ -523,30 +585,18 @@ def main() -> int:
 
     if errors:
         print("schema validation failed:", file=sys.stderr)
-        for err in errors[:max_errors]:
-            print(f"- {err}", file=sys.stderr)
+        for error in errors[:max_errors]:
+            print(f"- {error}", file=sys.stderr)
         if len(errors) > max_errors:
             print(f"- ... and {len(errors) - max_errors} more", file=sys.stderr)
         _debug(f"validation result: failed ({len(errors)} error(s))", debug)
         if debug:
-            _debug(
-                "stats: nodes={nodes} refs={refs} anyof={anyof} anyof_matched={anyof_matched} "
-                "anyof_failed={anyof_failed} if={if} then={then} else={else} type_checks={type_checks}".format(
-                    **_STATS
-                ),
-                debug,
-            )
+            _debug(_format_stats(_STATS), debug)
         return 1
 
     _debug("validation result: ok", debug)
     if debug:
-        _debug(
-            "stats: nodes={nodes} refs={refs} anyof={anyof} anyof_matched={anyof_matched} "
-            "anyof_failed={anyof_failed} if={if} then={then} else={else} type_checks={type_checks}".format(
-                **_STATS
-            ),
-            debug,
-        )
+        _debug(_format_stats(_STATS), debug)
     return 0
 
 

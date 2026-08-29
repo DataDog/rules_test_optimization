@@ -4,6 +4,9 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+# Validate supported hosts and generated consumer artifacts before merge.
+# The uploader smoke catches launcher/runfiles failures that imports cannot expose.
+
 name: CI
 
 on:

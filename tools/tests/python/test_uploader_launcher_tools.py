@@ -5,7 +5,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Minimal Python launcher tests, including manifest-only runfiles."""
+"""Exercise behavior-free Python launchers across runfiles layouts.
+
+Manifest-only and spaced-path cases protect Bazel portability on every platform.
+"""
 
 from __future__ import annotations
 

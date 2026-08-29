@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""One immutable CODEOWNERS matcher prepared before uploader workers start."""
+"""Discover and compile one immutable CODEOWNERS matcher per invocation.
+
+Parsing once avoids repeated I/O and makes concurrent worker lookups read-only.
+"""
 
 from __future__ import annotations
 

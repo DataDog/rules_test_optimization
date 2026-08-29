@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Coordinator-owned resource setup, worker execution, and result aggregation."""
+"""Prepare shared inputs, run file workers, and aggregate immutable results.
+
+This boundary keeps invocation-wide state out of independent worker pipelines.
+"""
 
 from __future__ import annotations
 
@@ -12,30 +15,25 @@ from dataclasses import dataclass
 import logging
 from pathlib import Path
 import time
-from typing import Callable, TextIO
+from typing import Callable
 import uuid
 
-from .codeowners import load_codeowners_matcher
+from .codeowners import CodeOwnersMatcher, load_codeowners_matcher
 from .config import UploaderConfig
 from .credentials import check_api_key_fingerprint
 from .discovery import DiscoveryResult
 from .endpoints import EndpointSet
 from .file_worker import WorkerRuntime, process_file
 from .models import FileStatus
-from .reporting import (
-    AggregateReport,
-    LegacyReportContext,
-    write_schema_v1_report,
-    write_statistics_json,
-)
+from .reporting import AggregateReport
 from .resources import LoadedResources
-from .telemetry import build_telemetry_plan
+from .telemetry import TelemetryPlan, build_telemetry_plan
 from .temporary import invocation_temporary_directory
 from .transport import HttpTransport, validate_proxy_environment
 from .worker_pool import (
     WorkerPoolInterrupted,
     WorkerPoolRun,
-    run_file_workers_with_stats,
+    run_file_workers,
 )
 
 
@@ -79,53 +77,50 @@ class CoordinatorSettings:
 
 
 @dataclass(frozen=True)
-class CoordinatorOutcome:
-    report: AggregateReport
-    initialization_warning_codes: tuple[str, ...] = ()
+class _WorkerInputs:
+    """Read-only resources prepared once before any worker starts."""
+
+    codeowners: CodeOwnersMatcher
+    telemetry: TelemetryPlan
+    warning_codes: tuple[str, ...]
 
 
-def execute_discovery(
+def _prepare_worker_inputs(
     discovery: DiscoveryResult,
     *,
     settings: CoordinatorSettings,
     endpoints: EndpointSet,
     resources: LoadedResources,
-    logger: logging.Logger | None = None,
-    transport_factory: Callable[[], object] | None = None,
-    clock: Callable[[], float] = time.monotonic,
-    identifier_factory: Callable[[], str] = lambda: str(uuid.uuid4()),
-) -> CoordinatorOutcome:
-    """Run already-authorized tasks; workers never mutate coordinator state."""
-    started = clock()
+    logger: logging.Logger | None,
+) -> _WorkerInputs:
+    """Validate transport settings and snapshot shared enrichment resources."""
     validate_proxy_environment(settings.proxy_environment)
-    matcher = load_codeowners_matcher(
+    codeowners = load_codeowners_matcher(
         explicit_path=settings.codeowners_file,
         workspace_root=settings.workspace,
         context_workspace=resources.context_workspace,
         cwd=settings.invocation_cwd,
         launcher_directory=settings.launcher_directory,
     )
-    telemetry_plan = build_telemetry_plan(
+    telemetry = build_telemetry_plan(
         discovery.tasks,
         resources.telemetry_facts_paths,
         primary_context=resources.primary_context,
     )
-    fingerprint_check = check_api_key_fingerprint(
+    fingerprint = check_api_key_fingerprint(
         resources.primary_context,
         api_key=settings.api_key,
         agentless=endpoints.agentless,
     )
     fingerprint_warnings = (
-        (fingerprint_check.warning_code,)
-        if fingerprint_check.warning_code is not None
-        else ()
+        (fingerprint.warning_code,) if fingerprint.warning_code is not None else ()
     )
-    base_initialization_warnings = tuple(
+    warnings = tuple(
         dict.fromkeys(
             discovery.warning_codes
             + resources.warning_codes
-            + matcher.warnings
-            + telemetry_plan.warning_codes
+            + codeowners.warnings
+            + telemetry.warning_codes
             + fingerprint_warnings
         )
     )
@@ -135,31 +130,47 @@ def execute_discovery(
             "codeowners_file=%s codeowners_rules=%d telemetry_directives=%d",
             len(discovery.tasks),
             len(resources.context_plan.by_repo),
-            str(matcher.source_path) if matcher.source_path is not None else "none",
-            len(matcher.rules),
-            len(telemetry_plan.entries),
+            str(codeowners.source_path) if codeowners.source_path is not None else "none",
+            len(codeowners.rules),
+            len(telemetry.entries),
         )
-        if fingerprint_check.status == "mismatch":
+        if fingerprint.status == "mismatch":
             logger.warning(
                 "warning_code=api_key_fingerprint_mismatch "
                 "DD_API_KEY mismatch between fetch and uploader"
             )
-        elif fingerprint_check.status == "evp_skipped":
+        elif fingerprint.status == "evp_skipped":
             logger.warning(
                 "warning_code=api_key_fingerprint_evp_skipped DD_API_KEY "
                 "fingerprint present but uploader is in EVP mode; check skipped"
             )
         else:
-            logger.debug(
-                "DD_API_KEY fingerprint check status=%s",
-                fingerprint_check.status,
-            )
-        for warning in (
-            code
-            for code in base_initialization_warnings
-            if code not in fingerprint_warnings
-        ):
+            logger.debug("DD_API_KEY fingerprint check status=%s", fingerprint.status)
+        for warning in (code for code in warnings if code not in fingerprint_warnings):
             logger.warning("pre-worker warning_code=%s", warning)
+    return _WorkerInputs(codeowners, telemetry, warnings)
+
+
+def run_discovered_tasks(
+    discovery: DiscoveryResult,
+    *,
+    settings: CoordinatorSettings,
+    endpoints: EndpointSet,
+    resources: LoadedResources,
+    logger: logging.Logger | None = None,
+    transport_factory: Callable[[], object] | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    identifier_factory: Callable[[], str] = lambda: str(uuid.uuid4()),
+) -> AggregateReport:
+    """Run already-authorized tasks; workers never mutate coordinator state."""
+    started = clock()
+    inputs = _prepare_worker_inputs(
+        discovery,
+        settings=settings,
+        endpoints=endpoints,
+        resources=resources,
+        logger=logger,
+    )
 
     temporary_cleanup_errors: list[str] = []
     interrupted = False
@@ -173,7 +184,7 @@ def execute_discovery(
             endpoints=endpoints,
             invocation_temp_root=temporary_root,
             context_plan=resources.context_plan,
-            codeowners_matcher=matcher,
+            codeowners_matcher=inputs.codeowners,
             runtime_id=identifier_factory(),
             rules_version=settings.rules_version,
             uploader_version=settings.uploader_version,
@@ -186,7 +197,7 @@ def execute_discovery(
             keep_payloads=settings.keep_payloads,
             filter_prefix=settings.filter_prefix,
             telemetry_session_id=identifier_factory(),
-            telemetry_plan=telemetry_plan,
+            telemetry_plan=inputs.telemetry,
             logger=logger,
         )
         factory = transport_factory or (
@@ -196,7 +207,7 @@ def execute_discovery(
             )
         )
         try:
-            pool_run: WorkerPoolRun = run_file_workers_with_stats(
+            pool_run: WorkerPoolRun = run_file_workers(
                 discovery.tasks,
                 workers=settings.workers,
                 runtime=runtime,
@@ -228,39 +239,11 @@ def execute_discovery(
                 cancelled,
             )
     initialization_warnings = tuple(
-        dict.fromkeys(base_initialization_warnings + additional_warnings)
+        dict.fromkeys(inputs.warning_codes + additional_warnings)
     )
 
     if logger is not None:
-        for result in pool_run.results:
-            logger.debug(
-                "task=%s type=%s terminal_status=%s attempts=%d retries=%d",
-                result.task_id,
-                result.payload_type.value,
-                result.status.value,
-                result.requests_attempted,
-                result.retries,
-            )
-            for warning_code in result.warning_codes:
-                log_method = (
-                    logger.debug
-                    if result.status is FileStatus.SKIPPED
-                    else logger.warning
-                )
-                log_method(
-                    "task=%s file=%s warning_code=%s",
-                    result.task_id,
-                    result.source_path,
-                    warning_code,
-                )
-            if result.status is FileStatus.FAILED:
-                logger.error(
-                    "task=%s file=%s failure_code=%s detail=%s",
-                    result.task_id,
-                    result.source_path,
-                    result.failure_code or "unknown",
-                    result.failure_message or "none",
-                )
+        _log_worker_results(pool_run, logger)
 
     exit_code = (
         130
@@ -290,32 +273,35 @@ def execute_discovery(
             stats["requests"]["attempted"],
             report.elapsed_seconds,
         )
-    return CoordinatorOutcome(report, initialization_warnings)
+    return report
 
 
-def emit_outcome(
-    outcome: CoordinatorOutcome,
-    *,
-    stream: TextIO,
-    report_json: Path | None = None,
-    legacy_report_context: LegacyReportContext | None = None,
-) -> None:
-    """Render stdout and optional JSON from the exact same aggregate object."""
-    for line in outcome.report.human_lines():
-        print(line, file=stream)
-    if report_json is not None:
-        try:
-            if legacy_report_context is None:
-                write_statistics_json(report_json, outcome.report)
-            else:
-                write_schema_v1_report(
-                    report_json,
-                    outcome.report,
-                    legacy_report_context,
-                )
-        except OSError as exc:
-            print(
-                "[dd-uploader] warning: failed to write uploader report: "
-                f"{type(exc).__name__}",
-                file=stream,
+def _log_worker_results(pool_run: WorkerPoolRun, logger: logging.Logger) -> None:
+    """Emit task diagnostics after workers stop, keeping logging centralized."""
+    for result in pool_run.results:
+        logger.debug(
+            "task=%s type=%s terminal_status=%s attempts=%d retries=%d",
+            result.task_id,
+            result.payload_type.value,
+            result.status.value,
+            result.requests_attempted,
+            result.retries,
+        )
+        for warning_code in result.warning_codes:
+            log_method = (
+                logger.debug if result.status is FileStatus.SKIPPED else logger.warning
+            )
+            log_method(
+                "task=%s file=%s warning_code=%s",
+                result.task_id,
+                result.source_path,
+                warning_code,
+            )
+        if result.status is FileStatus.FAILED:
+            logger.error(
+                "task=%s file=%s failure_code=%s detail=%s",
+                result.task_id,
+                result.source_path,
+                result.failure_code or "unknown",
+                result.failure_message or "none",
             )

@@ -4,7 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Thread-safe uploader logging with bounded, explicit redaction."""
+"""Configure thread-safe uploader logging with explicit redaction.
+
+One logging boundary keeps debug useful without leaking credentials or payloads.
+"""
 
 from __future__ import annotations
 

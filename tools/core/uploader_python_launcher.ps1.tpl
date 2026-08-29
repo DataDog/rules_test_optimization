@@ -4,6 +4,9 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+# Resolve the shared Python entrypoint and generated config from Bazel runfiles.
+# Keeping upload behavior out of this launcher avoids a separate Windows runtime.
+
 param(
     [Parameter(ValueFromRemainingArguments = $true)]
     [string[]]$UploaderArgs
@@ -15,8 +18,7 @@ $script:LauncherDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $script:LauncherBase = [System.IO.Path]::GetFileNameWithoutExtension($script:LauncherPath)
 $script:BatchLauncherPath = Join-Path $script:LauncherDir "$script:LauncherBase.bat"
 $env:DD_TEST_OPTIMIZATION_UPLOADER_LAUNCHER_DIR = $script:LauncherDir
-
-foreach ($manifestCandidate in @(
+$script:RunfilesManifests = @(
     $env:RUNFILES_MANIFEST_FILE,
     "$script:LauncherPath.runfiles_manifest",
     "$script:BatchLauncherPath.runfiles_manifest",
@@ -24,7 +26,9 @@ foreach ($manifestCandidate in @(
     "$script:LauncherPath.runfiles\MANIFEST",
     "$script:BatchLauncherPath.runfiles\MANIFEST",
     (Join-Path $script:LauncherDir "$script:LauncherBase.runfiles\MANIFEST")
-)) {
+)
+
+foreach ($manifestCandidate in $script:RunfilesManifests) {
     if ($manifestCandidate -and
         (Test-Path -LiteralPath $manifestCandidate -PathType Leaf)) {
         $env:RUNFILES_MANIFEST_FILE = (Resolve-Path -LiteralPath $manifestCandidate).Path
@@ -90,16 +94,7 @@ function Resolve-UploaderRunfile {
         }
     }
 
-    $manifests = @(
-        $env:RUNFILES_MANIFEST_FILE,
-        "$script:LauncherPath.runfiles_manifest",
-        "$script:BatchLauncherPath.runfiles_manifest",
-        (Join-Path $script:LauncherDir "$script:LauncherBase.runfiles_manifest"),
-        "$script:LauncherPath.runfiles\MANIFEST",
-        "$script:BatchLauncherPath.runfiles\MANIFEST",
-        (Join-Path $script:LauncherDir "$script:LauncherBase.runfiles\MANIFEST")
-    )
-    foreach ($manifest in $manifests) {
+    foreach ($manifest in $script:RunfilesManifests) {
         if (-not $manifest -or -not (Test-Path -LiteralPath $manifest -PathType Leaf)) {
             continue
         }

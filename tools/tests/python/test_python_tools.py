@@ -5,7 +5,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Unit tests for repository Python tooling scripts."""
+"""Exercise repository-owned Python tools through one Bazel test target.
+
+The shared suite gives small developer scripts consistent runfiles and CI coverage.
+"""
 
 from __future__ import annotations
 

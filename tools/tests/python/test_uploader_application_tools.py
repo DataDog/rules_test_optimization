@@ -5,56 +5,29 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Whole Python uploader application tests without backend access."""
+"""Exercise the whole uploader lifecycle without backend access.
+
+These tests isolate preflight, cleanup, and reporting regressions from HTTP behavior.
+"""
 
 from __future__ import annotations
 
 from io import StringIO
 import json
-import os
 from pathlib import Path
-import sys
 import tempfile
 import unittest
 from unittest import mock
 
+from uploader_test_support import (
+    add_uploader_runtime_to_path,
+    resolve_runfile as _runfile,
+)
 
-def _runfile(rel_path: str) -> Path:
-    workspace = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
-    test_srcdir = os.environ.get("TEST_SRCDIR", "")
-    test_workspace = os.environ.get("TEST_WORKSPACE", "")
-    candidates = []
-    if test_srcdir and test_workspace:
-        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
-    if test_srcdir:
-        candidates.append(Path(test_srcdir) / rel_path)
-    if workspace:
-        candidates.append(Path(workspace) / rel_path)
-    for parent in (Path(__file__).resolve().parent, *Path(__file__).resolve().parents):
-        if (parent / "MODULE.bazel").exists() or (parent / ".git").exists():
-            candidates.append(parent / rel_path)
-            break
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate.resolve()
-    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
-    if manifest_path and Path(manifest_path).is_file():
-        keys = {rel_path, f"{test_workspace}/{rel_path}"}
-        with Path(manifest_path).open("r", encoding="utf-8") as handle:
-            for line in handle:
-                key, separator, value = line.rstrip("\n").partition(" ")
-                if separator and key in keys:
-                    return Path(value)
-    raise FileNotFoundError(f"runfile not found: {rel_path}")
-
-
-CORE_DIR = _runfile("tools/core/uploader_main.py").parent
-if str(CORE_DIR) not in sys.path:
-    sys.path.insert(0, str(CORE_DIR))
+add_uploader_runtime_to_path()
 
 from topt_runtime.runfiles import RunfilesResolver  # noqa: E402
 from uploader_py.application import run_uploader  # noqa: E402
-from uploader_py.coordinator import CoordinatorOutcome  # noqa: E402
 from uploader_py.config import parse_uploader_config  # noqa: E402
 from uploader_py.endpoints import build_endpoints  # noqa: E402
 from uploader_py.freshness import FreshnessError  # noqa: E402
@@ -431,7 +404,7 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(1, report["bep"]["remote_only_outputs"])
             self.assertEqual(0, report["requests"]["attempted"])
 
-    def test_interrupted_worker_outcome_still_prints_and_writes_final_report(self) -> None:
+    def test_interrupted_worker_report_is_printed_and_written(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             output = root / "bazel-testlogs" / "pkg" / "target" / "test.outputs"
@@ -448,7 +421,7 @@ class ApplicationTests(unittest.TestCase):
             )
             stream = StringIO()
 
-            def interrupted_outcome(discovery, *, settings, **_kwargs):
+            def interrupted_report(discovery, *, settings, **_kwargs):
                 report = AggregateReport.create(
                     dry_run=settings.dry_run,
                     exit_code=130,
@@ -461,11 +434,11 @@ class ApplicationTests(unittest.TestCase):
                     cancelled=len(discovery.tasks),
                     initialization_warning_codes=("invocation_interrupted",),
                 )
-                return CoordinatorOutcome(report, report.initialization_warning_codes)
+                return report
 
             with mock.patch(
-                "uploader_py.application.execute_discovery",
-                side_effect=interrupted_outcome,
+                "uploader_py.application.run_discovered_tasks",
+                side_effect=interrupted_report,
             ):
                 exit_code = run_uploader(
                     config,
@@ -564,7 +537,7 @@ class ApplicationTests(unittest.TestCase):
                 "uploader_py.application.WorkspaceLock",
                 RecordingLock,
             ), mock.patch(
-                "uploader_py.application.emit_outcome",
+                "uploader_py.application.emit_report",
                 side_effect=record_report,
             ):
                 exit_code = run_uploader(
@@ -590,7 +563,7 @@ class ApplicationTests(unittest.TestCase):
                 "uploader_py.application.WorkspaceLock",
                 RecordingLock,
             ), mock.patch(
-                "uploader_py.application.emit_outcome",
+                "uploader_py.application.emit_report",
                 side_effect=fail_report,
             ), self.assertRaisesRegex(RuntimeError, "report stream failed"):
                 run_uploader(
