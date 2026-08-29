@@ -17,7 +17,7 @@ from pathlib import Path
 
 
 MAX_TEST_PAYLOAD_BYTES = 4_718_592
-DEFAULT_WORKERS = 4
+DEFAULT_WORKERS = 8
 
 
 class PayloadType(str, Enum):

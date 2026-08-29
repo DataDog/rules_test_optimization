@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 from uploader_test_support import (
@@ -135,11 +136,16 @@ class FreshnessTests(unittest.TestCase):
             )
             resolver = RunfilesResolver.from_environment(cwd=root, environ={})
 
-            prepared = prepare_freshness(
-                config,
-                resolver=resolver,
-                local_testlogs_root=testlogs,
-            )
+            with mock.patch.object(
+                Path,
+                "read_text",
+                side_effect=AssertionError("execution logs must be streamed"),
+            ):
+                prepared = prepare_freshness(
+                    config,
+                    resolver=resolver,
+                    local_testlogs_root=testlogs,
+                )
             discovery = discover_file_tasks(prepared.scan_roots)
             filtered = filter_discovery_for_freshness(
                 discovery,

@@ -500,11 +500,7 @@ def _build_plan(
 
 def _parse_execution_log(path: Path) -> set[tuple[str, str]]:
     eligible: set[tuple[str, str]] = set()
-    try:
-        lines = path.read_text(encoding="utf-8-sig").splitlines()
-    except OSError as exc:
-        raise FreshnessError(f"failed to read execution log JSON {path}: {exc}") from exc
-    for line_number, raw_line in enumerate(lines, start=1):
+    for line_number, raw_line in enumerate(_stream_execution_log(path), start=1):
         if not raw_line.strip():
             continue
         try:
@@ -538,6 +534,15 @@ def _parse_execution_log(path: Path) -> set[tuple[str, str]]:
             if output_key:
                 eligible.add((label, output_key))
     return eligible
+
+
+def _stream_execution_log(path: Path) -> Iterable[str]:
+    """Yield one action record at a time so large logs stay memory-bounded."""
+    try:
+        with path.open("r", encoding="utf-8-sig") as lines:
+            yield from lines
+    except (OSError, UnicodeError) as exc:
+        raise FreshnessError(f"failed to read execution log JSON {path}: {exc}") from exc
 
 
 def _execution_output_key(raw: str) -> str:

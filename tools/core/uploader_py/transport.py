@@ -609,9 +609,14 @@ class HttpTransport:
                     headers=dict(prepared_request.headers),
                     method="POST",
                 )
-                with closing(
-                    self._opener.open(http_request, timeout=self.request_timeout)
-                ) as response:
+                try:
+                    response = self._opener.open(
+                        http_request,
+                        timeout=self.request_timeout,
+                    )
+                except HTTPError as exc:
+                    response = exc
+                with closing(response):
                     status_code = int(response.status)
                     response_excerpt, excerpt_truncated = _bounded_response(
                         response,
@@ -633,17 +638,13 @@ class HttpTransport:
                         )
                     retryable = _retryable_status(status_code)
                     retry_after = response.headers.get("Retry-After")
-            except HTTPError as exc:
-                with closing(exc):
-                    status_code = int(exc.code)
-                    response_excerpt, excerpt_truncated = _bounded_response(
-                        exc,
-                        self.response_limit,
-                    )
-                    retry_after = exc.headers.get("Retry-After")
-                transport_error = None
-                retryable = _retryable_status(status_code)
-            except (URLError, TimeoutError, ConnectionError, http.client.HTTPException) as exc:
+            except (
+                URLError,
+                TimeoutError,
+                ConnectionError,
+                http.client.HTTPException,
+                ssl.SSLError,
+            ) as exc:
                 status_code = None
                 response_excerpt = b""
                 excerpt_truncated = False

@@ -17,13 +17,14 @@ import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 from pathlib import Path
+import ssl
 import tempfile
 import threading
 import time
 from typing import Iterator
 import unittest
 from unittest import mock
-from urllib.error import URLError
+from urllib.error import HTTPError, URLError
 
 from uploader_test_support import add_uploader_runtime_to_path
 
@@ -76,6 +77,11 @@ class _Response(io.BytesIO):
         super().__init__(body)
         self.status = status
         self.headers: dict[str, str] = {}
+
+
+class _TlsReadFailure(_Response):
+    def read(self, _size: int = -1) -> bytes:
+        raise ssl.SSLEOFError(8, "TLS peer closed during response read")
 
 
 @contextmanager
@@ -229,6 +235,57 @@ class HttpTransportTests(unittest.TestCase):
                 self.assertEqual(2, result.attempts)
                 self.assertEqual([2.0], waits)
                 self.assertEqual(2, opener.open.call_count)
+
+    def test_tls_response_read_failures_retry_then_succeed(self) -> None:
+        failures = (
+            _TlsReadFailure(),
+            HTTPError(
+                "https://localhost/upload",
+                503,
+                "unavailable",
+                {},
+                _TlsReadFailure(),
+            ),
+        )
+        for failure in failures:
+            with self.subTest(response=type(failure).__name__):
+                waits: list[float] = []
+                transport = HttpTransport(sleeper=waits.append)
+                opener = mock.Mock()
+                opener.open.side_effect = [failure, _Response()]
+                transport._opener = opener
+
+                result = transport.post_json(
+                    "https://localhost/upload",
+                    {},
+                    b"{}",
+                )
+
+                self.assertTrue(result.succeeded)
+                self.assertEqual(2, result.attempts)
+                self.assertEqual([2.0], waits)
+                self.assertEqual(2, opener.open.call_count)
+
+    def test_certificate_verification_failure_is_terminal(self) -> None:
+        waits: list[float] = []
+        transport = HttpTransport(sleeper=waits.append)
+        opener = mock.Mock()
+        opener.open.side_effect = ssl.SSLCertVerificationError(
+            1,
+            "certificate verify failed",
+        )
+        transport._opener = opener
+
+        result = transport.post_json(
+            "https://localhost/upload",
+            {},
+            b"{}",
+        )
+
+        self.assertFalse(result.succeeded)
+        self.assertEqual(1, result.attempts)
+        self.assertEqual("SSLCertVerificationError", result.transport_error)
+        self.assertEqual([], waits)
 
     def test_debug_logs_attempt_and_retry_without_url_secrets(self) -> None:
         stream = io.StringIO()

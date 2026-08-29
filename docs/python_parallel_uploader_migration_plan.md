@@ -577,9 +577,17 @@ Measure with identical payload fixtures and backend behavior:
 - temporary bytes written;
 - p50/p95 per-file latency.
 
-Compare `workers=1`, the legacy uploader, and at least `workers=2/4/8`. The
-worker default remains conservative (`4`) until supported CI hosts show a
-repeatable benefit without backend throttling or excessive memory/temp usage.
+Compare `workers=1`, the legacy uploader, and at least `workers=2/4/8`.
+
+A local ARM64/Python 3.12 loopback benchmark at commit `123113e` measured the
+real worker pipeline with identical fixtures and rotating execution order. For
+48 small mixed test/coverage/telemetry files, median speedups over one worker
+were `1.99x`, `3.83x`, and `6.14x` with 2, 4, and 8 workers. For eight test
+payloads above the 4.5 MiB split threshold, the corresponding speedups were
+`1.40x`, `1.50x`, and `1.51x`. Based on the network-bound large-batch result,
+the default is `8`; consumers with split-heavy workloads or backend throttling
+can override it to `4`. Continue validating memory, temporary storage, and
+real-backend retry behavior on supported CI hosts.
 
 ## Rollout and Rollback
 

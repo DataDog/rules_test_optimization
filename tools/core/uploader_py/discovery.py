@@ -138,6 +138,11 @@ def discover_file_tasks(
         for payload_type, relative_directory in _PAYLOAD_SUBDIRECTORIES:
             payload_directory = output.path / relative_directory
             if not payload_directory.is_dir():
+                if payload_directory.is_symlink():
+                    warnings.append("payload_symlink_skipped")
+                continue
+            if not _safe_payload_directory(payload_directory, output.path):
+                warnings.append("payload_symlink_skipped")
                 continue
             for source_path in sorted(payload_directory.iterdir(), key=lambda item: item.name):
                 if source_path.is_symlink():
@@ -267,3 +272,17 @@ def _find_test_outputs(root: Path, *, max_depth: int) -> tuple[Path, ...]:
         if max_depth > 0 and depth >= max_depth:
             subdirectories.clear()
     return tuple(sorted(found, key=lambda path: path.as_posix()))
+
+
+def _safe_payload_directory(path: Path, output: Path) -> bool:
+    """Accept only real payload directories contained by their test output."""
+    current = output
+    for part in path.relative_to(output).parts:
+        current /= part
+        if current.is_symlink():
+            return False
+    try:
+        path.resolve().relative_to(output.resolve())
+    except (OSError, ValueError):
+        return False
+    return True

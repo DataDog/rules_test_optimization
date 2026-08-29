@@ -158,7 +158,7 @@ class UploaderConfigTests(unittest.TestCase):
             "keep_payloads": False,
             "filter_prefix": False,
             "gzip_payloads": False,
-            "workers": 4,
+            "workers": 8,
             "expected_targets": ["//pkg:test"],
         }
         body.update(overrides)
@@ -173,6 +173,7 @@ class UploaderConfigTests(unittest.TestCase):
 
     def test_rule_config_defaults_and_fixed_contracts(self) -> None:
         rule = load_rule_config(self.config_path)
+        self.assertEqual(8, DEFAULT_WORKERS)
         self.assertEqual(DEFAULT_WORKERS, rule.workers)
         self.assertEqual(("//pkg:test",), rule.expected_targets)
         self.assertEqual(4_718_592, MAX_TEST_PAYLOAD_BYTES)
@@ -1157,6 +1158,7 @@ class UploaderContractCharacterizationTests(unittest.TestCase):
         text = _runfile("tools/core/test_optimization_uploader.bzl").read_text(encoding="utf-8")
         for name in RULE_ATTRIBUTES:
             self.assertIn(f'"{name}": attr.', text)
+        self.assertIn('"workers": attr.int(default = 8,', text)
 
     def test_python_parser_contains_legacy_and_new_options(self) -> None:
         from uploader_py import config as config_module

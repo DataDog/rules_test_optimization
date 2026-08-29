@@ -198,7 +198,7 @@ dd_test_optimization_targets(
     sync_repo_name = "test_optimization_data",
     uploader_kwargs = {
         "use_python_uploader": True,
-        "workers": 4,
+        "workers": 8,
     },
 )
 ```
@@ -212,7 +212,7 @@ worker can process test, coverage, or telemetry payloads; chunks and other
 derived requests belonging to one source remain sequential. Test and telemetry
 JSON reject non-standard numbers (`NaN` and positive/negative `Infinity`) before
 HTTP; coverage bodies remain opaque JSON/msgpack multipart parts. The
-rule-level `workers` value defaults to `4`; `DD_TEST_OPTIMIZATION_WORKERS`
+rule-level `workers` value defaults to `8`; `DD_TEST_OPTIMIZATION_WORKERS`
 overrides it at runtime and `--workers=<positive-integer>` has highest
 precedence. Leave
 `use_python_uploader = False` (the default) to retain the legacy Bash or
@@ -327,7 +327,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | `0` uploads all payload files; set to `1` to only upload `span_events_*.json` or `coverage_*.json` |
 | `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose attempt, success, startTime, and runfile/CODEOWNERS resolution logging. Terminal test-upload failures always report the HTTP status, a bounded response body, and payload sizes. |
 | `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip test payloads before upload (adds `Content-Encoding: gzip`) |
-| `DD_TEST_OPTIMIZATION_WORKERS` | rule `workers` (`4`) | Override the maximum independent payload-file workers in Python mode; `--workers` has higher precedence |
+| `DD_TEST_OPTIMIZATION_WORKERS` | rule `workers` (`8`) | Override the maximum independent payload-file workers in Python mode; `--workers` has higher precedence |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |

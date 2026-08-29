@@ -983,7 +983,7 @@ _dd_payload_uploader_rule = rule(
         "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TEST_OPTIMIZATION_KEEP_PAYLOADS)"),
         "filter_prefix": attr.bool(default = False, doc = "Boolean gate: only upload files matching span_events_*.json or coverage_*.json; telemetry uploads are always eligible (env: DD_TEST_OPTIMIZATION_FILTER_PREFIX)"),
         "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TEST_OPTIMIZATION_GZIP)"),
-        "workers": attr.int(default = 4, doc = "Maximum number of independent payload-file workers (env: DD_TEST_OPTIMIZATION_WORKERS, CLI: --workers)"),
+        "workers": attr.int(default = 8, doc = "Maximum number of independent payload-file workers (env: DD_TEST_OPTIMIZATION_WORKERS, CLI: --workers)"),
         "use_python_uploader": attr.bool(default = False, doc = "Temporary rollout switch selecting the Python uploader implementation."),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),

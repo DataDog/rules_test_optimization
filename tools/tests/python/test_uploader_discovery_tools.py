@@ -117,6 +117,43 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual((), discovery.tasks)
             self.assertIn("payload_symlink_skipped", discovery.warning_codes)
 
+    def test_payload_directory_symlink_is_never_scheduled(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "pkg" / "target" / "test.outputs"
+            outside = root / "outside" / "tests"
+            outside.mkdir(parents=True)
+            (outside / "events.json").write_text("{}", encoding="utf-8")
+            link = output / "payloads" / "tests"
+            link.parent.mkdir(parents=True)
+            try:
+                link.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlink creation unavailable: {exc}")
+
+            discovery = discover_file_tasks((ScanRoot(root),))
+
+            self.assertEqual((), discovery.tasks)
+            self.assertIn("payload_symlink_skipped", discovery.warning_codes)
+
+    def test_intermediate_payload_symlink_cannot_escape_test_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "pkg" / "target" / "test.outputs"
+            outside = root / "outside" / "payloads"
+            (outside / "tests").mkdir(parents=True)
+            (outside / "tests" / "events.json").write_text("{}", encoding="utf-8")
+            output.mkdir(parents=True)
+            try:
+                (output / "payloads").symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlink creation unavailable: {exc}")
+
+            discovery = discover_file_tasks((ScanRoot(root),))
+
+            self.assertEqual((), discovery.tasks)
+            self.assertIn("payload_symlink_skipped", discovery.warning_codes)
+
     def test_selected_output_never_falls_back_to_stale_local_when_staging_failed(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

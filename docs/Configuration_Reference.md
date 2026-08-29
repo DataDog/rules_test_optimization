@@ -332,7 +332,7 @@ Rule: `dd_payload_uploader(...)`
 | `keep_payloads` | bool | `False` | Keep payload files after successful upload |
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
 | `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
-| `workers` | int | `4` | Maximum independent payload-file workers in Python mode; `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
+| `workers` | int | `8` | Maximum independent payload-file workers in Python mode; `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
 | `use_python_uploader` | bool | `False` | Opt in to the parallel Python uploader; requires host Python 3.10+ at uploader runtime |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
 | `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; missing results are reported while other fresh outputs continue to upload |
