@@ -184,6 +184,7 @@ class UploaderConfigTests(unittest.TestCase):
             "max_wait_sec": "300",
             "fail_on_error": 1,
             "workers": 0,
+            "workspace_name": 1,
             "expected_targets": "//pkg:test",
         }
         for name, value in invalid_values.items():

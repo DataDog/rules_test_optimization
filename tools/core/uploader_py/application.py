@@ -116,21 +116,20 @@ def _run_uploader_with_lock(
 ) -> int:
     """Hold the workspace lock through preflight, cleanup, and reporting."""
     started = clock()
-    expected_plan = ExpectedTargetsPlan()
+    expected_targets_plan = ExpectedTargetsPlan()
     freshness_plan = FreshnessPlan()
-    preparation: FreshnessPreparation | None = None
+    freshness_preparation: FreshnessPreparation | None = None
     raw_discovery = _empty_discovery()
-    filtered_discovery = raw_discovery
-    freshness_skipped = 0
+    freshness_skipped_count = 0
     report: AggregateReport | None = None
-    forced_reason: _ReportReason | None = None
+    report_reason: _ReportReason | None = None
 
     _log_invocation(config, endpoints, resolver, logger)
 
     try:
         # The public wrapper keeps the lock through final report emission.
         workspace_lock.acquire()
-        expected_plan = load_expected_targets(
+        expected_targets_plan = load_expected_targets(
             static_targets=config.rule.expected_targets,
             expected_targets_file_paths=(
                 config.rule.expected_targets_file_path,
@@ -143,30 +142,30 @@ def _run_uploader_with_lock(
             workspace=config.workspace,
             cwd=Path.cwd(),
         )
-        preparation = prepare_freshness(
+        freshness_preparation = prepare_freshness(
             config,
             resolver=resolver,
             local_testlogs_root=local_root,
-            expected_targets=expected_plan.targets,
+            expected_targets=expected_targets_plan.targets,
             logger=logger,
         )
-        freshness_plan = preparation.plan
+        freshness_plan = freshness_preparation.plan
         logger.debug(
             "freshness prepared: selected_source=%s scan_roots=%s "
             "staged_roots=%s eligible=%d cached=%d remote_only=%d",
             freshness_plan.selected_source,
-            tuple(str(root.path) for root in preparation.scan_roots),
-            tuple(str(path) for path in preparation.staged_roots),
+            tuple(str(root.path) for root in freshness_preparation.scan_roots),
+            tuple(str(path) for path in freshness_preparation.staged_roots),
             len(freshness_plan.eligible_outputs),
             len(freshness_plan.cached_outputs),
             len(freshness_plan.remote_only_outputs),
         )
         all_expected_outputs_cached = _all_expected_outputs_cached(
-            expected_plan,
+            expected_targets_plan,
             freshness_plan,
         )
         if (
-            not preparation.scan_roots
+            not freshness_preparation.scan_roots
             and config.fail_on_error
             and not all_expected_outputs_cached
         ):
@@ -175,32 +174,32 @@ def _run_uploader_with_lock(
             )
         raw_discovery = _discover_payloads(
             config,
-            preparation,
+            freshness_preparation,
             all_expected_outputs_cached=all_expected_outputs_cached,
             logger=logger,
         )
 
         expected_discovery = select_expected_outputs(
             raw_discovery,
-            expected_plan,
+            expected_targets_plan,
             allow_missing=freshness_plan.selected_source == "bep",
         )
-        freshness_result = filter_discovery_for_freshness(
+        freshness_selection = filter_discovery_for_freshness(
             expected_discovery,
             freshness_plan,
             freshness_mode=config.freshness_mode,
         )
-        filtered_discovery = freshness_result.discovery
-        freshness_skipped = len(freshness_result.skipped_outputs)
-        for output_key in freshness_result.skipped_outputs:
+        eligible_discovery = freshness_selection.discovery
+        freshness_skipped_count = len(freshness_selection.skipped_outputs)
+        for output_key in freshness_selection.skipped_outputs:
             logger.debug("freshness skipped output_key=%s", output_key)
-        if filtered_discovery.tasks:
+        if eligible_discovery.tasks:
             validate_upload_credentials(config)
         else:
             logger.debug("credential validation skipped: no upload tasks")
         resources = _load_resources(config, resolver, logger)
         report = run_discovered_tasks(
-            filtered_discovery,
+            eligible_discovery,
             settings=CoordinatorSettings.from_config(config),
             endpoints=endpoints,
             resources=resources,
@@ -213,7 +212,7 @@ def _run_uploader_with_lock(
             discovered_by_type=raw_discovery.discovered_by_type,
         )
         if report.exit_code == 130:
-            forced_reason = _ReportReason(
+            report_reason = _ReportReason(
                 code="interrupted",
                 message="Uploader interrupted after active workers finished.",
                 next_steps=(
@@ -224,15 +223,15 @@ def _run_uploader_with_lock(
             try:
                 validate_fresh_outputs_accounted(
                     freshness_plan,
-                    filtered_discovery,
+                    eligible_discovery,
                     report.results,
-                    expected_targets=expected_plan.targets,
+                    expected_targets=expected_targets_plan.targets,
                     fail_on_error=config.fail_on_error,
                 )
             except FreshnessError as exc:
                 logger.error("%s", exc)
                 report = replace(report, exit_code=exc.exit_code)
-                forced_reason = _ReportReason(
+                report_reason = _ReportReason(
                     code="fresh_output_without_payloads",
                     message=str(exc),
                     next_steps=(
@@ -242,16 +241,19 @@ def _run_uploader_with_lock(
 
         if not raw_discovery.tasks:
             if all_expected_outputs_cached:
-                forced_reason = _ReportReason(
+                report_reason = _ReportReason(
                     code="ok",
                     message=(
                         "All expected target outputs were cached; nothing was "
                         "uploaded."
                     ),
                 )
-            elif tests_executed(preparation.scan_roots) and config.fail_on_error:
+            elif (
+                tests_executed(freshness_preparation.scan_roots)
+                and config.fail_on_error
+            ):
                 report = replace(report, exit_code=1)
-                forced_reason = _ReportReason(
+                report_reason = _ReportReason(
                     code="tests_ran_without_payloads",
                     message="Tests ran but no payload files were found.",
                     next_steps=(
@@ -267,16 +269,16 @@ def _run_uploader_with_lock(
             elapsed_seconds=max(0.0, clock() - started),
             discovery=raw_discovery,
         )
-        forced_reason = _preflight_failure_reason(
+        report_reason = _preflight_failure_reason(
             config,
             freshness_plan,
             exc,
         )
     finally:
-        report, forced_reason = _cleanup_staging(
-            preparation,
+        report, report_reason = _cleanup_staging(
+            freshness_preparation,
             report,
-            forced_reason,
+            report_reason,
             config=config,
             discovery=raw_discovery,
             started=started,
@@ -296,9 +298,13 @@ def _run_uploader_with_lock(
         config,
         freshness_plan=freshness_plan,
         raw_discovery=raw_discovery,
-        staged_roots=(preparation.staged_roots if preparation is not None else ()),
-        freshness_skipped=freshness_skipped,
-        forced_reason=forced_reason,
+        staged_roots=(
+            freshness_preparation.staged_roots
+            if freshness_preparation is not None
+            else ()
+        ),
+        freshness_skipped_count=freshness_skipped_count,
+        report_reason=report_reason,
     )
     logger.debug(
         "emitting final report: exit_code=%d results=%d warnings=%s",
@@ -316,9 +322,9 @@ def _run_uploader_with_lock(
 
 
 def _cleanup_staging(
-    preparation: FreshnessPreparation | None,
+    freshness_preparation: FreshnessPreparation | None,
     report: AggregateReport | None,
-    reason: _ReportReason | None,
+    report_reason: _ReportReason | None,
     *,
     config: UploaderConfig,
     discovery: DiscoveryResult,
@@ -327,10 +333,10 @@ def _cleanup_staging(
     logger: logging.Logger,
 ) -> tuple[AggregateReport | None, _ReportReason | None]:
     """Clean owned BEP staging without discarding completed upload results."""
-    if preparation is None:
-        return report, reason
+    if freshness_preparation is None:
+        return report, report_reason
     try:
-        preparation.cleanup()
+        freshness_preparation.cleanup()
     except FreshnessError as exc:
         logger.error("failed to clean BEP staging: %s", exc)
         if report is None:
@@ -351,9 +357,9 @@ def _cleanup_staging(
             initialization_warning_codes=warning_codes,
         )
         if report.exit_code == 2 and (
-            reason is None or reason.code in {"", "ok"}
+            report_reason is None or report_reason.code in {"", "ok"}
         ):
-            reason = _ReportReason(
+            report_reason = _ReportReason(
                 code="staging_cleanup_failed",
                 message=str(exc),
                 next_steps=(
@@ -362,7 +368,7 @@ def _cleanup_staging(
             )
     else:
         logger.debug("BEP staging cleanup completed")
-    return report, reason
+    return report, report_reason
 
 
 def _log_invocation(
@@ -540,10 +546,10 @@ def _legacy_context(
     freshness_plan: FreshnessPlan,
     raw_discovery: DiscoveryResult,
     staged_roots: tuple[Path, ...],
-    freshness_skipped: int,
-    forced_reason: _ReportReason | None,
+    freshness_skipped_count: int,
+    report_reason: _ReportReason | None,
 ) -> LegacyReportContext:
-    report_reason = forced_reason or _ReportReason()
+    final_reason = report_reason or _ReportReason()
     return LegacyReportContext(
         validate_enrichment=config.validate_enrichment,
         artifact_source=config.artifact_source,
@@ -556,7 +562,7 @@ def _legacy_context(
         freshness_eligible_outputs=len(freshness_plan.eligible_outputs),
         freshness_cached_outputs=len(freshness_plan.cached_outputs),
         freshness_remote_only_outputs=len(freshness_plan.remote_only_outputs),
-        freshness_skipped_outputs=freshness_skipped,
+        freshness_skipped_outputs=freshness_skipped_count,
         freshness_missing_output_labels=len(freshness_plan.missing_output_labels),
         staging_dir=str(config.artifact_staging_dir),
         staged_testlogs_dirs=len(staged_roots),
@@ -564,9 +570,9 @@ def _legacy_context(
         staged_remote_artifacts=len(freshness_plan.staged_outputs),
         remote_artifacts_ignored=len(freshness_plan.blocked_labels),
         test_outputs_dirs=len(raw_discovery.outputs),
-        reason_code=report_reason.code,
-        reason=report_reason.message,
-        next_steps=report_reason.next_steps,
+        reason_code=final_reason.code,
+        reason=final_reason.message,
+        next_steps=final_reason.next_steps,
     )
 
 

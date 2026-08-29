@@ -166,7 +166,7 @@ def run_discovered_tasks(
 ) -> AggregateReport:
     """Run already-authorized tasks; workers never mutate coordinator state."""
     started = clock()
-    inputs = _prepare_worker_inputs(
+    worker_inputs = _prepare_worker_inputs(
         discovery,
         settings=settings,
         endpoints=endpoints,
@@ -186,7 +186,7 @@ def run_discovered_tasks(
             endpoints=endpoints,
             invocation_temp_root=temporary_root,
             context_plan=resources.context_plan,
-            codeowners_matcher=inputs.codeowners,
+            codeowners_matcher=worker_inputs.codeowners,
             runtime_id=identifier_factory(),
             rules_version=settings.rules_version,
             uploader_version=settings.uploader_version,
@@ -199,26 +199,26 @@ def run_discovered_tasks(
             keep_payloads=settings.keep_payloads,
             filter_prefix=settings.filter_prefix,
             telemetry_session_id=identifier_factory(),
-            telemetry_plan=inputs.telemetry,
+            telemetry_plan=worker_inputs.telemetry,
             logger=logger,
         )
-        factory = transport_factory or (
+        create_transport = transport_factory or (
             lambda: HttpTransport(
                 proxy_environment=settings.proxy_environment,
                 logger=logger,
             )
         )
         try:
-            pool_run: WorkerPoolRun = run_file_workers(
+            worker_run: WorkerPoolRun = run_file_workers(
                 discovery.tasks,
                 workers=settings.workers,
                 runtime=runtime,
-                transport_factory=factory,
+                transport_factory=create_transport,
                 process_file=process_file,
                 logger=logger,
             )
         except WorkerPoolInterrupted as exc:
-            pool_run = exc.run
+            worker_run = exc.run
             interrupted = True
             cancelled = exc.cancelled
 
@@ -237,30 +237,30 @@ def run_discovered_tasks(
         if logger is not None:
             logger.error(
                 "interrupted after completed=%d cancelled=%d",
-                len(pool_run.results),
+                len(worker_run.results),
                 cancelled,
             )
     initialization_warnings = tuple(
-        dict.fromkeys(inputs.warning_codes + additional_warnings)
+        dict.fromkeys(worker_inputs.warning_codes + additional_warnings)
     )
 
     if logger is not None:
-        _log_worker_results(pool_run, logger)
+        _log_worker_results(worker_run, logger)
 
     exit_code = (
         130
         if interrupted
-        else int(any(result.status is FileStatus.FAILED for result in pool_run.results))
+        else int(any(result.status is FileStatus.FAILED for result in worker_run.results))
     )
     report = AggregateReport.create(
         dry_run=settings.dry_run,
         exit_code=exit_code,
         configured_workers=settings.workers,
-        worker_threads=pool_run.worker_threads,
-        peak_active_workers=pool_run.peak_active_workers,
+        worker_threads=worker_run.worker_threads,
+        peak_active_workers=worker_run.peak_active_workers,
         elapsed_seconds=max(0.0, clock() - started),
         discovered_by_type=discovery.counts(),
-        results=pool_run.results,
+        results=worker_run.results,
         cancelled=cancelled,
         initialization_warning_codes=initialization_warnings,
     )
@@ -278,9 +278,9 @@ def run_discovered_tasks(
     return report
 
 
-def _log_worker_results(pool_run: WorkerPoolRun, logger: logging.Logger) -> None:
+def _log_worker_results(worker_run: WorkerPoolRun, logger: logging.Logger) -> None:
     """Emit task diagnostics after workers stop, keeping logging centralized."""
-    for result in pool_run.results:
+    for result in worker_run.results:
         logger.debug(
             "task=%s type=%s terminal_status=%s attempts=%d retries=%d",
             result.task_id,

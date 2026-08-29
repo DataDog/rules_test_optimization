@@ -69,23 +69,23 @@ class FreshnessPreparation:
     plan: FreshnessPlan
     scan_roots: tuple[ScanRoot, ...]
     staged_roots: tuple[Path, ...] = ()
-    _doctor: ModuleType | None = None
+    _doctor_runtime: ModuleType | None = None
     _staged_artifacts: tuple[object, ...] = ()
-    _staging_base: Path | None = None
+    _staging_base_path: Path | None = None
 
     def cleanup(self) -> None:
         """Remove only per-invocation staging roots owned by the doctor."""
         if not self._staged_artifacts:
             return
-        assert self._doctor is not None
-        assert self._staging_base is not None
+        assert self._doctor_runtime is not None
+        assert self._staging_base_path is not None
         try:
-            self._doctor._cleanup_staged_bep_run_roots(
+            self._doctor_runtime._cleanup_staged_bep_run_roots(
                 self._staged_artifacts,
-                staging_base=self._staging_base,
+                staging_base=self._staging_base_path,
             )
         except SystemExit as exc:
-            raise FreshnessError(_doctor_failure(self._doctor, exc)) from exc
+            raise FreshnessError(_doctor_failure(self._doctor_runtime, exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -103,64 +103,63 @@ def prepare_freshness(
     logger: logging.Logger | None = None,
 ) -> FreshnessPreparation:
     """Parse freshness and optionally stage BEP artifacts before discovery."""
-    expected = frozenset(expected_targets)
-    warnings: list[str] = []
-    has_configured_bep = bool(config.bep_json_files)
+    expected_target_set = frozenset(expected_targets)
+    warning_codes: list[str] = []
+    bep_configured = bool(config.bep_json_files)
     staging_requested = config.artifact_source == "bep" or (
         config.artifact_source == "auto" and config.remote_artifacts != "disabled"
     )
-    if config.artifact_source == "bep" and not has_configured_bep:
+    if config.artifact_source == "bep" and not bep_configured:
         raise FreshnessError(
             "--artifact-source=bep requires --bep-json or "
             "DD_TEST_OPTIMIZATION_BEP_JSON"
         )
 
-    selected_source = _select_source(config, has_configured_bep, warnings)
-    parse_bep = selected_source == "bep" or staging_requested
-    resolved_bep: tuple[Path, ...] = ()
-    doctor: ModuleType | None = None
-    staged: tuple[object, ...] = ()
-    staging_base: Path | None = None
-    selected_artifacts: set[tuple[str, str]] = set()
+    selected_source = _select_source(config, bep_configured, warning_codes)
+    bep_processing_required = selected_source == "bep" or staging_requested
+    doctor_runtime: ModuleType | None = None
+    staged_artifacts: tuple[object, ...] = ()
+    staging_base_path: Path | None = None
+    selected_artifact_outputs: set[tuple[str, str]] = set()
     blocked_labels: set[str] = set()
-    freshness = None
+    doctor_freshness = None
 
-    if parse_bep:
-        if not has_configured_bep:
+    if bep_processing_required:
+        if not bep_configured:
             raise FreshnessError("BEP artifact staging requires a configured BEP JSON file")
-        resolved_bep = tuple(
+        bep_files = tuple(
             _resolve_runtime_file(path, workspace=config.workspace)
             for path in config.bep_json_files
         )
         doctor_path = _resolve_doctor_runtime(config, resolver)
-        doctor = _load_doctor_runtime(doctor_path, warnings)
-        unavailable_is_error = config.freshness_mode != "optional" or staging_requested
+        doctor_runtime = _load_doctor_runtime(doctor_path, warning_codes)
+        freshness_unavailable_is_error = config.freshness_mode != "optional" or staging_requested
         try:
-            freshness = doctor._parse_bep_freshness(
-                list(resolved_bep),
-                unavailable_is_error=unavailable_is_error,
+            doctor_freshness = doctor_runtime._parse_bep_freshness(
+                list(bep_files),
+                unavailable_is_error=freshness_unavailable_is_error,
             )
-            if freshness is not None:
+            if doctor_freshness is not None:
                 if staging_requested:
-                    selected_artifacts = set(
-                        doctor._selected_bep_artifact_outputs(
-                            freshness,
+                    selected_artifact_outputs = set(
+                        doctor_runtime._selected_bep_artifact_outputs(
+                            doctor_freshness,
                             config.workspace,
                             config.remote_artifacts,
                         )
                     )
                     blocked_labels = set(
-                        doctor._blocked_bep_artifact_labels(
-                            freshness,
+                        doctor_runtime._blocked_bep_artifact_labels(
+                            doctor_freshness,
                             config.remote_artifacts,
                         )
                     )
-                    staging_base = config.artifact_staging_dir.resolve()
-                    staged = tuple(
-                        doctor._stage_bep_artifacts(
-                            freshness,
+                    staging_base_path = config.artifact_staging_dir.resolve()
+                    staged_artifacts = tuple(
+                        doctor_runtime._stage_bep_artifacts(
+                            doctor_freshness,
                             workspace=config.workspace,
-                            staging_dir=staging_base,
+                            staging_dir=staging_base_path,
                             remote_artifacts=config.remote_artifacts,
                             downloader=(
                                 str(config.bep_artifact_downloader)
@@ -172,18 +171,18 @@ def prepare_freshness(
                             ),
                         )
                     )
-                    doctor._apply_staged_bep_artifacts_to_freshness(
-                        freshness,
-                        list(staged),
+                    doctor_runtime._apply_staged_bep_artifacts_to_freshness(
+                        doctor_freshness,
+                        list(staged_artifacts),
                     )
         except SystemExit as exc:
-            raise FreshnessError(_doctor_failure(doctor, exc)) from exc
+            raise FreshnessError(_doctor_failure(doctor_runtime, exc)) from exc
         except BaseException:
             # Staging must not survive interrupts or unexpected doctor errors.
-            if staged and staging_base is not None:
-                doctor._cleanup_staged_bep_run_roots(
-                    staged,
-                    staging_base=staging_base,
+            if staged_artifacts and staging_base_path is not None:
+                doctor_runtime._cleanup_staged_bep_run_roots(
+                    staged_artifacts,
+                    staging_base=staging_base_path,
                 )
             raise
 
@@ -191,34 +190,34 @@ def prepare_freshness(
         plan = _build_plan(
             config,
             selected_source=selected_source,
-            freshness=freshness,
-            selected_artifacts=selected_artifacts,
+            doctor_freshness=doctor_freshness,
+            selected_artifact_outputs=selected_artifact_outputs,
             blocked_labels=blocked_labels,
-            expected_targets=expected,
-            warnings=warnings,
+            expected_targets=expected_target_set,
+            warning_codes=warning_codes,
             staged_outputs={
-                (str(item.label), str(item.output_key)) for item in staged
+                (str(item.label), str(item.output_key)) for item in staged_artifacts
             },
         )
     except BaseException:
         # Planning failures must obey the same ownership cleanup contract.
-        if staged and doctor is not None and staging_base is not None:
-            doctor._cleanup_staged_bep_run_roots(
-                staged,
-                staging_base=staging_base,
+        if staged_artifacts and doctor_runtime is not None and staging_base_path is not None:
+            doctor_runtime._cleanup_staged_bep_run_roots(
+                staged_artifacts,
+                staging_base=staging_base_path,
             )
         raise
 
-    roots: list[ScanRoot] = []
+    scan_roots: list[ScanRoot] = []
     if local_testlogs_root is not None:
-        roots.append(ScanRoot(local_testlogs_root))
+        scan_roots.append(ScanRoot(local_testlogs_root))
     staged_roots = tuple(
         sorted(
-            {Path(item.staging_root).resolve() for item in staged},
+            {Path(item.staging_root).resolve() for item in staged_artifacts},
             key=lambda path: path.as_posix(),
         )
     )
-    roots.extend(ScanRoot(root, staged=True) for root in staged_roots)
+    scan_roots.extend(ScanRoot(root, staged=True) for root in staged_roots)
     if logger is not None:
         logger.debug(
             "freshness ready: source=%s eligible=%d cached=%d remote_only=%d "
@@ -233,11 +232,11 @@ def prepare_freshness(
             logger.warning("preflight warning_code=%s", warning)
     return FreshnessPreparation(
         plan=plan,
-        scan_roots=tuple(roots),
+        scan_roots=tuple(scan_roots),
         staged_roots=staged_roots,
-        _doctor=doctor,
-        _staged_artifacts=staged,
-        _staging_base=staging_base,
+        _doctor_runtime=doctor_runtime,
+        _staged_artifacts=staged_artifacts,
+        _staging_base_path=staging_base_path,
     )
 
 
@@ -250,7 +249,7 @@ def filter_discovery_for_freshness(
     """Select current-invocation outputs and stamp worker tasks with labels."""
     selected_outputs = []
     task_label_by_output: dict[str, str] = {}
-    skipped: list[str] = []
+    skipped_output_keys: list[str] = []
     tasks_by_output: dict[str, list[FileTask]] = {}
     for task in discovery.tasks:
         tasks_by_output.setdefault(task.output_key or "", []).append(task)
@@ -268,7 +267,7 @@ def filter_discovery_for_freshness(
         if target_label:
             task_label_by_output[output.output_key] = target_label
         if target_label in plan.blocked_labels:
-            skipped.append(output.output_key)
+            skipped_output_keys.append(output.output_key)
             continue
         if not plan.eligibility_enabled:
             selected_outputs.append(output)
@@ -279,7 +278,7 @@ def filter_discovery_for_freshness(
                     "BEP required freshness cannot authorize "
                     f"{output.path} because bazel.target metadata is missing"
                 )
-            skipped.append(output.output_key)
+            skipped_output_keys.append(output.output_key)
             continue
         pair = (target_label, output.output_key)
         if pair in plan.eligible_outputs:
@@ -295,7 +294,7 @@ def filter_discovery_for_freshness(
                 f"{output.path} because the fresh TestResult for {target_label} "
                 "did not contain a mappable test.outputs reference"
             )
-        skipped.append(output.output_key)
+        skipped_output_keys.append(output.output_key)
 
     selected_keys = {output.output_key for output in selected_outputs}
     selected_tasks = tuple(
@@ -307,7 +306,7 @@ def filter_discovery_for_freshness(
         for task in discovery.tasks
         if (task.output_key or "") in selected_keys
     )
-    filtered = DiscoveryResult(
+    filtered_discovery = DiscoveryResult(
         outputs=tuple(selected_outputs),
         tasks=selected_tasks,
         discovered_by_type=count_tasks_by_payload_type(selected_tasks),
@@ -315,11 +314,11 @@ def filter_discovery_for_freshness(
             dict.fromkeys(
                 discovery.warning_codes
                 + plan.warning_codes
-                + (("freshness_outputs_skipped",) if skipped else ())
+                + (("freshness_outputs_skipped",) if skipped_output_keys else ())
             )
         ),
     )
-    return FreshnessFilterResult(filtered, tuple(sorted(set(skipped))))
+    return FreshnessFilterResult(filtered_discovery, tuple(sorted(set(skipped_output_keys))))
 
 
 def validate_fresh_outputs_accounted(
@@ -345,11 +344,11 @@ def validate_fresh_outputs_accounted(
         and task.target_label is not None
         and task.output_key is not None
     }
-    expected = frozenset(expected_targets)
-    if expected:
-        missing = sorted(plan.eligible_outputs.difference(handled_pairs))
-        if missing:
-            label, output_key = missing[0]
+    expected_target_set = frozenset(expected_targets)
+    if expected_target_set:
+        unhandled_outputs = sorted(plan.eligible_outputs.difference(handled_pairs))
+        if unhandled_outputs:
+            label, output_key = unhandled_outputs[0]
             raise FreshnessError(
                 "fresh expected test output produced no uploadable payloads: "
                 f"{label} {output_key}",
@@ -366,47 +365,47 @@ def validate_fresh_outputs_accounted(
 
 def _select_source(
     config: UploaderConfig,
-    has_bep: bool,
-    warnings: list[str],
+    bep_configured: bool,
+    warning_codes: list[str],
 ) -> str:
     if config.freshness_mode == "disabled":
-        if has_bep:
-            warnings.append("freshness_disabled_bep_ignored")
+        if bep_configured:
+            warning_codes.append("freshness_disabled_bep_ignored")
         if config.execution_log_json is not None:
-            warnings.append("freshness_disabled_execution_log_ignored")
+            warning_codes.append("freshness_disabled_execution_log_ignored")
         return "none"
-    required = config.freshness_mode == "required" or (
+    freshness_required = config.freshness_mode == "required" or (
         config.freshness_mode == "auto" and config.ci
     )
     if config.freshness_source == "bep":
-        if has_bep:
+        if bep_configured:
             return "bep"
-        if required:
+        if freshness_required:
             raise FreshnessError(
                 "BEP freshness filtering is required but no BEP JSON file was configured"
             )
-        warnings.append("bep_freshness_not_configured")
+        warning_codes.append("bep_freshness_not_configured")
         return "none"
     if config.freshness_source == "execution_log":
         if config.execution_log_json is not None:
             return "execution_log"
-        if required:
+        if freshness_required:
             raise FreshnessError(
                 "execution-log freshness filtering is required but no execution log "
                 "was configured"
             )
-        warnings.append("execution_log_freshness_not_configured")
+        warning_codes.append("execution_log_freshness_not_configured")
         return "none"
-    if has_bep:
+    if bep_configured:
         return "bep"
     if config.execution_log_json is not None:
         return "execution_log"
-    if required:
+    if freshness_required:
         raise FreshnessError(
             "freshness filtering is required in CI or required mode, but no BEP "
             "or execution log was configured"
         )
-    warnings.append("freshness_not_configured")
+    warning_codes.append("freshness_not_configured")
     return "none"
 
 
@@ -414,11 +413,11 @@ def _build_plan(
     config: UploaderConfig,
     *,
     selected_source: str,
-    freshness: object | None,
-    selected_artifacts: set[tuple[str, str]],
+    doctor_freshness: object | None,
+    selected_artifact_outputs: set[tuple[str, str]],
     blocked_labels: set[str],
     expected_targets: frozenset[str],
-    warnings: list[str],
+    warning_codes: list[str],
     staged_outputs: set[tuple[str, str]],
 ) -> FreshnessPlan:
     if selected_source == "execution_log":
@@ -427,46 +426,46 @@ def _build_plan(
             config.execution_log_json,
             workspace=config.workspace,
         )
-        eligible = _parse_execution_log(execution_log)
+        eligible_outputs = _parse_execution_log(execution_log)
         if expected_targets:
-            eligible = {pair for pair in eligible if pair[0] in expected_targets}
+            eligible_outputs = {pair for pair in eligible_outputs if pair[0] in expected_targets}
         return FreshnessPlan(
             selected_source="execution_log",
             eligibility_enabled=True,
-            eligible_outputs=frozenset(eligible),
-            warning_codes=tuple(dict.fromkeys(warnings)),
+            eligible_outputs=frozenset(eligible_outputs),
+            warning_codes=tuple(dict.fromkeys(warning_codes)),
         )
 
-    if freshness is None:
+    if doctor_freshness is None:
         return FreshnessPlan(
             selected_source="none",
-            selected_artifact_outputs=frozenset(selected_artifacts),
+            selected_artifact_outputs=frozenset(selected_artifact_outputs),
             blocked_labels=frozenset(blocked_labels),
-            warning_codes=tuple(dict.fromkeys(warnings)),
+            warning_codes=tuple(dict.fromkeys(warning_codes)),
         )
 
-    eligible = set(freshness.eligible_outputs)
-    cached = set(freshness.cached_outputs)
-    remote = tuple(
+    eligible_outputs = set(doctor_freshness.eligible_outputs)
+    cached_outputs = set(doctor_freshness.cached_outputs)
+    remote_outputs = tuple(
         RemoteOutput(item.label, item.output_key, item.artifact)
-        for item in freshness.remote_only_outputs
+        for item in doctor_freshness.remote_only_outputs
     )
-    missing = set(freshness.missing_output_mappings)
+    missing_output_labels = set(doctor_freshness.missing_output_mappings)
     if expected_targets:
-        eligible = {pair for pair in eligible if pair[0] in expected_targets}
-        cached = {pair for pair in cached if pair[0] in expected_targets}
-        remote = tuple(item for item in remote if item.label in expected_targets)
-        missing.intersection_update(expected_targets)
+        eligible_outputs = {pair for pair in eligible_outputs if pair[0] in expected_targets}
+        cached_outputs = {pair for pair in cached_outputs if pair[0] in expected_targets}
+        remote_outputs = tuple(item for item in remote_outputs if item.label in expected_targets)
+        missing_output_labels.intersection_update(expected_targets)
         covered_labels = {
-            label for label, _output_key in eligible.union(cached)
-        }.union(item.label for item in remote).union(missing)
+            label for label, _output_key in eligible_outputs.union(cached_outputs)
+        }.union(item.label for item in remote_outputs).union(missing_output_labels)
         absent = sorted(expected_targets.difference(covered_labels))
         if absent:
             raise FreshnessError(
                 "expected target output is neither fresh nor exclusively cached in "
                 f"BEP: {absent[0]} (no TestResult matched this target)"
             )
-        missing_expected = sorted(expected_targets.intersection(missing))
+        missing_expected = sorted(expected_targets.intersection(missing_output_labels))
         if missing_expected:
             raise FreshnessError(
                 "expected target output is neither fresh nor exclusively cached in "
@@ -474,28 +473,28 @@ def _build_plan(
                 "a mappable test.outputs reference)"
             )
 
-    if remote:
+    if remote_outputs:
         if config.freshness_mode == "required" or config.remote_artifacts == "required":
-            first = remote[0]
+            first_remote_output = remote_outputs[0]
             raise FreshnessError(
                 "BEP references remote-only test outputs for "
-                f"{first.label}, but local test.outputs was not found"
+                f"{first_remote_output.label}, but local test.outputs was not found"
             )
-        warnings.append("bep_remote_only_outputs_skipped")
+        warning_codes.append("bep_remote_only_outputs_skipped")
 
     return FreshnessPlan(
         selected_source=selected_source,
         eligibility_enabled=selected_source == "bep",
-        eligible_outputs=frozenset(eligible),
-        cached_outputs=frozenset(cached),
-        remote_only_outputs=remote,
-        missing_output_labels=frozenset(missing),
+        eligible_outputs=frozenset(eligible_outputs),
+        cached_outputs=frozenset(cached_outputs),
+        remote_only_outputs=remote_outputs,
+        missing_output_labels=frozenset(missing_output_labels),
         blocked_labels=frozenset(blocked_labels),
-        selected_artifact_outputs=frozenset(selected_artifacts),
+        selected_artifact_outputs=frozenset(selected_artifact_outputs),
         staged_outputs=frozenset(
-            pair for pair in eligible if pair in staged_outputs
+            pair for pair in eligible_outputs if pair in staged_outputs
         ),
-        warning_codes=tuple(dict.fromkeys(warnings)),
+        warning_codes=tuple(dict.fromkeys(warning_codes)),
     )
 
 
@@ -594,8 +593,8 @@ def _resolve_doctor_runtime(
         raise FreshnessError("doctor runtime could not be resolved from runfiles") from exc
 
 
-def _load_doctor_runtime(path: Path, warnings: list[str]) -> ModuleType:
-    name = f"_dd_topt_uploader_doctor_{id(warnings)}"
+def _load_doctor_runtime(path: Path, warning_codes: list[str]) -> ModuleType:
+    name = f"_dd_topt_uploader_doctor_{id(warning_codes)}"
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise FreshnessError(f"doctor runtime is not importable: {path}")
@@ -606,11 +605,11 @@ def _load_doctor_runtime(path: Path, warnings: list[str]) -> ModuleType:
     except BaseException:
         sys.modules.pop(name, None)
         raise
-    module._warn = lambda _message: warnings.append("bep_runtime_warning")
+    module._warn = lambda _message: warning_codes.append("bep_runtime_warning")
     module._info = lambda _message: None
     return module
 
 
-def _doctor_failure(doctor: ModuleType, exc: SystemExit) -> str:
-    message = getattr(doctor, "_LAST_FAILURE_MESSAGE", "")
+def _doctor_failure(doctor_runtime: ModuleType, exc: SystemExit) -> str:
+    message = getattr(doctor_runtime, "_LAST_FAILURE_MESSAGE", "")
     return message or f"doctor BEP runtime failed with exit code {exc.code}"

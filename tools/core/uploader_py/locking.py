@@ -91,7 +91,7 @@ class WorkspaceLock:
         self._process_alive = process_alive
         self._platform = platform
         self._owned = False
-        self._windows_handle: BinaryIO | None = None
+        self._windows_lock_file: BinaryIO | None = None
 
     @property
     def acquired(self) -> bool:
@@ -138,12 +138,12 @@ class WorkspaceLock:
             try:
                 self.path.mkdir()
             except FileExistsError:
-                state = self._inspect_unix_lock()
-                if state == "dead":
+                lock_state = self._inspect_unix_lock()
+                if lock_state == "dead":
                     last_detail = "stale lock could not be removed"
                     self._remove_unix_lock_if_simple()
                     continue
-                if state == "alive":
+                if lock_state == "alive":
                     raise WorkspaceLockError(
                         f"another uploader is already running (lock: {self.path})"
                     )
@@ -158,8 +158,8 @@ class WorkspaceLock:
 
             try:
                 pid_path = self.path / "pid"
-                with pid_path.open("x", encoding="ascii") as handle:
-                    handle.write(f"{os.getpid()}\n")
+                with pid_path.open("x", encoding="ascii") as pid_file:
+                    pid_file.write(f"{os.getpid()}\n")
             except OSError as exc:
                 self._remove_unix_lock_if_simple()
                 raise WorkspaceLockError(
@@ -177,12 +177,12 @@ class WorkspaceLock:
         if self.path.is_symlink() or not self.path.is_dir():
             return "incomplete"
         try:
-            raw_pid = (self.path / "pid").read_text(encoding="ascii").strip()
+            pid_text = (self.path / "pid").read_text(encoding="ascii").strip()
         except (FileNotFoundError, OSError, UnicodeError):
             return "dead" if self._incomplete_lock_is_stale() else "incomplete"
-        if not raw_pid.isdecimal() or int(raw_pid) <= 0:
+        if not pid_text.isdecimal() or int(pid_text) <= 0:
             return "dead" if self._incomplete_lock_is_stale() else "incomplete"
-        return "alive" if self._process_alive(int(raw_pid)) else "dead"
+        return "alive" if self._process_alive(int(pid_text)) else "dead"
 
     def _incomplete_lock_is_stale(self) -> bool:
         try:
@@ -222,10 +222,10 @@ class WorkspaceLock:
         if self.path.is_symlink() or not self.path.is_dir():
             return
         try:
-            raw_pid = (self.path / "pid").read_text(encoding="ascii").strip()
+            pid_text = (self.path / "pid").read_text(encoding="ascii").strip()
         except (OSError, UnicodeError):
             return
-        if raw_pid != str(os.getpid()):
+        if pid_text != str(os.getpid()):
             return
         self._remove_unix_lock_if_simple()
 
@@ -238,21 +238,21 @@ class WorkspaceLock:
             raise WorkspaceLockError("Unix locking support is unavailable") from exc
 
         guard_path = self.path.with_name(self.path.name + ".guard")
-        handle: BinaryIO | None = None
+        guard_file: BinaryIO | None = None
         try:
-            handle = guard_path.open("a+b")
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            guard_file = guard_path.open("a+b")
+            fcntl.flock(guard_file.fileno(), fcntl.LOCK_EX)
             yield
         except OSError as exc:
             raise WorkspaceLockError(
                 f"failed to coordinate workspace lock {self.path}: {exc}"
             ) from exc
         finally:
-            if handle is not None:
+            if guard_file is not None:
                 try:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                    fcntl.flock(guard_file.fileno(), fcntl.LOCK_UN)
                 finally:
-                    handle.close()
+                    guard_file.close()
 
     def _acquire_windows(self) -> None:
         try:
@@ -260,30 +260,31 @@ class WorkspaceLock:
         except ImportError as exc:  # pragma: no cover - guarded by Windows CI
             raise WorkspaceLockError("Windows locking support is unavailable") from exc
 
-        last_error: OSError | None = None
+        last_lock_error: OSError | None = None
         for attempt in range(self.attempts):
-            handle: BinaryIO | None = None
+            lock_file: BinaryIO | None = None
             try:
-                handle = self.path.open("a+b")
-                handle.seek(0, os.SEEK_END)
-                if handle.tell() == 0:
-                    handle.write(b"\0")
-                    handle.flush()
-                handle.seek(0)
-                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                lock_file = self.path.open("a+b")
+                lock_file.seek(0, os.SEEK_END)
+                if lock_file.tell() == 0:
+                    lock_file.write(b"\0")
+                    lock_file.flush()
+                lock_file.seek(0)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError as exc:
-                last_error = exc
-                if handle is not None:
-                    handle.close()
+                last_lock_error = exc
+                if lock_file is not None:
+                    lock_file.close()
                 if attempt + 1 < self.attempts:
                     self._sleeper(self.retry_seconds)
                 continue
-            self._windows_handle = handle
+            self._windows_lock_file = lock_file
             self._owned = True
             return
 
         raise WorkspaceLockError(
-            f"another uploader is already running (lock: {self.path}): {last_error}"
+            "another uploader is already running "
+            f"(lock: {self.path}): {last_lock_error}"
         )
 
     def _release_windows(self) -> None:
@@ -291,15 +292,15 @@ class WorkspaceLock:
             import msvcrt
         except ImportError:  # pragma: no cover - guarded by Windows CI
             return
-        handle = self._windows_handle
-        self._windows_handle = None
-        if handle is None:
+        lock_file = self._windows_lock_file
+        self._windows_lock_file = None
+        if lock_file is None:
             return
         try:
-            handle.seek(0)
-            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+            lock_file.seek(0)
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
         finally:
-            handle.close()
+            lock_file.close()
         try:
             self.path.unlink()
         except FileNotFoundError:

@@ -81,7 +81,7 @@ def run_file_workers(
 
     worker_count = min(workers, len(planned_tasks))
     try:
-        transports = tuple(transport_factory() for _ in range(worker_count))
+        worker_transports = tuple(transport_factory() for _ in range(worker_count))
     except Exception as exc:
         raise WorkerPoolError(
             f"failed to initialize worker transport: {type(exc).__name__}"
@@ -144,6 +144,8 @@ def run_file_workers(
                                 "file processor returned a result for a different task"
                             )
                     except Exception as exc:
+                        # A broken file pipeline becomes that file's terminal
+                        # result; it must not tear down unrelated workers.
                         result = FileResult(
                             task_id=task.task_id,
                             source_path=task.display_path,
@@ -170,14 +172,14 @@ def run_file_workers(
             finally:
                 task_queue.task_done()
 
-    threads = tuple(
+    worker_threads = tuple(
         threading.Thread(
             target=worker_loop,
             args=(transport,),
             name=f"dd-uploader-worker-{index + 1}",
             daemon=False,
         )
-        for index, transport in enumerate(transports)
+        for index, transport in enumerate(worker_transports)
     )
     started_threads: list[threading.Thread] = []
 
@@ -196,7 +198,7 @@ def run_file_workers(
         task_queue.join()
 
     try:
-        for thread in threads:
+        for thread in worker_threads:
             thread.start()
             started_threads.append(thread)
         for task in planned_tasks:
@@ -258,14 +260,14 @@ def _collect_run(
     require_complete: bool,
 ) -> WorkerPoolRun:
     """Drain terminal results and restore deterministic intake order."""
-    completed: list[FileResult] = []
+    completed_results: list[FileResult] = []
     while True:
         try:
-            completed.append(result_queue.get_nowait())
+            completed_results.append(result_queue.get_nowait())
         except Empty:
             break
-    results_by_id = {result.task_id: result for result in completed}
-    if len(results_by_id) != len(completed):
+    results_by_id = {result.task_id: result for result in completed_results}
+    if len(results_by_id) != len(completed_results):
         raise WorkerPoolError("worker pool returned duplicate task results")
     planned_ids = {task.task_id for task in planned_tasks}
     if any(task_id not in planned_ids for task_id in results_by_id):

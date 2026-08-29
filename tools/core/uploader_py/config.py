@@ -55,7 +55,6 @@ class ConfigError(ValueError):
 class RuleConfig:
     """Analysis-time values written by the Bazel uploader rule."""
 
-    schema_version: int = CONFIG_SCHEMA_VERSION
     quiescent_sec: int = 10
     max_wait_sec: int = 300
     fail_on_error: bool = False
@@ -66,7 +65,6 @@ class RuleConfig:
     workers: int = DEFAULT_WORKERS
     rules_version: str = ""
     uploader_version: str = ""
-    workspace_name: str = ""
     context_manifest_path: str = ""
     context_manifest_short_path: str = ""
     telemetry_facts_manifest_path: str = ""
@@ -85,7 +83,6 @@ class UploaderConfig:
     """Fully resolved immutable configuration shared with workers."""
 
     rule: RuleConfig
-    config_path: Path
     workspace: Path
     lock_workspace: str
     invocation_cwd: Path
@@ -164,11 +161,11 @@ def parse_uploader_config(
 
     def text_option(
         cli_value: str | None,
-        variable: str,
+        environment_variable: str,
         default: str = "",
     ) -> str:
         """Prefer an explicit CLI value to its environment fallback."""
-        return cli_value if cli_value is not None else env.get(variable) or default
+        return cli_value if cli_value is not None else env.get(environment_variable) or default
 
     config_path = Path(args.config)
     rule = load_rule_config(config_path)
@@ -216,93 +213,95 @@ def parse_uploader_config(
     if args.validate_enrichment and not args.dry_run:
         raise ConfigError("--validate-enrichment requires --dry-run")
 
-    freshness_source_value = text_option(
+    freshness_source_text = text_option(
         args.freshness_source,
         "DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE",
         "auto",
     )
     freshness_source = _choice(
         "--freshness-source/DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE",
-        freshness_source_value,
+        freshness_source_text,
         VALID_FRESHNESS_SOURCES,
     )
-    new_freshness_mode = text_option(args.freshness_mode, "DD_TEST_OPTIMIZATION_FRESHNESS_MODE")
+    freshness_mode_text = text_option(args.freshness_mode, "DD_TEST_OPTIMIZATION_FRESHNESS_MODE")
     legacy_freshness_mode = text_option(
         args.execution_log_mode,
         "DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE",
     )
     freshness_mode = _choice(
         "--freshness-mode/DD_TEST_OPTIMIZATION_FRESHNESS_MODE",
-        new_freshness_mode or legacy_freshness_mode or "auto",
+        freshness_mode_text or legacy_freshness_mode or "auto",
         VALID_FRESHNESS_MODES,
     )
     if args.allow_cached_payload_uploads:
         freshness_mode = "disabled"
 
-    artifact_source_value = text_option(
+    artifact_source_text = text_option(
         args.artifact_source,
         "DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE",
         "local",
     )
     artifact_source = _choice(
         "--artifact-source/DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE",
-        artifact_source_value,
+        artifact_source_text,
         VALID_ARTIFACT_SOURCES,
     )
-    remote_artifacts_value = text_option(
+    remote_artifacts_text = text_option(
         args.remote_artifacts,
         "DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS",
         "disabled",
     )
     remote_artifacts = _choice(
         "--remote-artifacts/DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS",
-        remote_artifacts_value,
+        remote_artifacts_text,
         VALID_REMOTE_ARTIFACT_MODES,
     )
-    downloader_timeout_value = text_option(
+    downloader_timeout_text = text_option(
         args.bep_artifact_downloader_timeout_sec,
         "DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC",
         "300",
     )
     downloader_timeout = _positive_decimal(
         "--bep-artifact-downloader-timeout-sec",
-        downloader_timeout_value,
+        downloader_timeout_text,
     )
 
-    staging_text = text_option(
+    staging_path_text = text_option(
         args.artifact_staging_dir,
         "DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR",
     )
     artifact_staging_dir = (
-        Path(staging_text)
-        if staging_text
+        Path(staging_path_text)
+        if staging_path_text
         else workspace / ".topt" / "bep-artifacts"
     )
     if not artifact_staging_dir.is_absolute():
         artifact_staging_dir = workspace / artifact_staging_dir
 
-    bep_json_values: list[str] = []
-    environment_bep = env.get("DD_TEST_OPTIMIZATION_BEP_JSON", "")
-    if environment_bep:
-        bep_json_values.append(environment_bep)
-    bep_json_values.extend(args.bep_json)
+    bep_json_paths: list[str] = []
+    environment_bep_path = env.get("DD_TEST_OPTIMIZATION_BEP_JSON", "")
+    if environment_bep_path:
+        bep_json_paths.append(environment_bep_path)
+    bep_json_paths.extend(args.bep_json)
 
     expected_enriched_tags = (
         tuple(args.expected_enriched_tag) or DEFAULT_EXPECTED_ENRICHED_TAGS
     )
-    report_text = text_option(args.report_json, "DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON")
-    execution_log_text = text_option(
+    report_path_text = text_option(
+        args.report_json,
+        "DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON",
+    )
+    execution_log_path_text = text_option(
         args.execution_log_json,
         "DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON",
     )
-    downloader_text = text_option(
+    downloader_path_text = text_option(
         args.bep_artifact_downloader,
         "DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER",
     )
 
     return UploaderConfig(
         rule=rule,
-        config_path=config_path,
         workspace=workspace,
         lock_workspace=lock_workspace,
         invocation_cwd=invocation_cwd,
@@ -319,17 +318,17 @@ def parse_uploader_config(
         gzip_payloads=gzip_payloads,
         workers=workers,
         expected_enriched_tags=expected_enriched_tags,
-        bep_json_files=tuple(Path(value) for value in bep_json_values),
+        bep_json_files=tuple(Path(path) for path in bep_json_paths),
         freshness_source=freshness_source,
         freshness_mode=freshness_mode,
         freshness_disabled_explicitly=args.allow_cached_payload_uploads,
-        execution_log_json=_optional_path(execution_log_text),
+        execution_log_json=_optional_path(execution_log_path_text),
         artifact_source=artifact_source,
         remote_artifacts=remote_artifacts,
         artifact_staging_dir=artifact_staging_dir,
-        bep_artifact_downloader=_optional_path(downloader_text),
+        bep_artifact_downloader=_optional_path(downloader_path_text),
         bep_artifact_downloader_timeout_sec=downloader_timeout,
-        report_json=_optional_path(report_text),
+        report_json=_optional_path(report_path_text),
         testlogs_dir=_optional_path(env.get("TESTLOGS_DIR", "")),
         codeowners_file=_optional_path(env.get("DD_TEST_OPTIMIZATION_CODEOWNERS_FILE", "")),
         context_json=_optional_path(env.get("DD_TEST_OPTIMIZATION_CONTEXT_JSON", "")),
@@ -369,9 +368,10 @@ def load_rule_config(path: Path) -> RuleConfig:
             f"unsupported uploader config schema_version {schema_version}; "
             f"expected {CONFIG_SCHEMA_VERSION}"
         )
+    # Launchers emit this key for schema compatibility; Python does not use it.
+    _json_string(raw, "workspace_name", "")
     workers = _json_integer(raw, "workers", DEFAULT_WORKERS, minimum=1)
     return RuleConfig(
-        schema_version=schema_version,
         quiescent_sec=_json_integer(raw, "quiescent_sec", 10, minimum=0),
         max_wait_sec=_json_integer(raw, "max_wait_sec", 300, minimum=0),
         fail_on_error=_json_boolean(raw, "fail_on_error", False),
@@ -382,7 +382,6 @@ def load_rule_config(path: Path) -> RuleConfig:
         workers=workers,
         rules_version=_json_string(raw, "rules_version", ""),
         uploader_version=_json_string(raw, "uploader_version", ""),
-        workspace_name=_json_string(raw, "workspace_name", ""),
         context_manifest_path=_json_string(raw, "context_manifest_path", ""),
         context_manifest_short_path=_json_string(raw, "context_manifest_short_path", ""),
         telemetry_facts_manifest_path=_json_string(
