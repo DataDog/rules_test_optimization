@@ -25,6 +25,7 @@ from .coordinator import CoordinatorSettings, run_discovered_tasks
 from .discovery import (
     DiscoveryError,
     DiscoveryResult,
+    count_tasks_by_payload_type,
     discover_file_tasks,
     resolve_local_testlogs_root,
     tests_executed,
@@ -47,7 +48,6 @@ from .freshness import (
 )
 from .locking import WorkspaceLock, WorkspaceLockError
 from .logging_utils import redact_url
-from .models import PayloadType
 from .reporting import AggregateReport, LegacyReportContext, emit_report
 from .resources import LoadedResources, ResourceInputs, load_resources
 from .temporary import TemporaryDirectoryError
@@ -510,7 +510,7 @@ def _empty_discovery() -> DiscoveryResult:
     return DiscoveryResult(
         outputs=(),
         tasks=(),
-        discovered_by_type=tuple((payload_type, 0) for payload_type in PayloadType),
+        discovered_by_type=count_tasks_by_payload_type(()),
     )
 
 

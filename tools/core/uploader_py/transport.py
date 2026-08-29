@@ -213,20 +213,20 @@ class _SnapshotProxyHandler(ProxyHandler):
 def _proxy_configuration(
     environment: Iterable[tuple[str, str]],
 ) -> tuple[dict[str, str], str]:
-    values: dict[str, str] = {}
+    effective_values: dict[str, str] = {}
     # Uppercase variants are supported, while lowercase variants take
     # precedence when both are explicitly present.
     items = tuple(environment)
     for name, value in items:
         if name in {"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY"} and value:
-            values[name.lower()] = value
+            effective_values[name.lower()] = value
     for name, value in items:
         if name in {"http_proxy", "https_proxy", "no_proxy"} and value:
-            values[name] = value
+            effective_values[name] = value
     proxies = {
-        scheme: values[f"{scheme}_proxy"]
+        scheme: effective_values[f"{scheme}_proxy"]
         for scheme in ("http", "https")
-        if values.get(f"{scheme}_proxy")
+        if effective_values.get(f"{scheme}_proxy")
     }
     for scheme, proxy in proxies.items():
         try:
@@ -235,7 +235,7 @@ def _proxy_configuration(
             raise HttpTransportError(
                 f"invalid {scheme.upper()} proxy configuration"
             ) from exc
-    return proxies, values.get("no_proxy", "")
+    return proxies, effective_values.get("no_proxy", "")
 
 
 def _parsed_proxy_url(raw_proxy: str, default_scheme: str) -> SplitResult:
@@ -310,15 +310,15 @@ def _validate_url(url: str) -> None:
 
 
 def _validated_headers(headers: Mapping[str, str]) -> dict[str, str]:
-    result: dict[str, str] = {}
+    validated: dict[str, str] = {}
     for name, value in headers.items():
         if not name or any(character in name for character in "\r\n:"):
             raise HttpTransportError(f"invalid HTTP header name: {name!r}")
         text_value = str(value)
         if "\r" in text_value or "\n" in text_value:
             raise HttpTransportError(f"invalid HTTP header value for {name!r}")
-        result[name] = text_value
-    return result
+        validated[name] = text_value
+    return validated
 
 
 def _controlled_headers(
@@ -328,15 +328,15 @@ def _controlled_headers(
     content_length: int,
     content_encoding: str | None = None,
 ) -> dict[str, str]:
-    result = _validated_headers(headers)
-    for name in tuple(result):
+    controlled = _validated_headers(headers)
+    for name in tuple(controlled):
         if name.lower() in {"content-type", "content-length", "content-encoding"}:
-            del result[name]
-    result["Content-Type"] = content_type
-    result["Content-Length"] = str(content_length)
+            del controlled[name]
+    controlled["Content-Type"] = content_type
+    controlled["Content-Length"] = str(content_length)
     if content_encoding:
-        result["Content-Encoding"] = content_encoding
-    return result
+        controlled["Content-Encoding"] = content_encoding
+    return controlled
 
 
 def prepare_json_request(
@@ -371,9 +371,9 @@ def prepare_json_request(
                 f"failed to prepare JSON request body: {type(exc).__name__}"
             ) from exc
     else:
-        prepared = gzip.compress(body, mtime=0) if gzip_body else body
-        body_length = len(prepared)
-        body_factory = lambda: io.BytesIO(prepared)
+        body_bytes = gzip.compress(body, mtime=0) if gzip_body else body
+        body_length = len(body_bytes)
+        body_factory = lambda: io.BytesIO(body_bytes)
 
     request_headers = _controlled_headers(
         headers,
@@ -559,14 +559,14 @@ class HttpTransport:
         content_encoding: str | None = None,
     ) -> HttpResult:
         """POST an exact JSON body, optionally compressed with stdlib gzip."""
-        prepared = prepare_json_request(
+        prepared_request = prepare_json_request(
             url,
             headers,
             body,
             gzip_body=gzip_body,
             content_encoding=content_encoding,
         )
-        return self._post(prepared.url, prepared.headers, prepared.body_factory)
+        return self._post(prepared_request)
 
     def post_prepared_multipart(
         self,
@@ -575,94 +575,99 @@ class HttpTransport:
         prepared: PreparedMultipartBody,
     ) -> HttpResult:
         """POST a task-local multipart body, reopening it for every retry."""
-        request = prepare_spooled_multipart_request(
+        prepared_request = prepare_spooled_multipart_request(
             url,
             headers,
             prepared,
         )
-        return self._post(request.url, request.headers, request.body_factory)
+        return self._post(prepared_request)
 
     def _post(
         self,
-        url: str,
-        headers: Mapping[str, str],
-        body_factory: Callable[[], BinaryIO],
+        prepared_request: PreparedHttpRequest,
     ) -> HttpResult:
         retry_delays: list[float] = []
-        last_status: int | None = None
-        last_body = b""
-        last_truncated = False
-        last_error: str | None = None
+        status_code: int | None = None
+        response_excerpt = b""
+        excerpt_truncated = False
+        transport_error: str | None = None
 
         for attempt in range(1, self.max_attempts + 1):
             retry_after: str | None = None
             retryable = False
-            body = body_factory()
+            body_stream = prepared_request.body_factory()
             self._debug(
                 "HTTP POST attempt=%d/%d url=%s",
                 attempt,
                 self.max_attempts,
-                redact_url(url),
+                redact_url(prepared_request.url),
             )
             try:
-                request = Request(url, data=body, headers=dict(headers), method="POST")
+                http_request = Request(
+                    prepared_request.url,
+                    data=body_stream,
+                    headers=dict(prepared_request.headers),
+                    method="POST",
+                )
                 with closing(
-                    self._opener.open(request, timeout=self.request_timeout)
+                    self._opener.open(http_request, timeout=self.request_timeout)
                 ) as response:
-                    last_status = int(response.status)
-                    last_body, last_truncated = _bounded_response(
+                    status_code = int(response.status)
+                    response_excerpt, excerpt_truncated = _bounded_response(
                         response,
                         self.response_limit,
                     )
-                    last_error = None
-                    if 200 <= last_status < 300:
+                    transport_error = None
+                    if 200 <= status_code < 300:
                         self._debug(
                             "HTTP POST succeeded attempt=%d status=%d",
                             attempt,
-                            last_status,
+                            status_code,
                         )
                         return HttpResult(
-                            status_code=last_status,
+                            status_code=status_code,
                             attempts=attempt,
-                            body_excerpt=last_body,
-                            body_truncated=last_truncated,
+                            body_excerpt=response_excerpt,
+                            body_truncated=excerpt_truncated,
                             retry_delays=tuple(retry_delays),
                         )
-                    retryable = _retryable_status(last_status)
+                    retryable = _retryable_status(status_code)
                     retry_after = response.headers.get("Retry-After")
             except HTTPError as exc:
                 with closing(exc):
-                    last_status = int(exc.code)
-                    last_body, last_truncated = _bounded_response(
+                    status_code = int(exc.code)
+                    response_excerpt, excerpt_truncated = _bounded_response(
                         exc,
                         self.response_limit,
                     )
                     retry_after = exc.headers.get("Retry-After")
-                last_error = None
-                retryable = _retryable_status(last_status)
+                transport_error = None
+                retryable = _retryable_status(status_code)
             except (URLError, TimeoutError, ConnectionError, http.client.HTTPException) as exc:
-                last_status = None
-                last_body = b""
-                last_truncated = False
-                reason = exc.reason if isinstance(exc, URLError) else exc
-                last_error = type(reason).__name__
-                retryable = not isinstance(reason, ssl.SSLCertVerificationError)
+                status_code = None
+                response_excerpt = b""
+                excerpt_truncated = False
+                transport_cause = exc.reason if isinstance(exc, URLError) else exc
+                transport_error = type(transport_cause).__name__
+                retryable = not isinstance(
+                    transport_cause, ssl.SSLCertVerificationError
+                )
             finally:
-                body.close()
+                body_stream.close()
 
             if not retryable or attempt >= self.max_attempts:
                 self._debug(
                     "HTTP POST terminal attempt=%d status=%s transport_error=%s",
                     attempt,
-                    last_status,
-                    last_error or "none",
+                    status_code,
+                    transport_error or "none",
                 )
                 return HttpResult(
-                    status_code=last_status,
+                    status_code=status_code,
                     attempts=attempt,
-                    body_excerpt=last_body,
-                    body_truncated=last_truncated,
-                    transport_error=last_error,
+                    body_excerpt=response_excerpt,
+                    body_truncated=excerpt_truncated,
+                    transport_error=transport_error,
                     retry_delays=tuple(retry_delays),
                 )
 
@@ -673,7 +678,7 @@ class HttpTransport:
             self._debug(
                 "HTTP POST retry scheduled attempt=%d status=%s delay_seconds=%.3f",
                 attempt,
-                last_status,
+                status_code,
                 delay,
             )
             self._sleeper(delay)
