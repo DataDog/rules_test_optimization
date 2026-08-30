@@ -290,7 +290,10 @@ class HttpTransportTests(unittest.TestCase):
     def test_debug_logs_attempt_and_retry_without_url_secrets(self) -> None:
         stream = io.StringIO()
         logger = configure_logging(debug=True, secrets=("api-secret",), stream=stream)
-        with _server({"status": 500}, {"status": 200}) as (_server_instance, base):
+        with _server(
+            {"status": 500, "body": b"backend api-secret\nretry"},
+            {"status": 200},
+        ) as (_server_instance, base):
             transport = HttpTransport(
                 sleeper=lambda _delay: None,
                 logger=logger,
@@ -308,6 +311,8 @@ class HttpTransportTests(unittest.TestCase):
         self.assertIn("retry scheduled", output)
         self.assertIn("task=task-1 type=test file=payloads/tests/events.json", output)
         self.assertIn("succeeded attempt=2 status=200", output)
+        self.assertIn("body_excerpt='backend <redacted>\\nretry'", output)
+        self.assertIn("body_truncated=False", output)
         self.assertNotIn("url-secret", output)
         self.assertNotIn("api-secret", output)
 
@@ -368,14 +373,22 @@ class HttpTransportTests(unittest.TestCase):
         self.assertIn(b'{"files":[]}', first["body"])
 
     def test_response_diagnostics_are_bounded(self) -> None:
+        stream = io.StringIO()
+        logger = configure_logging(debug=True, stream=stream)
         with _server({"status": 400, "body": b"x" * 100}) as (_server_instance, base):
-            result = HttpTransport(max_attempts=1, response_limit=16).post_json(
+            result = HttpTransport(
+                max_attempts=1,
+                response_limit=16,
+                logger=logger,
+            ).post_json(
                 base,
                 {},
                 b"{}",
             )
         self.assertEqual(b"x" * 16, result.body_excerpt)
         self.assertTrue(result.body_truncated)
+        self.assertIn("body_excerpt='xxxxxxxxxxxxxxxx'", stream.getvalue())
+        self.assertIn("body_truncated=True", stream.getvalue())
 
     def test_request_timeout_is_reported_without_exposing_urls(self) -> None:
         with _server({"status": 200, "delay": 0.2}) as (_server_instance, base):

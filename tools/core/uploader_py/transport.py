@@ -636,6 +636,14 @@ class HttpTransport:
                             body_truncated=excerpt_truncated,
                             retry_delays=tuple(retry_delays),
                         )
+                    self._debug(
+                        "HTTP POST failed attempt=%d status=%d "
+                        "body_excerpt=%r body_truncated=%s",
+                        attempt,
+                        status_code,
+                        response_excerpt.decode("utf-8", errors="backslashreplace"),
+                        excerpt_truncated,
+                    )
                     retryable = _retryable_status(status_code)
                     retry_after = response.headers.get("Retry-After")
             except (
