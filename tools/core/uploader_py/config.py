@@ -210,9 +210,6 @@ def parse_uploader_config(
         env, "DD_TEST_OPTIMIZATION_GZIP", rule.gzip_payloads
     )
 
-    if args.validate_enrichment and not args.dry_run:
-        raise ConfigError("--validate-enrichment requires --dry-run")
-
     freshness_source_text = text_option(
         args.freshness_source,
         "DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE",

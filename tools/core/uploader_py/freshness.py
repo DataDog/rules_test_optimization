@@ -219,6 +219,11 @@ def prepare_freshness(
     )
     scan_roots.extend(ScanRoot(root, staged=True) for root in staged_roots)
     if logger is not None:
+        for artifact in staged_artifacts:
+            logger.debug(
+                "BEP artifact staging selected output key: %s",
+                artifact.output_key,
+            )
         logger.debug(
             "freshness ready: source=%s eligible=%d cached=%d remote_only=%d "
             "staged=%d",

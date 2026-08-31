@@ -381,13 +381,15 @@ class UploaderConfigTests(unittest.TestCase):
             with self.subTest(rejected=rejected), self.assertRaises(ConfigError):
                 self.parse(f"--bep-artifact-downloader-timeout-sec={rejected}")
 
-    def test_validate_enrichment_requires_dry_run(self) -> None:
-        with self.assertRaisesRegex(ConfigError, "requires --dry-run"):
-            parse_uploader_config(
-                ["--config", str(self.config_path), "--validate-enrichment"],
-                environ={},
-                cwd=self.root,
-            )
+    def test_validate_enrichment_is_allowed_during_upload(self) -> None:
+        config = parse_uploader_config(
+            ["--config", str(self.config_path), "--validate-enrichment"],
+            environ={},
+            cwd=self.root,
+        )
+
+        self.assertFalse(config.dry_run)
+        self.assertTrue(config.validate_enrichment)
 
     def test_unknown_and_abbreviated_arguments_exit_two(self) -> None:
         for argument in ("--unknown", "--dry"):

@@ -423,6 +423,28 @@ class FileWorkerTests(unittest.TestCase):
             self.assertEqual([], transport.json_calls)
             self.assertTrue(source.exists())
 
+    def test_upload_validates_enrichment_before_sending(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source = root / "events.json"
+            source.write_text(
+                '{"events":[{"content":{"meta":{}}}]}',
+                encoding="utf-8",
+            )
+            transport = _FakeTransport()
+            runtime = _runtime(
+                root,
+                validate_enrichment=True,
+                expected_enriched_tags=("git.repository_url", "git.commit.sha"),
+            )
+
+            result = process_file(_test_task(source), runtime, transport)
+
+            self.assertEqual(FileStatus.SUCCEEDED, result.status)
+            self.assertEqual(1, result.requests_attempted)
+            self.assertEqual(1, len(transport.json_calls))
+            self.assertFalse(source.exists())
+
     def test_dry_run_validates_each_protocol_request_without_transport_calls(self) -> None:
         cases = (
             (
@@ -494,7 +516,7 @@ class FileWorkerTests(unittest.TestCase):
             self.assertEqual([], transport.json_calls)
             self.assertTrue(source.exists())
 
-    def test_dry_run_enrichment_validation_fails_before_split_and_network(self) -> None:
+    def test_upload_enrichment_validation_fails_before_split_and_network(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             source = root / "events.json"
@@ -505,7 +527,6 @@ class FileWorkerTests(unittest.TestCase):
                 _test_task(source),
                 _runtime(
                     root,
-                    dry_run=True,
                     validate_enrichment=True,
                     expected_enriched_tags=("bazel.target",),
                 ),

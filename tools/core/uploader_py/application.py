@@ -48,6 +48,7 @@ from .freshness import (
 )
 from .locking import WorkspaceLock, WorkspaceLockError
 from .logging_utils import redact_url
+from .models import FileStatus, PayloadType
 from .reporting import AggregateReport, LegacyReportContext, emit_report
 from .resources import LoadedResources, ResourceInputs, load_resources
 from .temporary import TemporaryDirectoryError
@@ -123,6 +124,7 @@ def _run_uploader_with_lock(
     freshness_skipped_count = 0
     report: AggregateReport | None = None
     report_reason: _ReportReason | None = None
+    workers_completed = False
 
     _log_invocation(config, endpoints, resolver, logger)
 
@@ -190,9 +192,16 @@ def _run_uploader_with_lock(
             freshness_mode=config.freshness_mode,
         )
         eligible_discovery = freshness_selection.discovery
-        freshness_skipped_count = len(freshness_selection.skipped_outputs)
-        for output_key in freshness_selection.skipped_outputs:
+        freshness_skipped_outputs = freshness_selection.skipped_outputs
+        freshness_skipped_count = len(freshness_skipped_outputs)
+        for output_key in freshness_skipped_outputs:
             logger.debug("freshness skipped output_key=%s", output_key)
+        _log_legacy_freshness_markers(
+            config,
+            freshness_plan,
+            freshness_skipped_outputs,
+            logger,
+        )
         if eligible_discovery.tasks:
             validate_upload_credentials(config)
         else:
@@ -207,6 +216,7 @@ def _run_uploader_with_lock(
             transport_factory=transport_factory,
             clock=clock,
         )
+        workers_completed = True
         report = replace(
             report,
             discovered_by_type=raw_discovery.discovered_by_type,
@@ -312,6 +322,8 @@ def _run_uploader_with_lock(
         len(report.results),
         report.initialization_warning_codes,
     )
+    if workers_completed:
+        _log_legacy_result_markers(config, report, logger)
     emit_report(
         report,
         stream=stream if stream is not None else sys.stdout,
@@ -319,6 +331,64 @@ def _run_uploader_with_lock(
         legacy_report_context=report_context,
     )
     return report.exit_code
+
+
+def _log_legacy_freshness_markers(
+    config: UploaderConfig,
+    freshness_plan: FreshnessPlan,
+    skipped_outputs: tuple[str, ...],
+    logger: logging.Logger,
+) -> None:
+    """Keep stable freshness markers after selecting Python by default."""
+    if freshness_plan.selected_source == "bep":
+        logger.info(
+            "freshness filtering enabled: source=bep files=%d "
+            "eligible_outputs=%d remote_only_outputs=%d",
+            len(config.bep_json_files),
+            len(freshness_plan.eligible_outputs),
+            len(freshness_plan.remote_only_outputs),
+        )
+    elif freshness_plan.selected_source == "execution_log":
+        logger.info("freshness filtering enabled: source=execution_log")
+    elif config.freshness_mode == "disabled":
+        logger.info("freshness filtering disabled")
+
+    skipped_or_cached_outputs = sorted(
+        set(skipped_outputs).union(
+            output_key for _label, output_key in freshness_plan.cached_outputs
+        )
+    )
+    for output_key in skipped_or_cached_outputs:
+        logger.info(
+            "skipping cached or non-current test output: %s (freshness selection)",
+            output_key,
+        )
+
+
+def _log_legacy_result_markers(
+    config: UploaderConfig,
+    report: AggregateReport,
+    logger: logging.Logger,
+) -> None:
+    """Keep stable per-test result markers alongside the aggregate report."""
+    successful_tests = tuple(
+        result
+        for result in report.results
+        if result.payload_type is PayloadType.TEST
+        and result.status is FileStatus.SUCCEEDED
+    )
+    if config.validate_enrichment:
+        validation_prefix = "dry-run " if config.dry_run else ""
+        for result in successful_tests:
+            logger.info(
+                "%svalidated enriched test payload: %s",
+                validation_prefix,
+                result.source_path,
+            )
+    if config.dry_run:
+        logger.info("dry-run validated %d test payloads", len(successful_tests))
+    else:
+        logger.info("uploaded %d test payloads", len(successful_tests))
 
 
 def _cleanup_staging(

@@ -100,7 +100,7 @@ class ApplicationTests(unittest.TestCase):
                     output,
                     "tests",
                     "events.json",
-                    {"events": [{"content": {}}]},
+                    {"events": [{"content": {"meta": {"event.id": "1"}}}]},
                 ),
                 _write_payload(
                     output,
@@ -126,7 +126,11 @@ class ApplicationTests(unittest.TestCase):
             report_path = root / "report.json"
             config = self._config(
                 root,
-                extra_arguments=(f"--report-json={report_path}",),
+                extra_arguments=(
+                    f"--report-json={report_path}",
+                    "--validate-enrichment",
+                    "--expected-enriched-tag=event.id",
+                ),
             )
             stream = StringIO()
             log_stream = StringIO()
@@ -153,6 +157,12 @@ class ApplicationTests(unittest.TestCase):
                 report["artifacts"]["staging_dir"],
             )
             self.assertIn("task=file-000001", log_stream.getvalue())
+            self.assertIn("freshness filtering disabled", log_stream.getvalue())
+            self.assertIn(
+                "dry-run validated enriched test payload",
+                log_stream.getvalue(),
+            )
+            self.assertIn("dry-run validated 1 test payloads", log_stream.getvalue())
 
     def test_success_statistics_report_full_invocation_elapsed_time(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
@@ -311,6 +321,14 @@ class ApplicationTests(unittest.TestCase):
 
             self.assertEqual(0, exit_code, log_stream.getvalue())
             transport_factory.assert_not_called()
+            self.assertIn(
+                "freshness filtering enabled: source=bep",
+                log_stream.getvalue(),
+            )
+            self.assertIn(
+                "skipping cached or non-current test output",
+                log_stream.getvalue(),
+            )
             report = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual("ok", report["result"]["reason_code"])
             self.assertEqual(1, report["bep"]["cached_outputs"])
