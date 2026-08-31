@@ -16,6 +16,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from uploader_test_support import add_uploader_runtime_to_path
 
@@ -26,7 +27,7 @@ from uploader_py.endpoints import EndpointSet  # noqa: E402
 from uploader_py.enrichment import ContextPlan  # noqa: E402
 from uploader_py.file_worker import WorkerRuntime, process_file  # noqa: E402
 from uploader_py.models import FileStatus, FileTask, PayloadType  # noqa: E402
-from uploader_py.telemetry import build_telemetry_plan  # noqa: E402
+from uploader_py.telemetry import TelemetryPlan, build_telemetry_plan  # noqa: E402
 from uploader_py.transport import HttpResult, prepare_json_request  # noqa: E402
 
 
@@ -121,6 +122,50 @@ def _runtime(root: Path, plan, *, dry_run: bool = False) -> WorkerRuntime:
         telemetry_session_id="session-fallback",
         telemetry_plan=plan,
         dry_run=dry_run,
+    )
+
+
+def _synthetic_telemetry_fixture(
+    root: Path,
+) -> tuple[Path, Path, FileTask, TelemetryPlan]:
+    """Create one source whose rule facts require a second telemetry request."""
+    source = root / "app-started.json"
+    source.write_text(
+        json.dumps(
+            {
+                "api_version": "v2",
+                "request_type": "app-started",
+                "runtime_id": "runtime-a",
+                "seq_id": 7,
+                "application": {
+                    "service_name": "service-a",
+                    "language_name": "go",
+                    "tracer_version": "1.0.0",
+                },
+                "host": {"hostname": "builder"},
+                "payload": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    facts = root / "facts.json"
+    facts.write_text(
+        json.dumps(
+            {
+                "service_name": "service-a",
+                "runtime_name": "go",
+                "distributions": [
+                    {"name": "duration", "value": [1, 2], "tags": []}
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    task = _task(source)
+    return source, facts, task, build_telemetry_plan(
+        (task,),
+        (facts,),
+        clock=lambda: 456,
     )
 
 
@@ -256,43 +301,10 @@ class TelemetryWorkerTests(unittest.TestCase):
             self.assertEqual("runtime-a", headers["DD-Session-ID"])
             self.assertEqual("secret", headers["DD-API-KEY"])
 
-    def test_synthetic_upload_belongs_to_anchor_and_cleanup_is_transactional(self) -> None:
+    def test_synthetic_failure_is_the_only_request_retried(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
-            source = root / "app-started.json"
-            source.write_text(
-                json.dumps(
-                    {
-                        "api_version": "v2",
-                        "request_type": "app-started",
-                        "runtime_id": "runtime-a",
-                        "seq_id": 7,
-                        "application": {
-                            "service_name": "service-a",
-                            "language_name": "go",
-                            "tracer_version": "1.0.0",
-                        },
-                        "host": {"hostname": "builder"},
-                        "payload": {},
-                    }
-                ),
-                encoding="utf-8",
-            )
-            facts = root / "facts.json"
-            facts.write_text(
-                json.dumps(
-                    {
-                        "service_name": "service-a",
-                        "runtime_name": "go",
-                        "distributions": [
-                            {"name": "duration", "value": [1, 2], "tags": []}
-                        ],
-                    }
-                ),
-                encoding="utf-8",
-            )
-            task = _task(source)
-            plan = build_telemetry_plan((task,), (facts,), clock=lambda: 456)
+            source, facts, task, plan = _synthetic_telemetry_fixture(root)
             transport = _Transport(HttpResult(200, 1), HttpResult(500, 4))
 
             result = process_file(task, _runtime(root, plan), transport)
@@ -301,6 +313,7 @@ class TelemetryWorkerTests(unittest.TestCase):
             self.assertEqual(2, result.requests_planned)
             self.assertEqual(5, result.requests_attempted)
             self.assertEqual(1, result.requests_succeeded)
+            self.assertEqual(1, result.requests_failed)
             self.assertEqual(3, result.retries)
             self.assertTrue(source.exists())
             synthetic = json.loads(transport.calls[1]["body"])
@@ -311,6 +324,79 @@ class TelemetryWorkerTests(unittest.TestCase):
                 "message-batch",
                 transport.calls[1]["headers"]["DD-Telemetry-Request-Type"],
             )
+
+            retry_plan = build_telemetry_plan((task,), (facts,), clock=lambda: 789)
+            retry_transport = _Transport(HttpResult(200, 1))
+            retry_result = process_file(
+                task,
+                _runtime(root, retry_plan),
+                retry_transport,
+            )
+
+            self.assertEqual(FileStatus.SUCCEEDED, retry_result.status)
+            self.assertEqual(1, len(retry_transport.calls))
+            retry_body = json.loads(retry_transport.calls[0]["body"])
+            self.assertEqual("message-batch", retry_body["request_type"])
+            self.assertEqual(8, retry_body["seq_id"])
+            self.assertEqual(456, retry_body["tracer_time"])
+            self.assertEqual(1, len(retry_body["payload"]))
+            self.assertNotIn(
+                "_dd_test_optimization_retry_without_augmentation",
+                retry_body,
+            )
+            self.assertFalse(source.exists())
+
+    def test_telemetry_persistence_failure_keeps_original_source(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source, _facts, task, plan = _synthetic_telemetry_fixture(root)
+            original = source.read_bytes()
+            transport = _Transport(HttpResult(200, 1), HttpResult(500, 4))
+
+            with patch(
+                "uploader_py.file_worker.tempfile.NamedTemporaryFile",
+                side_effect=OSError("read-only directory"),
+            ):
+                result = process_file(task, _runtime(root, plan), transport)
+
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertIn(
+                "failed_telemetry_request_persist_failed",
+                result.warning_codes,
+            )
+            self.assertEqual(original, source.read_bytes())
+
+    def test_source_failure_does_not_block_or_repeat_synthetic_request(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source, facts, task, plan = _synthetic_telemetry_fixture(root)
+            transport = _Transport(HttpResult(500, 4), HttpResult(200, 1))
+
+            result = process_file(task, _runtime(root, plan), transport)
+
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertEqual(2, len(transport.calls))
+            self.assertEqual(1, result.requests_succeeded)
+            self.assertEqual(1, result.requests_failed)
+            self.assertTrue(source.exists())
+
+            retry_plan = build_telemetry_plan((task,), (facts,), clock=lambda: 789)
+            retry_transport = _Transport(HttpResult(200, 1))
+            retry_result = process_file(
+                task,
+                _runtime(root, retry_plan),
+                retry_transport,
+            )
+
+            self.assertEqual(FileStatus.SUCCEEDED, retry_result.status)
+            self.assertEqual(1, len(retry_transport.calls))
+            retry_body = json.loads(retry_transport.calls[0]["body"])
+            self.assertEqual("app-started", retry_body["request_type"])
+            self.assertNotIn(
+                "_dd_test_optimization_retry_without_augmentation",
+                retry_body,
+            )
+            self.assertFalse(source.exists())
 
     def test_dry_run_prepares_source_and_synthetic_without_transport(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

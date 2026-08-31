@@ -525,7 +525,8 @@ Required automated coverage:
   fallback to the original source when persistence is unavailable;
 - gzip after split and byte-identical retry body;
 - JSON/msgpack coverage multipart content and exact length;
-- telemetry primary/synthetic ownership and immutable retry body;
+- telemetry primary/synthetic ownership, independent failure handling, and
+  failed-request-only retry persistence;
 - agentless and EVP headers/endpoints;
 - transient retry matrix and terminal permanent errors/`413`;
 - worker bound, exactly-once file ownership, deterministic order, and

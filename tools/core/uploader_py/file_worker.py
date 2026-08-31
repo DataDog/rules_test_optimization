@@ -56,6 +56,7 @@ DEFAULT_HEADER_LANGUAGE = "bazel-starlark"
 DEFAULT_HEADER_LANGUAGE_VERSION = "n/a"
 DEFAULT_HEADER_LANGUAGE_INTERPRETER = "bazel-run"
 _COVERAGE_EVENT_BODY = b'{"dummy":true}'
+_TELEMETRY_RETRY_MARKER = "_dd_test_optimization_retry_without_augmentation"
 
 
 class WorkerTransport(Protocol):
@@ -721,7 +722,15 @@ def _process_telemetry(
     assert payload is not None
     assert source_bytes is not None
 
-    directive = runtime.telemetry_plan.directive_for(task.source_path)
+    # A partially successful prior run stores the sole rejected request in the
+    # source file. The private marker prevents rule facts from being added a
+    # second time and is removed before the retry reaches the backend.
+    retry_without_augmentation = payload.pop(_TELEMETRY_RETRY_MARKER, False) is True
+    if retry_without_augmentation:
+        source_bytes = _compact_json_line(payload)
+        directive = TelemetryDirective()
+    else:
+        directive = runtime.telemetry_plan.directive_for(task.source_path)
     warnings: list[str] = []
     source_body = _prepare_telemetry_source(
         source_bytes,
@@ -799,7 +808,10 @@ def _process_telemetry(
 
     requests_attempted = 0
     requests_succeeded = 0
+    requests_failed = 0
     retries = 0
+    failed_requests: list[_TelemetryRequest] = []
+    first_failure: tuple[str, str] | None = None
     for request in requests:
         http_result = transport.post_json(
             runtime.endpoints.telemetry_url,
@@ -819,18 +831,48 @@ def _process_telemetry(
                 http_result,
                 payload_type=task.payload_type,
             )
-            return FileResult(
-                status=FileStatus.FAILED,
-                requests_attempted=requests_attempted,
-                requests_succeeded=requests_succeeded,
-                requests_failed=1,
-                retries=retries,
-                warning_codes=_unique_codes(warnings),
-                failure_code=failure_code,
-                failure_message=failure_message,
-                **telemetry_result_fields,
-            )
+            requests_failed += 1
+            failed_requests.append(request)
+            if first_failure is None:
+                first_failure = (failure_code, failure_message)
+            continue
         requests_succeeded += 1
+
+    if first_failure is not None:
+        if requests_succeeded and not runtime.keep_payloads:
+            if len(failed_requests) == 1 and _persist_failed_telemetry_request(
+                task.source_path,
+                failed_requests[0],
+            ):
+                if runtime.logger is not None:
+                    runtime.logger.info(
+                        "task=%s type=%s file=%s retained failed telemetry "
+                        "request for retry",
+                        task.task_id,
+                        task.payload_type.value,
+                        task.display_path,
+                    )
+            else:
+                warnings.append("failed_telemetry_request_persist_failed")
+                if runtime.logger is not None:
+                    runtime.logger.warning(
+                        "task=%s type=%s file=%s failed to retain rejected "
+                        "telemetry request; keeping the original source",
+                        task.task_id,
+                        task.payload_type.value,
+                        task.display_path,
+                    )
+        return FileResult(
+            status=FileStatus.FAILED,
+            requests_attempted=requests_attempted,
+            requests_succeeded=requests_succeeded,
+            requests_failed=requests_failed,
+            retries=retries,
+            warning_codes=_unique_codes(warnings),
+            failure_code=first_failure[0],
+            failure_message=first_failure[1],
+            **telemetry_result_fields,
+        )
 
     deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
     _debug(runtime, task, f"telemetry cleanup completed source_deleted={deleted}")
@@ -1119,6 +1161,23 @@ def _persist_failed_test_chunks(
         retry_body = compact_json_bytes(retry_payload)
     except TestPayloadSplitError:
         return False
+    return _atomic_replace_source(source_path, retry_body)
+
+
+def _persist_failed_telemetry_request(
+    source_path: Path,
+    failed_request: _TelemetryRequest,
+) -> bool:
+    """Retain one rejected prepared request without regenerating augmentation."""
+    payload, failure = _read_json_object(failed_request.body, "telemetry retry")
+    if failure is not None or payload is None:
+        return False
+    payload[_TELEMETRY_RETRY_MARKER] = True
+    return _atomic_replace_source(source_path, _compact_json_line(payload))
+
+
+def _atomic_replace_source(source_path: Path, body: bytes) -> bool:
+    """Replace a payload beside itself, repairing Bazel output permissions once."""
 
     parent = source_path.parent
     for repair_permissions in (False, True):
@@ -1136,7 +1195,7 @@ def _persist_failed_test_chunks(
                 dir=parent,
                 delete=False,
             ) as temporary:
-                temporary.write(retry_body)
+                temporary.write(body)
                 temporary_path = Path(temporary.name)
             temporary_path.replace(source_path)
             return True

@@ -731,6 +731,11 @@ payload discovery/quiescence before proceeding.
   partial success, the source is atomically replaced with only the failed
   chunks so accepted events are not replayed; if every chunk fails or the
   replacement cannot be written, the original source is retained.
+- A telemetry source and its synthetic rule-facts request are also attempted
+  independently. After partial success, only the rejected prepared request is
+  retained for the next invocation, without regenerating augmentation or
+  replaying the accepted request. If retention fails, the original source is
+  kept and the final result reports a warning.
 - The temporary legacy Bash/curl and PowerShell implementations remain
   available only as an explicit opt-out rollback during the rollout window.
   The normalized policy above is the default uploader contract on Linux,
