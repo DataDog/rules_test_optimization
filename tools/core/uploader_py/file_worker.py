@@ -1047,6 +1047,9 @@ def _cleanup_source(path: Path, keep_payloads: bool) -> tuple[bool, str | None]:
     except OSError:
         try:
             path.chmod(path.stat().st_mode | stat.S_IWUSR)
+            # POSIX unlink checks the directory, and Bazel output trees may be read-only.
+            parent = path.parent
+            parent.chmod(parent.stat().st_mode | stat.S_IWUSR)
             path.unlink()
             return True, None
         except OSError:

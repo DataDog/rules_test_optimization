@@ -253,6 +253,28 @@ class FileWorkerTests(unittest.TestCase):
             self.assertEqual("//pkg:test", body["events"][0]["content"]["meta"]["bazel.target"])
             self.assertEqual("abcdef", body["events"][1]["content"]["meta"]["git.commit.sha"])
 
+    def test_successful_upload_deletes_from_read_only_bazel_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source_dir = root / "test.outputs" / "payloads" / "tests"
+            source_dir.mkdir(parents=True)
+            source = source_dir / "events.json"
+            source.write_text('{"events":[{"content":{}}]}', encoding="utf-8")
+            source_dir.chmod(0o555)
+
+            try:
+                result = process_file(
+                    _test_task(source),
+                    _runtime(root),
+                    _FakeTransport(HttpResult(200, 1)),
+                )
+            finally:
+                source_dir.chmod(0o755)
+
+            self.assertEqual(FileStatus.SUCCEEDED, result.status)
+            self.assertTrue(result.source_deleted)
+            self.assertFalse(source.exists())
+
     def test_preventive_split_happens_before_first_request(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
