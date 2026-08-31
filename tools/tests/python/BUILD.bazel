@@ -77,7 +77,6 @@ sh_test(
         "//tools/test_optimization:render_report_summary.py",
         "//tools/tests:integration/mock_dd_server.py",
         "//tools/tests/python/fixtures/generated_uploader",
-        "//tools/tests/python/fixtures/generated_uploader:generated_python_uploader",
     ],
 )
 

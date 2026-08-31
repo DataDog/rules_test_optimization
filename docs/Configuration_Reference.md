@@ -333,7 +333,7 @@ Rule: `dd_payload_uploader(...)`
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
 | `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
 | `workers` | int | `8` | Maximum independent payload-file workers in Python mode; `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
-| `use_python_uploader` | bool | `False` | Opt in to the parallel Python uploader; requires host Python 3.10+ at uploader runtime |
+| `use_python_uploader` | bool | `True` | Use the default cross-platform Python uploader; set to `False` only for temporary rollback to the legacy platform runtime |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
 | `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; missing results are reported while other fresh outputs continue to upload |
 | `expected_targets_file` | label | unset | Optional schema-v1 exact-target file. Static and file inputs must match when both are non-empty; missing results do not block other fresh uploads |
@@ -674,7 +674,7 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_REPORT_DIR` | Optional wrapper/report-script directory. CI wrappers write `doctor-report.json` plus `uploader-dry-run-report.json` without upload or `uploader-upload-report.json` with upload unless explicit report paths override them |
 | `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` | Optional doctor or wrapper path for the redacted support diagnostics zip |
 | `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR` | Optional override for the support bundle collector script. Doctor targets provide this through runfiles; wrappers default to `create_support_bundle.py` beside the wrapper |
-| `DD_TEST_OPTIMIZATION_PYTHON` | Python interpreter override before falling back to `PYTHON`, `python3`, and `python`; Python 3.10+ is required when `use_python_uploader = True` and otherwise optional for wrapper/helper features |
+| `DD_TEST_OPTIMIZATION_PYTHON` | Python interpreter override before falling back to `PYTHON`, `python3`, and `python`; Python 3.10+ is required by the default uploader and optional only when `use_python_uploader = False` selects the legacy runtime |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | Artifact discovery source: `local`, `bep`, or `auto`. Recommended CI with zipped undeclared outputs should set `bep` |
 | `DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS` | Remote BEP artifact handling: `disabled`, `download`, or `required`. HTTP/HTTPS `outputs.zip` carriers can be staged natively when enabled |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR` | Directory used for per-run staged BEP artifacts |

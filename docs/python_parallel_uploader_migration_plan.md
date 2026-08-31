@@ -10,10 +10,9 @@ This product includes software developed at Datadog
 
 ## Status
 
-The Python uploader is implemented behind the temporary
-`use_python_uploader = True` rule attribute. The legacy Bash and PowerShell
-runtimes remain the default until the cross-platform and consumer parity gates
-in this document pass.
+The Python uploader is the default. The temporary `use_python_uploader = False`
+rule value keeps the legacy Bash and PowerShell runtimes available as an
+explicit rollback while the remaining removal gates in this document close.
 
 The implementation currently provides:
 
@@ -501,7 +500,7 @@ than it introduces.
 - [ ] Pass Linux, macOS, and Windows parity lanes.
 - [ ] Pass the sibling consumer fixture with local module overrides.
 - [ ] Validate one representative real consumer workflow.
-- [ ] Make Python the default.
+- [x] Make Python the default.
 - [ ] Update `UPLOADER_VERSION` intentionally for release.
 - [ ] Remove the temporary switch and legacy Bash/PowerShell runtimes.
 - [ ] Remove obsolete jq/curl/gzip uploader prerequisites from docs.
@@ -563,7 +562,8 @@ flow in `../rules_test_optimization_tests` with local overrides.
 - [ ] `workers=1` passes the complete cross-platform parity matrix.
 - [ ] Linux, macOS, and Windows CI pass with the Python target.
 - [ ] The sibling consumer fixture passes.
-- [ ] Python becomes the default and legacy functional scripts are removed.
+- [x] Python becomes the default.
+- [ ] Legacy functional scripts are removed.
 
 ## Performance Validation
 
@@ -591,11 +591,10 @@ real-backend retry behavior on supported CI hosts.
 
 ## Rollout and Rollback
 
-1. Keep Python opt-in while parity and consumer gates are open.
-2. Compare dry-run outputs and loopback request captures against legacy.
-3. Enable Python in representative consumers.
-4. Make Python the default only after all platform gates pass.
-5. Remove legacy code promptly so two implementations cannot drift.
+1. Compare dry-run outputs and loopback request captures against legacy.
+2. Validate the default in representative consumers and supported CI platforms.
+3. Remove legacy code promptly once the remaining gates close so two
+   implementations cannot drift.
 
 During rollout, rollback is the rule-level switch back to the legacy
 executable. Payload files remain recoverable because failures and dry-run retain

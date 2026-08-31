@@ -129,12 +129,12 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/... --test_output=errors
 
-      - name: Smoke Python uploader launcher (opt-in dry-run)
+      - name: Smoke default Python uploader launcher
         timeout-minutes: 5
         shell: bash
         run: |
           ./bazelw run \
-            //tools/tests/python/fixtures/generated_uploader:generated_python_uploader \
+            //tools/tests/python/fixtures/generated_uploader:generated_uploader \
             -- \
             --dry-run \
             --allow-cached-payload-uploads \
@@ -253,12 +253,12 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/... --test_output=errors
 
-      - name: Smoke Python uploader launcher (opt-in dry-run)
+      - name: Smoke default Python uploader launcher
         timeout-minutes: 5
         shell: bash
         run: |
           ./bazelw run \
-            //tools/tests/python/fixtures/generated_uploader:generated_python_uploader \
+            //tools/tests/python/fixtures/generated_uploader:generated_uploader \
             -- \
             --dry-run \
             --allow-cached-payload-uploads \

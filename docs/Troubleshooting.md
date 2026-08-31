@@ -756,8 +756,9 @@ or reports that the discovered interpreter is older than 3.10.
 
 **Solution**:
 
-1. Confirm the uploader target has `use_python_uploader = True`; the legacy
-   rollout path has different prerequisites.
+1. Confirm the uploader target does not explicitly set
+   `use_python_uploader = False`; that value selects the temporary legacy
+   rollback path.
 2. Set `DD_TEST_OPTIMIZATION_PYTHON` to an explicit Python 3.10+ executable.
    `PYTHON`, `python3`, and `python` are tried afterward, in that order.
 3. On Windows, set the environment variable before invoking `bazel run`:

@@ -186,18 +186,16 @@ and runtime identity must agree. Missing, duplicate, mismatched, or incomplete
 runtime selections fail before payload discovery, cleanup, enrichment, or
 network access.
 
-### Opt in to the parallel Python uploader
+### Parallel Python uploader (default)
 
-The Python uploader is currently an explicit rollout option. Enable it through
-`uploader_kwargs` and choose the maximum number of independent payload-file
-workers:
+The cross-platform Python uploader is the default. Use `uploader_kwargs` only
+when choosing a non-default number of independent payload-file workers:
 
 ```bzl
 dd_test_optimization_targets(
     name = "test_optimization",
     sync_repo_name = "test_optimization_data",
     uploader_kwargs = {
-        "use_python_uploader": True,
         "workers": 8,
     },
 )
@@ -215,8 +213,8 @@ HTTP; coverage bodies remain opaque JSON/msgpack multipart parts. The
 rule-level `workers` value defaults to `8`; `DD_TEST_OPTIMIZATION_WORKERS`
 overrides it at runtime and `--workers=<positive-integer>` has highest
 precedence. Leave
-`use_python_uploader = False` (the default) to retain the legacy Bash or
-PowerShell implementation during rollout.
+`use_python_uploader` unset for the Python implementation. Set it to `False`
+only for temporary rollback to the legacy Bash or PowerShell implementation.
 
 If your repository is small, the same helper can live in the root package. In
 large monorepos, prefer `//tools/test_optimization` or another lightweight
@@ -730,8 +728,9 @@ payload discovery/quiescence before proceeding.
 - JSON, gzip, telemetry, and multipart bodies are prepared once per logical
   request and replayed byte-for-byte for every retry.
 - The temporary legacy Bash/curl and PowerShell implementations remain
-  available only during the opt-in rollout window. The normalized policy above
-  is the Python uploader contract on Linux, macOS, and Windows.
+  available only as an explicit opt-out rollback during the rollout window.
+  The normalized policy above is the default uploader contract on Linux,
+  macOS, and Windows.
 
 ### Legacy Bash and PowerShell uploaders
 

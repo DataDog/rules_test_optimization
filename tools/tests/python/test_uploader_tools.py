@@ -1159,6 +1159,7 @@ class UploaderContractCharacterizationTests(unittest.TestCase):
         for name in RULE_ATTRIBUTES:
             self.assertIn(f'"{name}": attr.', text)
         self.assertIn('"workers": attr.int(default = 8,', text)
+        self.assertIn('"use_python_uploader": attr.bool(default = True,', text)
 
     def test_python_parser_contains_legacy_and_new_options(self) -> None:
         from uploader_py import config as config_module
