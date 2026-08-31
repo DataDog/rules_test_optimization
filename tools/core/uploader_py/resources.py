@@ -145,6 +145,7 @@ def load_resources(
         primary=primary_context_record,
         by_repo=tuple(context_records),
         override=runtime_override_enabled,
+        require_repo_match=inputs.runtime_selection,
     )
 
     telemetry_facts_paths: list[Path] = []

@@ -144,7 +144,15 @@ def discover_file_tasks(
             if not _safe_payload_directory(payload_directory, output.path):
                 warnings.append("payload_symlink_skipped")
                 continue
-            for source_path in sorted(payload_directory.iterdir(), key=lambda item: item.name):
+            try:
+                sources = sorted(
+                    payload_directory.iterdir(),
+                    key=lambda item: item.name,
+                )
+            except OSError:
+                warnings.append("payload_directory_unreadable")
+                continue
+            for source_path in sources:
                 if source_path.is_symlink():
                     if source_path.suffix.lower() in _PAYLOAD_SUFFIXES:
                         warnings.append("payload_symlink_skipped")

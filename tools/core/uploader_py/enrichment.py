@@ -51,14 +51,21 @@ class ContextSelection:
 
 @dataclass(frozen=True)
 class ContextPlan:
-    """Invocation-wide contexts loaded once and selected per source file."""
+    """Invocation-wide contexts loaded once and selected per source file.
+
+    Runtime-selected plans require the source sidecar to identify its repository;
+    static single-context plans retain their legacy fallback to the primary context.
+    """
 
     primary: ContextRecord | None
     by_repo: tuple[ContextRecord, ...] = ()
     override: bool = False
+    require_repo_match: bool = False
 
     def select(self, repo_key: str | None) -> ContextSelection:
-        if self.override or len(self.by_repo) <= 1:
+        if self.override:
+            return ContextSelection(self.primary.values if self.primary else None)
+        if not self.require_repo_match and len(self.by_repo) <= 1:
             return ContextSelection(self.primary.values if self.primary else None)
         if not repo_key:
             return ContextSelection(None, "context_repo_metadata_missing")

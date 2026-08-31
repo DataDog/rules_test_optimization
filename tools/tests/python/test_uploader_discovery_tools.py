@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from uploader_test_support import add_uploader_runtime_to_path
 
@@ -135,6 +136,33 @@ class DiscoveryTests(unittest.TestCase):
 
             self.assertEqual((), discovery.tasks)
             self.assertIn("payload_symlink_skipped", discovery.warning_codes)
+
+    def test_unreadable_payload_directory_does_not_hide_valid_siblings(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            unreadable = root / "a" / "test.outputs" / "payloads" / "tests"
+            unreadable.mkdir(parents=True)
+            unreadable = unreadable.resolve()
+            valid_source = _payload(
+                root / "b" / "test.outputs",
+                "tests",
+                "events.json",
+            )
+            original_iterdir = Path.iterdir
+
+            def iterdir(path: Path):
+                if path == unreadable:
+                    raise PermissionError("unreadable during discovery")
+                return original_iterdir(path)
+
+            with mock.patch.object(Path, "iterdir", iterdir):
+                discovery = discover_file_tasks((ScanRoot(root),))
+
+            self.assertEqual(
+                (valid_source.resolve(),),
+                tuple(task.source_path.resolve() for task in discovery.tasks),
+            )
+            self.assertIn("payload_directory_unreadable", discovery.warning_codes)
 
     def test_intermediate_payload_symlink_cannot_escape_test_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

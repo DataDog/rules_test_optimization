@@ -72,6 +72,14 @@ class ResourceLoadingTests(unittest.TestCase):
                 ("repo-a", "repo-b"),
                 tuple(record.repo_key for record in loaded.context_plan.by_repo),
             )
+            self.assertEqual(
+                "service-a",
+                loaded.context_plan.select("repo-a").values["service.name"],
+            )
+            self.assertEqual(
+                "context_repo_not_found",
+                loaded.context_plan.select("different-repo").warning_code,
+            )
             self.assertEqual("service-a", loaded.primary_context["service.name"])
             self.assertEqual(
                 (
