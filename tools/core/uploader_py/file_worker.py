@@ -18,6 +18,7 @@ import json
 import logging
 from pathlib import Path
 import stat
+import tempfile
 from typing import Any, Mapping, Protocol
 
 from validate_payload_schema import validate_payload as validate_schema_payload
@@ -331,7 +332,10 @@ def _process_test(
 
     requests_attempted = 0
     requests_succeeded = 0
+    requests_failed = 0
     retries = 0
+    failed_chunks: list[PreparedTestChunk] = []
+    first_failure: tuple[str, str] | None = None
     for request in requests:
         chunk = request.chunk
         _debug(
@@ -365,20 +369,53 @@ def _process_test(
                     f"threshold_bytes={MAX_TEST_PAYLOAD_BYTES}"
                 ),
             )
-            return FileResult(
-                status=FileStatus.FAILED,
-                chunks_uploaded=requests_succeeded,
-                chunks_failed=1,
-                requests_attempted=requests_attempted,
-                requests_succeeded=requests_succeeded,
-                requests_failed=1,
-                retries=retries,
-                warning_codes=_unique_codes(warnings),
-                failure_code=failure_code,
-                failure_message=failure_message,
-                **test_result_fields,
-            )
+            requests_failed += 1
+            failed_chunks.append(chunk)
+            if first_failure is None:
+                first_failure = (failure_code, failure_message)
+            continue
         requests_succeeded += 1
+
+    if first_failure is not None:
+        if requests_succeeded and not runtime.keep_payloads:
+            persisted = _persist_failed_test_chunks(
+                task.source_path,
+                payload,
+                failed_chunks,
+            )
+            if persisted:
+                if runtime.logger is not None:
+                    runtime.logger.info(
+                        "task=%s type=%s file=%s retained %d failed test "
+                        "chunk(s) for retry",
+                        task.task_id,
+                        task.payload_type.value,
+                        task.display_path,
+                        requests_failed,
+                    )
+            else:
+                warnings.append("failed_test_chunks_persist_failed")
+                if runtime.logger is not None:
+                    runtime.logger.warning(
+                        "task=%s type=%s file=%s failed to retain rejected test "
+                        "chunks; keeping the original source",
+                        task.task_id,
+                        task.payload_type.value,
+                        task.display_path,
+                    )
+        return FileResult(
+            status=FileStatus.FAILED,
+            chunks_uploaded=requests_succeeded,
+            chunks_failed=requests_failed,
+            requests_attempted=requests_attempted,
+            requests_succeeded=requests_succeeded,
+            requests_failed=requests_failed,
+            retries=retries,
+            warning_codes=_unique_codes(warnings),
+            failure_code=first_failure[0],
+            failure_message=first_failure[1],
+            **test_result_fields,
+        )
 
     deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
     _debug(runtime, task, f"test cleanup completed source_deleted={deleted}")
@@ -1061,6 +1098,55 @@ def _cleanup_source(path: Path, keep_payloads: bool) -> tuple[bool, str | None]:
             return True, None
         except OSError:
             return False, "source_cleanup_failed"
+
+
+def _persist_failed_test_chunks(
+    source_path: Path,
+    payload: Mapping[str, Any],
+    failed_chunks: list[PreparedTestChunk],
+) -> bool:
+    """Atomically replace a partially uploaded source with its failed events."""
+    events = payload.get("events")
+    if not isinstance(events, list) or not failed_chunks:
+        return False
+    retry_payload = dict(payload)
+    retry_payload["events"] = [
+        event
+        for chunk in failed_chunks
+        for event in events[chunk.event_start : chunk.event_end]
+    ]
+    try:
+        retry_body = compact_json_bytes(retry_payload)
+    except TestPayloadSplitError:
+        return False
+
+    parent = source_path.parent
+    for repair_permissions in (False, True):
+        if repair_permissions:
+            try:
+                parent.chmod(parent.stat().st_mode | stat.S_IWUSR)
+                source_path.chmod(source_path.stat().st_mode | stat.S_IWUSR)
+            except OSError:
+                pass
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=f".{source_path.name}.retry.",
+                dir=parent,
+                delete=False,
+            ) as temporary:
+                temporary.write(retry_body)
+                temporary_path = Path(temporary.name)
+            temporary_path.replace(source_path)
+            return True
+        except OSError:
+            if temporary_path is not None:
+                try:
+                    temporary_path.unlink()
+                except OSError:
+                    pass
+    return False
 
 
 def _http_failure(

@@ -40,7 +40,8 @@ preserving the public uploader contract. The design must:
 3. Let every worker process test, coverage, and telemetry payloads.
 4. Parse CODEOWNERS and other invocation-wide inputs once before worker startup.
 5. Split an enriched test body before HTTP when it exceeds 4.5 MiB.
-6. Keep chunks from one source ordered and stop after the first failed chunk.
+6. Keep chunks from one source ordered, attempt every chunk independently,
+   and retain only failed chunks after a partial upload.
 7. Retry only failures that can plausibly succeed without changing the body.
 8. Exercise full preparation in dry-run without HTTP or source deletion.
 9. Always produce useful terminal statistics for controlled completion.
@@ -294,8 +295,10 @@ splitter:
 - rejects an envelope or individual event that cannot fit;
 - writes every exact request body in task-local temporary space before HTTP.
 
-Chunks from one source are never parallelized. A failed chunk prevents all
-later chunks and retains the source.
+Chunks from one source are never parallelized. A failed chunk does not prevent
+later chunks from being attempted. After partial success, the source is
+atomically replaced with only the failed chunks so accepted events are not
+replayed; if every chunk fails or persistence fails, the original is retained.
 
 HTTP `413` is a terminal `payload_limit_contract_mismatch` for test chunks. It
 is not retried and does not trigger another split, because the preventive split
@@ -391,7 +394,8 @@ unbounded response bodies.
 ## Cleanup and Outcome Rules
 
 - Delete a source only after all requests derived from it succeed.
-- Keep sources on preparation, validation, split, transport, or HTTP failure.
+- Keep sources on preparation, validation, split, transport, or HTTP failure;
+  after a partial split upload, replace the source with only failed chunks.
 - `keep_payloads` suppresses deletion after success.
 - Dry-run never deletes sources.
 - Task/invocation temporary cleanup failure adds a warning without changing an
@@ -517,6 +521,8 @@ Required automated coverage:
 - strict JSON and schema warning behavior;
 - exact split boundary at limit minus one, limit, and limit plus one;
 - top-level preservation, event ordering, and oversized single event;
+- partial split failure continuation, failed-only retry persistence, and safe
+  fallback to the original source when persistence is unavailable;
 - gzip after split and byte-identical retry body;
 - JSON/msgpack coverage multipart content and exact length;
 - telemetry primary/synthetic ownership and immutable retry body;
@@ -550,6 +556,8 @@ flow in `../rules_test_optimization_tests` with local overrides.
 - [x] CODEOWNERS and global telemetry state are prepared once.
 - [x] Test split occurs before HTTP at exactly `4_718_592` bytes.
 - [x] Chunks preserve top-level fields, order, and exactly-once events.
+- [x] Partial split uploads retain only failed chunks without replaying accepted
+  events.
 - [x] `413` is terminal and never triggers retry or adaptive split.
 - [x] Dry-run performs full preparation with no HTTP, sleep, or deletion.
 - [x] Debug is task-scoped and secret-safe.

@@ -118,6 +118,17 @@ def _test_task(source: Path, outputs: Path | None = None) -> FileTask:
     )
 
 
+def _large_test_payload(*markers: str) -> str:
+    return json.dumps(
+        {
+            "events": [
+                {"content": {"meta": {"value": marker * 2_400_000}}}
+                for marker in markers
+            ]
+        }
+    )
+
+
 class FileWorkerTests(unittest.TestCase):
     def test_non_finite_test_json_fails_before_enrichment_or_http(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
@@ -311,17 +322,7 @@ class FileWorkerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             source = root / "events.json"
-            source.write_text(
-                json.dumps(
-                    {
-                        "events": [
-                            {"content": {"meta": {"value": "x" * 2_400_000}}},
-                            {"content": {"meta": {"value": "y" * 2_400_000}}},
-                        ]
-                    }
-                ),
-                encoding="utf-8",
-            )
+            source.write_text(_large_test_payload("x", "y"), encoding="utf-8")
             transport = _FakeTransport(HttpResult(200, 1), HttpResult(200, 1))
 
             result = process_file(_test_task(source), _runtime(root), transport)
@@ -333,22 +334,11 @@ class FileWorkerTests(unittest.TestCase):
                 all(len(call["body"]) <= MAX_TEST_PAYLOAD_BYTES for call in transport.json_calls)
             )
 
-    def test_failed_middle_chunk_retains_source_and_stops_later_chunks(self) -> None:
+    def test_failed_middle_chunk_continues_and_persists_only_failed_events(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
             source = root / "events.json"
-            source.write_text(
-                json.dumps(
-                    {
-                        "events": [
-                            {"content": {"meta": {"value": "x" * 2_400_000}}},
-                            {"content": {"meta": {"value": "y" * 2_400_000}}},
-                            {"content": {"meta": {"value": "z" * 2_400_000}}},
-                        ]
-                    }
-                ),
-                encoding="utf-8",
-            )
+            source.write_text(_large_test_payload("x", "y", "z"), encoding="utf-8")
             transport = _FakeTransport(
                 HttpResult(200, 1),
                 HttpResult(503, 4),
@@ -359,12 +349,65 @@ class FileWorkerTests(unittest.TestCase):
 
             self.assertEqual(FileStatus.FAILED, result.status)
             self.assertEqual(3, result.chunks_created)
-            self.assertEqual(1, result.chunks_uploaded)
+            self.assertEqual(2, result.chunks_uploaded)
             self.assertEqual(1, result.chunks_failed)
-            self.assertEqual(2, len(transport.json_calls))
-            self.assertEqual(5, result.requests_attempted)
+            self.assertEqual(3, len(transport.json_calls))
+            self.assertEqual(6, result.requests_attempted)
+            self.assertEqual(2, result.requests_succeeded)
+            self.assertEqual(1, result.requests_failed)
             self.assertEqual(3, result.retries)
             self.assertTrue(source.exists())
+            retained = json.loads(source.read_text(encoding="utf-8"))
+            self.assertEqual(1, len(retained["events"]))
+            self.assertEqual(
+                "y" * 2_400_000,
+                retained["events"][0]["content"]["meta"]["value"],
+            )
+
+            retry_transport = _FakeTransport(HttpResult(200, 1))
+            retry_result = process_file(
+                _test_task(source),
+                _runtime(root),
+                retry_transport,
+            )
+
+            self.assertEqual(FileStatus.SUCCEEDED, retry_result.status)
+            self.assertEqual(1, len(retry_transport.json_calls))
+            self.assertFalse(source.exists())
+
+    def test_all_failed_chunks_keep_the_original_source(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source = root / "events.json"
+            original = _large_test_payload("x", "y")
+            source.write_text(original, encoding="utf-8")
+            transport = _FakeTransport(HttpResult(503, 4), HttpResult(503, 4))
+
+            result = process_file(_test_task(source), _runtime(root), transport)
+
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertEqual(0, result.chunks_uploaded)
+            self.assertEqual(2, result.chunks_failed)
+            self.assertEqual(2, len(transport.json_calls))
+            self.assertEqual(original, source.read_text(encoding="utf-8"))
+
+    def test_failed_chunk_persistence_error_keeps_the_original_source(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            source = root / "events.json"
+            original = _large_test_payload("x", "y")
+            source.write_text(original, encoding="utf-8")
+            transport = _FakeTransport(HttpResult(200, 1), HttpResult(503, 4))
+
+            with patch(
+                "uploader_py.file_worker.tempfile.NamedTemporaryFile",
+                side_effect=OSError("read-only directory"),
+            ):
+                result = process_file(_test_task(source), _runtime(root), transport)
+
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertIn("failed_test_chunks_persist_failed", result.warning_codes)
+            self.assertEqual(original, source.read_text(encoding="utf-8"))
 
     def test_413_is_terminal_and_source_is_kept(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

@@ -727,6 +727,10 @@ payload discovery/quiescence before proceeding.
   splitting.
 - JSON, gzip, telemetry, and multipart bodies are prepared once per logical
   request and replayed byte-for-byte for every retry.
+- Split test chunks are uploaded in event order and fail independently. After
+  partial success, the source is atomically replaced with only the failed
+  chunks so accepted events are not replayed; if every chunk fails or the
+  replacement cannot be written, the original source is retained.
 - The temporary legacy Bash/curl and PowerShell implementations remain
   available only as an explicit opt-out rollback during the rollout window.
   The normalized policy above is the default uploader contract on Linux,
