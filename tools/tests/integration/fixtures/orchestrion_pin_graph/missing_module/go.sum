@@ -1,6 +1,0 @@
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.1-rc.3 h1:Sa2Xl/25nkVZtsDRMMA0NtJavWEE+4GRc0fPoLznHZI=
-github.com/DataDog/dd-trace-go/contrib/net/http/v2 v2.9.1-rc.3/go.mod h1:L0HbDaTdLRK59szho4l7X7YsZ2OkSXgmskvfiOTPLSI=
-github.com/DataDog/dd-trace-go/v2 v2.9.1-rc.3 h1:3pOaLc2C2JN0EdQV6Ea0uz724aJ7ECP3u5VGHoJnk2U=
-github.com/DataDog/dd-trace-go/v2 v2.9.1-rc.3/go.mod h1:SdMkCESSBc2knx56Xol2pO7jhMDPi7MxyNj6vRYMW48=
-github.com/DataDog/orchestrion v1.9.0 h1:TmjQfgaIMZDnGAmNXHIw5P7R+q4hOEJN5B/S24IqbKA=
-github.com/DataDog/orchestrion v1.9.0/go.mod h1:FvbdNvK2PY3YnEIw0MHqdBELhZ0P7nUpWaJB3TgUtNE=
