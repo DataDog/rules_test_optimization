@@ -253,6 +253,38 @@ class FileWorkerTests(unittest.TestCase):
             self.assertEqual("//pkg:test", body["events"][0]["content"]["meta"]["bazel.target"])
             self.assertEqual("abcdef", body["events"][1]["content"]["meta"]["git.commit.sha"])
 
+    def test_symlinked_bazel_metadata_is_never_merged(self) -> None:
+        if not hasattr(Path, "symlink_to"):
+            self.skipTest("symlinks are unavailable")
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            outputs = root / "test.outputs"
+            source = outputs / "payloads" / "tests" / "events.json"
+            source.parent.mkdir(parents=True)
+            source.write_text('{"events":[{"content":{"meta":{}}}]}', encoding="utf-8")
+            outside = root / "outside.json"
+            outside.write_text(
+                '{"secret":"must-not-upload","bazel.target":"//pkg:test"}',
+                encoding="utf-8",
+            )
+            sidecar = outputs / "bazel_target_metadata.json"
+            try:
+                sidecar.symlink_to(outside)
+            except OSError as exc:
+                self.skipTest(f"symlinks are unavailable: {exc}")
+            transport = _FakeTransport(HttpResult(200, 1))
+
+            result = process_file(
+                _test_task(source, outputs),
+                _runtime(root, keep_payloads=True),
+                transport,
+            )
+
+            self.assertEqual(FileStatus.SUCCEEDED, result.status)
+            self.assertIn("bazel_metadata_unsafe", result.warning_codes)
+            body = json.loads(transport.json_calls[0]["body"])
+            self.assertNotIn("secret", body["events"][0]["content"]["meta"])
+
     def test_successful_upload_deletes_from_read_only_bazel_directory(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

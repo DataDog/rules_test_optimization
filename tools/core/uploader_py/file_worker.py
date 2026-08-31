@@ -963,6 +963,13 @@ def _load_bazel_metadata(
     sidecar = task.test_outputs_dir / "bazel_target_metadata.json"
     if not sidecar.is_file():
         return None, None
+    try:
+        sidecar_resolved = sidecar.resolve(strict=True)
+        output_resolved = task.test_outputs_dir.resolve(strict=True)
+    except OSError:
+        return None, "bazel_metadata_invalid"
+    if sidecar.is_symlink() or sidecar_resolved.parent != output_resolved:
+        return None, "bazel_metadata_unsafe"
     payload, failure = _read_json_object(sidecar, "Bazel metadata")
     if failure is not None:
         return None, "bazel_metadata_invalid"

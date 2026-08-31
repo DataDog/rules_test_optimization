@@ -755,6 +755,7 @@ def _uploader_impl(ctx):
             "expected_targets_file_short_path": (
                 expected_targets_file.short_path if expected_targets_file else ""
             ),
+            "runtime_selection": ctx.attr.runtime_selection,
         }) + "\n",
     )
 

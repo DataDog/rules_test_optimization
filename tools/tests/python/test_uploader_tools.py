@@ -346,6 +346,20 @@ class UploaderConfigTests(unittest.TestCase):
         )
         self.assertEqual(("git.commit.sha", "bazel.target"), config.expected_enriched_tags)
 
+        config = self.parse(
+            "--expected-target=//pkg:a",
+            "--expected-target",
+            "//pkg:b",
+            "--context-entry=repo-a=/tmp/a/context.json",
+            "--context-entry",
+            "repo-b=/tmp/b/context.json",
+        )
+        self.assertEqual(("//pkg:a", "//pkg:b"), config.runtime_expected_targets)
+        self.assertEqual(
+            ("repo-a=/tmp/a/context.json", "repo-b=/tmp/b/context.json"),
+            config.runtime_context_entries,
+        )
+
     def test_artifact_report_and_environment_paths(self) -> None:
         config = self.parse(
             "--artifact-source=BEP",

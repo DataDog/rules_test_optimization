@@ -37,6 +37,35 @@ def _payload(root: Path, target_path: str) -> None:
 
 
 class ExpectedTargetsTests(unittest.TestCase):
+    def test_runtime_selection_requires_targets_and_rejects_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            resolver = RunfilesResolver.from_environment(environ={}, cwd=root)
+            with self.assertRaisesRegex(ExpectedTargetsError, "at least one"):
+                load_expected_targets(
+                    static_targets=(),
+                    expected_targets_file_paths=(),
+                    resolver=resolver,
+                    runtime_selection=True,
+                )
+            with self.assertRaisesRegex(ExpectedTargetsError, "different target sets"):
+                load_expected_targets(
+                    static_targets=("//pkg:a",),
+                    expected_targets_file_paths=(),
+                    resolver=resolver,
+                    runtime_targets=("//pkg:b",),
+                )
+
+            plan = load_expected_targets(
+                static_targets=(),
+                expected_targets_file_paths=(),
+                resolver=resolver,
+                runtime_targets=("//pkg:b", "//pkg:a"),
+                runtime_selection=True,
+            )
+            self.assertEqual(("//pkg:a", "//pkg:b"), plan.targets)
+            self.assertEqual("runtime", plan.source)
+
     def test_schema_v1_file_selects_outputs_and_stamps_tasks(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

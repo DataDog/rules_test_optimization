@@ -22,7 +22,7 @@ from uploader_test_support import add_uploader_runtime_to_path
 add_uploader_runtime_to_path()
 
 from topt_runtime.runfiles import RunfilesResolver  # noqa: E402
-from uploader_py.resources import ResourceInputs, load_resources  # noqa: E402
+from uploader_py.resources import ResourceError, ResourceInputs, load_resources  # noqa: E402
 
 
 def _json(path: Path, value: object) -> None:
@@ -31,6 +31,96 @@ def _json(path: Path, value: object) -> None:
 
 
 class ResourceLoadingTests(unittest.TestCase):
+    def test_runtime_selection_loads_sorted_keyed_contexts_and_facts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            entries = []
+            for repo, service in (("repo-b", "service-b"), ("repo-a", "service-a")):
+                directory = root / repo
+                context = directory / "context.json"
+                facts = directory / "telemetry_facts.json"
+                _json(
+                    context,
+                    {
+                        "topt.sync.repository_name": repo,
+                        "service.name": service,
+                        "runtime.name": "go",
+                    },
+                )
+                _json(
+                    facts,
+                    {
+                        "schema_version": 1,
+                        "service_name": service,
+                        "runtime_name": "go",
+                        "counts": [],
+                        "distributions": [],
+                    },
+                )
+                entries.append(f"{repo}={context.relative_to(root)}")
+
+            loaded = load_resources(
+                RunfilesResolver.from_environment(environ={}, cwd=root),
+                ResourceInputs(
+                    runtime_context_entries=tuple(entries),
+                    runtime_selection=True,
+                    invocation_cwd=root,
+                ),
+            )
+
+            self.assertEqual(
+                ("repo-a", "repo-b"),
+                tuple(record.repo_key for record in loaded.context_plan.by_repo),
+            )
+            self.assertEqual("service-a", loaded.primary_context["service.name"])
+            self.assertEqual(
+                (
+                    (root / "repo-a" / "telemetry_facts.json").resolve(),
+                    (root / "repo-b" / "telemetry_facts.json").resolve(),
+                ),
+                loaded.telemetry_facts_paths,
+            )
+
+    def test_runtime_selection_fails_before_optional_resource_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            resolver = RunfilesResolver.from_environment(environ={}, cwd=root)
+            with self.assertRaisesRegex(ResourceError, "at least one --context-entry"):
+                load_resources(
+                    resolver,
+                    ResourceInputs(runtime_selection=True, invocation_cwd=root),
+                )
+
+            context = root / "context.json"
+            facts = root / "telemetry_facts.json"
+            _json(
+                context,
+                {
+                    "topt.sync.repository_name": "different-repo",
+                    "service.name": "service",
+                    "runtime.name": "go",
+                },
+            )
+            _json(
+                facts,
+                {
+                    "schema_version": 1,
+                    "service_name": "service",
+                    "runtime_name": "go",
+                    "counts": [],
+                    "distributions": [],
+                },
+            )
+            with self.assertRaisesRegex(ResourceError, "identity or schema mismatch"):
+                load_resources(
+                    resolver,
+                    ResourceInputs(
+                        runtime_context_entries=(f"repo={context}",),
+                        runtime_selection=True,
+                        invocation_cwd=root,
+                    ),
+                )
+
     def test_manifest_loads_normalized_contexts_facts_and_schema_once(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

@@ -50,7 +50,7 @@ from .locking import WorkspaceLock, WorkspaceLockError
 from .logging_utils import redact_url
 from .models import FileStatus, PayloadType
 from .reporting import AggregateReport, LegacyReportContext, emit_report
-from .resources import LoadedResources, ResourceInputs, load_resources
+from .resources import LoadedResources, ResourceError, ResourceInputs, load_resources
 from .temporary import TemporaryDirectoryError
 from .transport import HttpTransportError
 from .worker_pool import WorkerPoolError
@@ -60,6 +60,7 @@ _CONTROLLED_ERRORS = (
     ConfigError,
     DiscoveryError,
     ExpectedTargetsError,
+    ResourceError,
     FreshnessError,
     TemporaryDirectoryError,
     HttpTransportError,
@@ -138,7 +139,10 @@ def _run_uploader_with_lock(
                 config.rule.expected_targets_file_short_path,
             ),
             resolver=resolver,
+            runtime_targets=config.runtime_expected_targets,
+            runtime_selection=config.rule.runtime_selection,
         )
+        resources = _load_resources(config, resolver, logger)
         local_root = resolve_local_testlogs_root(
             explicit=config.testlogs_dir,
             workspace=config.workspace,
@@ -206,7 +210,6 @@ def _run_uploader_with_lock(
             validate_upload_credentials(config)
         else:
             logger.debug("credential validation skipped: no upload tasks")
-        resources = _load_resources(config, resolver, logger)
         report = run_discovered_tasks(
             eligible_discovery,
             settings=CoordinatorSettings.from_config(config),
@@ -241,13 +244,20 @@ def _run_uploader_with_lock(
             except FreshnessError as exc:
                 logger.error("%s", exc)
                 report = replace(report, exit_code=exc.exit_code)
-                report_reason = _ReportReason(
-                    code="fresh_output_without_payloads",
-                    message=str(exc),
-                    next_steps=(
-                        "Inspect the fresh test.outputs payload directories.",
-                    ),
-                )
+                if "remote-only" in str(exc).lower():
+                    report_reason = _preflight_failure_reason(
+                        config,
+                        freshness_plan,
+                        exc,
+                    )
+                else:
+                    report_reason = _ReportReason(
+                        code="fresh_output_without_payloads",
+                        message=str(exc),
+                        next_steps=(
+                            "Inspect the fresh test.outputs payload directories.",
+                        ),
+                    )
 
         if not raw_discovery.tasks:
             if all_expected_outputs_cached:
@@ -568,6 +578,10 @@ def _load_resources(
                 config.rule.schema_json_path,
                 config.rule.schema_json_short_path,
             ),
+            runtime_context_entries=config.runtime_context_entries,
+            runtime_selection=config.rule.runtime_selection,
+            workspace=config.workspace,
+            invocation_cwd=config.invocation_cwd,
         ),
     )
     logger.debug(

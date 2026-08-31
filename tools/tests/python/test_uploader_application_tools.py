@@ -50,6 +50,7 @@ class ApplicationTests(unittest.TestCase):
         dry_run: bool = True,
         fail_on_error: bool = False,
         expected_targets: tuple[str, ...] = (),
+        runtime_selection: bool = False,
         allow_cached_payload_uploads: bool = True,
         extra_arguments: tuple[str, ...] = (),
         extra_environment: dict[str, str] | None = None,
@@ -63,6 +64,7 @@ class ApplicationTests(unittest.TestCase):
                     "max_wait_sec": 0,
                     "fail_on_error": fail_on_error,
                     "expected_targets": expected_targets,
+                    "runtime_selection": runtime_selection,
                     "workers": 3,
                     "rules_version": "rules-test",
                     "uploader_version": "uploader-test",
@@ -421,6 +423,67 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(1, report["bep"]["cached_outputs"])
             self.assertEqual(1, report["bep"]["remote_only_outputs"])
             self.assertEqual(0, report["requests"]["attempted"])
+
+    def test_remote_only_expected_output_fails_with_existing_empty_testlogs(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            (root / "bazel-testlogs").mkdir()
+            bep = _runfile(
+                "tools/tests/python/fixtures/bep_snake_case_remote_cached.ndjson"
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                dry_run=False,
+                fail_on_error=True,
+                expected_targets=("//pkg:target", "//pkg:remote_only"),
+                allow_cached_payload_uploads=False,
+                extra_arguments=(
+                    "--freshness-source=bep",
+                    "--freshness-mode=optional",
+                    f"--bep-json={bep}",
+                    f"--report-json={report_path}",
+                ),
+            )
+
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=StringIO()),
+                stream=StringIO(),
+                transport_factory=mock.Mock(
+                    side_effect=AssertionError("transport must not be created")
+                ),
+            )
+
+            self.assertEqual(2, exit_code)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "bep_output_remote_only_without_downloader",
+                report["result"]["reason_code"],
+            )
+            self.assertEqual(1, report["bep"]["remote_only_outputs"])
+            self.assertEqual(0, report["requests"]["attempted"])
+
+    def test_runtime_selection_is_validated_before_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            config = self._config(root, runtime_selection=True)
+
+            with mock.patch(
+                "uploader_py.application.resolve_local_testlogs_root",
+                side_effect=AssertionError("discovery must not start"),
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=StringIO(),
+                )
+
+            self.assertEqual(2, exit_code)
 
     def test_interrupted_worker_report_is_printed_and_written(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

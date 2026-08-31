@@ -127,10 +127,19 @@ def prepare_freshness(
     if bep_processing_required:
         if not bep_configured:
             raise FreshnessError("BEP artifact staging requires a configured BEP JSON file")
-        bep_files = tuple(
-            _resolve_runtime_file(path, workspace=config.workspace)
-            for path in config.bep_json_files
-        )
+        try:
+            bep_files = tuple(
+                _resolve_runtime_file(path, workspace=config.workspace)
+                for path in config.bep_json_files
+            )
+        except FreshnessError:
+            if config.freshness_mode != "optional" or staging_requested:
+                raise
+            warning_codes.append("bep_freshness_unavailable")
+            selected_source = "none"
+            bep_processing_required = False
+            bep_files = ()
+    if bep_processing_required:
         doctor_path = _resolve_doctor_runtime(config, resolver)
         doctor_runtime = _load_doctor_runtime(doctor_path, warning_codes)
         freshness_unavailable_is_error = config.freshness_mode != "optional" or staging_requested
@@ -359,6 +368,16 @@ def validate_fresh_outputs_accounted(
                 f"{label} {output_key}",
                 exit_code=1,
             )
+        remote_outputs = tuple(
+            output
+            for output in plan.remote_only_outputs
+            if output.label in expected_target_set
+        )
+        if remote_outputs:
+            raise FreshnessError(
+                "BEP references remote-only test outputs for "
+                f"{remote_outputs[0].label}, but local test.outputs was not found"
+            )
         return
     if plan.eligible_outputs and not handled_pairs:
         raise FreshnessError(
@@ -564,6 +583,10 @@ def _execution_output_key(raw: str) -> str:
 def _read_target_label(output_dir: Path) -> str | None:
     metadata_file = output_dir / "bazel_target_metadata.json"
     try:
+        if metadata_file.is_symlink():
+            return None
+        if metadata_file.resolve(strict=True).parent != output_dir.resolve(strict=True):
+            return None
         value = strict_json_loads(metadata_file.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, json.JSONDecodeError):
         return None

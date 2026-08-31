@@ -76,6 +76,7 @@ class RuleConfig:
     expected_targets: tuple[str, ...] = ()
     expected_targets_file_path: str = ""
     expected_targets_file_short_path: str = ""
+    runtime_selection: bool = False
 
 
 @dataclass(frozen=True)
@@ -99,6 +100,8 @@ class UploaderConfig:
     gzip_payloads: bool
     workers: int
     expected_enriched_tags: tuple[str, ...]
+    runtime_expected_targets: tuple[str, ...]
+    runtime_context_entries: tuple[str, ...]
     bep_json_files: tuple[Path, ...]
     freshness_source: str
     freshness_mode: str
@@ -132,6 +135,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--validate-enrichment", action="store_true")
     parser.add_argument("--expected-enriched-tag", action="append", default=[])
+    parser.add_argument("--expected-target", action="append", default=[])
+    parser.add_argument("--context-entry", action="append", default=[])
     parser.add_argument("--bep-json", action="append", default=[])
     parser.add_argument("--freshness-source")
     parser.add_argument("--freshness-mode")
@@ -315,6 +320,8 @@ def parse_uploader_config(
         gzip_payloads=gzip_payloads,
         workers=workers,
         expected_enriched_tags=expected_enriched_tags,
+        runtime_expected_targets=tuple(args.expected_target),
+        runtime_context_entries=tuple(args.context_entry),
         bep_json_files=tuple(Path(path) for path in bep_json_paths),
         freshness_source=freshness_source,
         freshness_mode=freshness_mode,
@@ -398,6 +405,7 @@ def load_rule_config(path: Path) -> RuleConfig:
         expected_targets_file_short_path=_json_string(
             raw, "expected_targets_file_short_path", ""
         ),
+        runtime_selection=_json_boolean(raw, "runtime_selection", False),
     )
 
 

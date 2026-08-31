@@ -40,6 +40,7 @@ from uploader_py.expected_targets import (  # noqa: E402
 from uploader_py.freshness import (  # noqa: E402
     FreshnessError,
     FreshnessPlan,
+    RemoteOutput,
     filter_discovery_for_freshness,
     prepare_freshness,
     validate_fresh_outputs_accounted,
@@ -61,6 +62,47 @@ def _metadata(output: Path, label: str) -> None:
 
 
 class FreshnessTests(unittest.TestCase):
+    def test_optional_missing_bep_falls_back_to_local_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            testlogs = root / "bazel-testlogs"
+            testlogs.mkdir()
+            config = self._config(
+                root,
+                "--freshness-source=bep",
+                "--freshness-mode=optional",
+                "--bep-json=missing.ndjson",
+            )
+
+            prepared = prepare_freshness(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                local_testlogs_root=testlogs,
+            )
+
+            self.assertEqual("none", prepared.plan.selected_source)
+            self.assertFalse(prepared.plan.eligibility_enabled)
+            self.assertIn("bep_freshness_unavailable", prepared.plan.warning_codes)
+            self.assertEqual((ScanRoot(testlogs),), prepared.scan_roots)
+
+    def test_remote_only_expected_output_fails_after_other_results(self) -> None:
+        plan = FreshnessPlan(
+            selected_source="bep",
+            eligibility_enabled=True,
+            remote_only_outputs=(
+                RemoteOutput("//pkg:remote", "pkg/remote/test.outputs", "remote"),
+            ),
+        )
+
+        with self.assertRaisesRegex(FreshnessError, "remote-only"):
+            validate_fresh_outputs_accounted(
+                plan,
+                DiscoveryResult(outputs=(), tasks=(), discovered_by_type={}),
+                (),
+                expected_targets=("//pkg:remote",),
+                fail_on_error=True,
+            )
+
     def _config(
         self,
         root: Path,
@@ -202,6 +244,33 @@ class FreshnessTests(unittest.TestCase):
             root = Path(raw_root)
             output = root / "pkg" / "target" / "test.outputs"
             _payload(output)
+            discovery = discover_file_tasks((ScanRoot(root),))
+            plan = FreshnessPlan(
+                selected_source="bep",
+                eligibility_enabled=True,
+                eligible_outputs=frozenset(
+                    {("//pkg:target", "pkg/target/test.outputs")}
+                ),
+            )
+
+            with self.assertRaisesRegex(FreshnessError, "metadata is missing"):
+                filter_discovery_for_freshness(
+                    discovery,
+                    plan,
+                    freshness_mode="required",
+                )
+
+    def test_freshness_does_not_follow_symlinked_target_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "pkg" / "target" / "test.outputs"
+            _payload(output)
+            outside = root / "outside.json"
+            outside.write_text('{"bazel.target":"//pkg:target"}', encoding="utf-8")
+            try:
+                (output / "bazel_target_metadata.json").symlink_to(outside)
+            except OSError as exc:
+                self.skipTest(f"symlinks are unavailable: {exc}")
             discovery = discover_file_tasks((ScanRoot(root),))
             plan = FreshnessPlan(
                 selected_source="bep",

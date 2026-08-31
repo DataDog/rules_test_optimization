@@ -43,26 +43,47 @@ def load_expected_targets(
     static_targets: Iterable[str],
     expected_targets_file_paths: Iterable[str],
     resolver: RunfilesResolver,
+    runtime_targets: Iterable[str] = (),
+    runtime_selection: bool = False,
 ) -> ExpectedTargetsPlan:
-    """Merge the generated static list and optional schema-v1 target file."""
+    """Merge generated and runtime targets into one validated selection."""
     static = tuple(_validate_label(label) for label in static_targets)
     if len(static) != len(set(static)):
         raise ExpectedTargetsError("static expected_targets contains duplicates")
     candidates = tuple(path for path in expected_targets_file_paths if path)
-    if not candidates:
-        return ExpectedTargetsPlan(tuple(sorted(static)), "static" if static else "discovery")
-    try:
-        target_file = resolver.resolve_file(candidates)
-    except RunfileResolutionError as exc:
-        raise ExpectedTargetsError("expected_targets_file could not be resolved") from exc
-    dynamic = _load_target_file(target_file)
-    if static and set(static) != set(dynamic):
+    configured = tuple(sorted(static))
+    configured_source = "static" if static else "discovery"
+    if candidates:
+        try:
+            target_file = resolver.resolve_file(candidates)
+        except RunfileResolutionError as exc:
+            raise ExpectedTargetsError("expected_targets_file could not be resolved") from exc
+        dynamic = _load_target_file(target_file)
+        if static and set(static) != set(dynamic):
+            raise ExpectedTargetsError(
+                "static expected_targets and expected_targets_file contain different target sets"
+            )
+        configured = tuple(sorted(static)) if static else dynamic
+        configured_source = "static_and_file" if static else "file"
+
+    runtime = tuple(_validate_label(label) for label in runtime_targets)
+    if len(runtime) != len(set(runtime)):
         raise ExpectedTargetsError(
-            "static expected_targets and expected_targets_file contain different target sets"
+            "runtime --expected-target arguments contain duplicate target labels"
         )
-    if static:
-        return ExpectedTargetsPlan(tuple(sorted(static)), "static_and_file")
-    return ExpectedTargetsPlan(dynamic, "file")
+    runtime = tuple(sorted(runtime))
+    if runtime:
+        if configured and set(configured) != set(runtime):
+            raise ExpectedTargetsError(
+                "configured and runtime expected targets contain different target sets"
+            )
+        source = "runtime_and_configured" if configured else "runtime"
+        return ExpectedTargetsPlan(runtime, source)
+    if runtime_selection:
+        raise ExpectedTargetsError(
+            "runtime selection requires at least one --expected-target argument"
+        )
+    return ExpectedTargetsPlan(configured, configured_source)
 
 
 def select_expected_outputs(
