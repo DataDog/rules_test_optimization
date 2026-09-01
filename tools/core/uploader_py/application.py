@@ -390,7 +390,7 @@ def _log_legacy_result_markers(
     if config.validate_enrichment:
         validation_prefix = "dry-run " if config.dry_run else ""
         for result in successful_tests:
-            logger.info(
+            logger.debug(
                 "%svalidated enriched test payload: %s",
                 validation_prefix,
                 result.source_path,

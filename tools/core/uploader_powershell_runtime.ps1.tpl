@@ -4898,9 +4898,9 @@ function Test-EnrichedPayloadTags([string]$BodyPath, [string]$SourcePath) {
         return [bool]$false
     }
     if ($script:DryRun) {
-        Log "dry-run validated enriched test payload: $SourcePath"
+        Dbg "dry-run validated enriched test payload: $SourcePath"
     } else {
-        Log "validated enriched test payload: $SourcePath"
+        Dbg "validated enriched test payload: $SourcePath"
     }
     return [bool]$true
 }

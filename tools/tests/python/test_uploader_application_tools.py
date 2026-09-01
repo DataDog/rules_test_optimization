@@ -166,6 +166,25 @@ class ApplicationTests(unittest.TestCase):
             )
             self.assertIn("dry-run validated 1 test payloads", log_stream.getvalue())
 
+            normal_log_stream = StringIO()
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=normal_log_stream),
+                stream=StringIO(),
+            )
+
+            self.assertEqual(0, exit_code)
+            self.assertNotIn(
+                "dry-run validated enriched test payload",
+                normal_log_stream.getvalue(),
+            )
+            self.assertIn(
+                "dry-run validated 1 test payloads",
+                normal_log_stream.getvalue(),
+            )
+
     def test_success_statistics_report_full_invocation_elapsed_time(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

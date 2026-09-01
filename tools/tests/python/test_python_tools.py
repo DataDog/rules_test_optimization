@@ -6669,6 +6669,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         responder,
         *,
         extra_args: tuple[str, ...] = (),
+        debug: bool = False,
         gzip_enabled: bool,
         keep_payloads: bool = True,
         read_only_parent: bool = False,
@@ -6729,7 +6730,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             env = os.environ.copy()
             env.update({
                 "BUILD_WORKSPACE_DIRECTORY": str(root),
-                "DD_TEST_OPTIMIZATION_DEBUG": "0",
+                "DD_TEST_OPTIMIZATION_DEBUG": "1" if debug else "0",
                 "DD_TEST_OPTIMIZATION_GZIP": "1" if gzip_enabled else "0",
                 "DD_TEST_OPTIMIZATION_KEEP_PAYLOADS": "1" if keep_payloads else "0",
                 "DD_TEST_OPTIMIZATION_MAX_WAIT_SEC": "0",
@@ -6895,12 +6896,29 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             return 200, {}
 
         for runtime in ("Bash", "PowerShell"):
-            with self.subTest(runtime=runtime, result="valid"):
+            with self.subTest(runtime=runtime, result="valid-default-logging"):
                 result, records, retained_payload = self._run_local_test_upload(
                     runtime,
                     payload,
                     accept,
                     extra_args=("--validate-enrichment", "--expected-enriched-tag=event.id"),
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                    read_only_parent=True,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(0, result.returncode, output)
+                self.assertIsNone(retained_payload)
+                self.assertEqual(1, len(records), records)
+                self.assertNotIn("validated enriched test payload", output)
+
+            with self.subTest(runtime=runtime, result="valid-debug-logging"):
+                result, records, retained_payload = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    extra_args=("--validate-enrichment", "--expected-enriched-tag=event.id"),
+                    debug=True,
                     gzip_enabled=True,
                     keep_payloads=False,
                     read_only_parent=True,
