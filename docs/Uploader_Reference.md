@@ -186,6 +186,36 @@ and runtime identity must agree. Missing, duplicate, mismatched, or incomplete
 runtime selections fail before payload discovery, cleanup, enrichment, or
 network access.
 
+### Parallel Python uploader (default)
+
+The cross-platform Python uploader is the default. Use `uploader_kwargs` only
+when choosing a non-default number of independent payload-file workers:
+
+```bzl
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data",
+    uploader_kwargs = {
+        "workers": 8,
+    },
+)
+```
+
+This mode requires a host Python 3.10 or newer on Linux, macOS, and Windows at
+`bazel run` time. The launcher resolves `DD_TEST_OPTIMIZATION_PYTHON`, then
+`PYTHON`, then `python3`, then `python`. Each worker owns one payload file and
+performs its enrichment, validation, preflight split at the conservative
+`4_718_592`-byte (4.5 MiB) threshold, and upload/retries independently. Every
+worker can process test, coverage, or telemetry payloads; chunks and other
+derived requests belonging to one source remain sequential. Test and telemetry
+JSON reject non-standard numbers (`NaN` and positive/negative `Infinity`) before
+HTTP; coverage bodies remain opaque JSON/msgpack multipart parts. The
+rule-level `workers` value defaults to `8`; `DD_TEST_OPTIMIZATION_WORKERS`
+overrides it at runtime and `--workers=<positive-integer>` has highest
+precedence. Leave
+`use_python_uploader` unset for the Python implementation. Set it to `False`
+only for temporary rollback to the legacy Bash or PowerShell implementation.
+
 If your repository is small, the same helper can live in the root package. In
 large monorepos, prefer `//tools/test_optimization` or another lightweight
 package to avoid loading unrelated root package wiring when running doctor or
@@ -295,6 +325,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | `0` uploads all payload files; set to `1` to only upload `span_events_*.json` or `coverage_*.json` |
 | `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose attempt, success, startTime, and runfile/CODEOWNERS resolution logging. Terminal test-upload failures always report the HTTP status, a bounded response body, and payload sizes. |
 | `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip test payloads before upload (adds `Content-Encoding: gzip`) |
+| `DD_TEST_OPTIMIZATION_WORKERS` | rule `workers` (`8`) | Override the maximum independent payload-file workers in Python mode; `--workers` has higher precedence |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
@@ -679,11 +710,44 @@ payload discovery/quiescence before proceeding.
 
 ## Reliability
 
-- HTTP requests use a 60-second timeout
+### Python uploader
+
+- Python mode uses a 10-second connection timeout and a 60-second socket-I/O
+  timeout.
+- Each logical request makes at most four total attempts: the initial attempt
+  plus up to three retries, normally separated by 2 seconds.
+- Connection failures, timeouts, HTTP `408`, HTTP `429`, and HTTP `5xx` are
+  retryable. `Retry-After` is honored when the backend supplies it, with a
+  60-second safety cap per retry so a response cannot stall a worker
+  indefinitely.
+- Other HTTP `4xx` responses are terminal after the first attempt. For test
+  payloads, `413` indicates that the preventive split contract was violated.
+  Coverage and telemetry are not split, so their `413` failures use the
+  `upload_http_413` reason instead. No `413` is retried or triggers adaptive
+  splitting.
+- JSON, gzip, telemetry, and multipart bodies are prepared once per logical
+  request and replayed byte-for-byte for every retry.
+- Split test chunks are uploaded in event order and fail independently. After
+  partial success, the source is atomically replaced with only the failed
+  chunks so accepted events are not replayed; if every chunk fails or the
+  replacement cannot be written, the original source is retained.
+- A telemetry source and its synthetic rule-facts request are also attempted
+  independently. After partial success, only the rejected prepared request is
+  retained for the next invocation, without regenerating augmentation or
+  replaying the accepted request. If retention fails, the original source is
+  kept and the final result reports a warning.
+- The temporary legacy Bash/curl and PowerShell implementations remain
+  available only as an explicit opt-out rollback during the rollout window.
+  The normalized policy above is the default uploader contract on Linux,
+  macOS, and Windows.
+
+### Legacy Bash and PowerShell uploaders
+
+- HTTP requests use a 60-second timeout.
 - Failed requests are retried up to 3 times with a 2-second delay between
-  attempts
+  attempts.
 - Both transient errors (connection issues) and HTTP errors (4xx/5xx) trigger
-  retries
+  retries.
 - After enrichment, test payloads larger than 4,500,000 bytes are split by
   their top-level `events` array before compression and transport. Each part
   preserves the original top-level envelope and remains at or below the split
@@ -705,7 +769,7 @@ payload discovery/quiescence before proceeding.
   characters of the response body, and the uncompressed, compressed, and
   transmitted byte counts. Response logging does not require debug mode.
 - Behavior is consistent across Linux/macOS (bash/curl) and Windows
-  (PowerShell-only runtime path; no Git Bash requirement)
+  (PowerShell-only runtime path; no Git Bash requirement).
 
 ## Metadata enrichment (`context.json`)
 
@@ -716,9 +780,12 @@ payload discovery/quiescence before proceeding.
   4. if multiple bundled contexts exist and no match is found, skip only the `context.json` merge for that payload and continue uploading
   5. if no bundled context resolves, upload without context enrichment
 - When a `context.json` file is available, the uploader enriches each test
-  payload by merging all non-null keys from `context.json` into each event's
-  `content.meta` or `content.metrics`, and it also normalizes top-level
-  `metadata.*` runtime tags.
+  payload by merging its keys into each event's `content.meta` or
+  `content.metrics`, and it also normalizes top-level `metadata.*` runtime
+  tags. Numbers become metrics; strings and booleans become meta values; other
+  JSON values use their compact JSON representation. For legacy compatibility,
+  JSON `null` therefore becomes the meta string `"null"` rather than being
+  omitted.
 - Bazel sidecar metadata from `bazel_target_metadata.json` is merged separately.
   If a multi-context payload has no repo match, those Bazel sidecar tags remain
   and only the `context.json` merge is skipped.

@@ -521,7 +521,6 @@ run_bep_freshness_scenario() {
       --expected-enriched-tag=bazel.go.payload_selection
   ) >"$fresh_log" 2>&1
   assert_log_contains "$fresh_log" "freshness filtering enabled: source=bep" "fresh BEP run did not select BEP freshness"
-  assert_log_contains "$fresh_log" "dry-run validated enriched test payload" "fresh BEP run did not validate enrichment"
   assert_log_matches "$fresh_log" "dry-run validated [1-9][0-9]* test payloads" "fresh BEP run did not validate any payloads"
 
   simulated_testlogs="$(simulate_bep_artifact_only_outputs "$ws_dir" "$fresh_bep")"

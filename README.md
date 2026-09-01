@@ -1349,17 +1349,26 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 - **Tracer/runtime with DD Test Optimization file-mode support** - Must honor `DD_TEST_OPTIMIZATION_MANIFEST_FILE` and `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
 - **rules_go v0.51.0+** (for Go importpath inference) - This repository reads `GoInfo`/`GoArchive` providers when selecting per-module payloads
 - **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; leading/trailing ASCII whitespace is trimmed, then normalized to `https://api.<site>`
-- **Uploader tooling (per platform)** - Required for `bazel run //:dd_upload_payloads`
-  - **Linux**: `bash`, `curl`, `find`, `stat` (GNU), `awk`, and one of `md5sum` or `shasum`
-  - **macOS**: `bash` (3.2+), `curl`, `find`, `stat` (BSD), `awk`, and one of `md5` or `shasum`
-  - **Windows**: `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+); the uploader uses .NET `HttpClient` and is intentionally PowerShell-only (no Git Bash dependency)
+- **Default uploader tooling** - `Python 3.10+` on every platform, plus `bash`
+  on Linux/macOS or `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+)
+  on Windows. The platform script only locates Python and Bazel runfiles; upload
+  behavior is shared.
+- **Temporary legacy rollback tooling** - Required only when
+  `use_python_uploader = False`: Linux needs `bash`, `curl`, `find`, GNU `stat`,
+  `awk`, and one of `md5sum` or `shasum`; macOS needs `bash` 3.2+, `curl`,
+  `find`, BSD `stat`, `awk`, and one of `md5` or `shasum`; Windows needs
+  `powershell.exe` and uses .NET `HttpClient`.
 
 Optional tooling:
-- **jq** (Linux/macOS) - Used to enrich test payloads with `context.json` and
-  split oversized test payloads. If missing, uploads proceed without enrichment;
-  payloads up to the 5,000,000-byte intake limit can still be sent intact, but
-  larger payloads fail because their `events` array cannot be partitioned.
-- **python3** - Used for uploader payload schema validation and Unix telemetry metadata extraction. If missing, schema validation is skipped and telemetry files fail individually with a warning.
+- **jq** (Linux/macOS, legacy rollback only) - Used by the legacy uploader to
+  enrich test payloads with `context.json` and split oversized test payloads. If
+  missing, legacy uploads proceed without enrichment; payloads up to the
+  5,000,000-byte intake limit can still be sent intact, but larger payloads fail
+  because their `events` array cannot be partitioned.
+
+See the [parallel Python uploader](docs/Uploader_Reference.md#parallel-python-uploader-default)
+for its shared cross-platform behavior. Set `use_python_uploader = False` only
+for temporary rollback to the legacy Bash or PowerShell implementation.
 
 ### Contract gate checklist
 

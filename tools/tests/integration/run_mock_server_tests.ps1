@@ -1174,7 +1174,7 @@ filegroup(
     throw "multi-context uploader dry-run failed with exit code $dryRunExitCode`n$(Get-Content -LiteralPath $dryRunTranscript -Raw -ErrorAction SilentlyContinue)"
   }
   $dryRunOutput = Get-Content -LiteralPath $dryRunTranscript -Raw -Encoding UTF8
-  if (-not $dryRunOutput.Contains("dry-run validated enriched test payload")) {
+  if ($dryRunOutput -notmatch "dry-run validated [1-9][0-9]* test payloads") {
     throw "multi-context uploader dry-run did not validate enriched test payloads"
   }
   if (-not $dryRunOutput.Contains("dry-run done")) {

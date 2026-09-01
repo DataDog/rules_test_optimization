@@ -5021,9 +5021,9 @@ validate_enriched_payload_tags() {
         return 1
     fi
     if (( DRY_RUN == 1 )); then
-        log "dry-run validated enriched test payload: $source_file"
+        dbg "dry-run validated enriched test payload: $source_file"
     else
-        log "validated enriched test payload: $source_file"
+        dbg "validated enriched test payload: $source_file"
     fi
     return 0
 }
