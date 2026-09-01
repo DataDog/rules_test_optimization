@@ -6673,6 +6673,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         gzip_enabled: bool,
         keep_payloads: bool = True,
         read_only_parent: bool = False,
+        read_only_source: bool = False,
     ) -> tuple[
         subprocess.CompletedProcess[str],
         list[dict[str, object]],
@@ -6684,11 +6685,13 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         _require_command(self, "jq", "jq is required for oversized Bash payload splitting")
 
         root = Path(tempfile.mkdtemp())
+        payload_dir = root / "bazel-testlogs" / "pkg" / "test" / "test.outputs" / "payloads" / "tests"
+        source = payload_dir / "span_events_generated.json"
         try:
-            payload_dir = root / "bazel-testlogs" / "pkg" / "test" / "test.outputs" / "payloads" / "tests"
             payload_dir.mkdir(parents=True)
-            source = payload_dir / "span_events_generated.json"
             source.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            if read_only_source:
+                source.chmod(0o444)
             if read_only_parent:
                 payload_dir.chmod(0o555)
             runfiles_dir = root / "empty.runfiles"
@@ -6760,6 +6763,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         finally:
             if read_only_parent and payload_dir.exists():
                 payload_dir.chmod(0o755)
+            if read_only_source and source.exists():
+                source.chmod(0o600)
             _cleanup_tempdir_with_windows_retry(root)
 
     @staticmethod
@@ -6964,6 +6969,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     gzip_enabled=True,
                     keep_payloads=False,
                     read_only_parent=True,
+                    read_only_source=True,
                 )
                 output = result.stdout + result.stderr
                 self.assertNotEqual(0, result.returncode, output)
@@ -7214,6 +7220,19 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             missing_bep = root / "missing.bep.json"
             invalid_bep = root / "invalid.bep.json"
             invalid_bep.write_text("{not-json}\n", encoding="utf-8")
+            execution_log = root / "execution-log.json"
+            execution_log.write_text(
+                json.dumps({
+                    "mnemonic": "TestRunner",
+                    "runner": "processwrapper-sandbox",
+                    "cacheHit": False,
+                    "targetLabel": "//pkg:valid",
+                    "listedOutputs": [
+                        "bazel-out/k8-fastbuild/testlogs/pkg/valid/test.outputs",
+                    ],
+                }),
+                encoding="utf-8",
+            )
             runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
 
@@ -7272,6 +7291,49 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     report_doc = json.loads(report.read_text(encoding="utf-8"))
                     self.assertEqual(1, report_doc["payloads"]["tests"]["processed"])
                     self.assertGreaterEqual(report_doc["upload_failures"], 2)
+
+                    for scenario, expected_processed, freshness_args in (
+                        ("disabled", 2, ["--allow-cached-payload-uploads"]),
+                        (
+                            "execution-log",
+                            1,
+                            [
+                                "--execution-log-json", str(execution_log),
+                                "--freshness-source=execution_log",
+                                "--freshness-mode=required",
+                            ],
+                        ),
+                    ):
+                        with self.subTest(runtime=name, freshness=scenario):
+                            partial_report = root / f"{name.lower()}-{scenario}-missing-bep-report.json"
+                            partial_result = subprocess.run(
+                                [
+                                    *command,
+                                    "--bep-json", str(missing_bep),
+                                    "--bep-json", str(valid_bep),
+                                    "--artifact-source=bep",
+                                    "--report-json", str(partial_report),
+                                    "--dry-run",
+                                    *freshness_args,
+                                ],
+                                cwd=root,
+                                env=env,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                timeout=30,
+                                check=False,
+                            )
+                            partial_output = partial_result.stdout + partial_result.stderr
+                            self.assertEqual(1, partial_result.returncode, partial_output)
+                            partial_report_doc = json.loads(
+                                partial_report.read_text(encoding="utf-8")
+                            )
+                            self.assertEqual(
+                                expected_processed,
+                                partial_report_doc["payloads"]["tests"]["processed"],
+                            )
+                            self.assertEqual(1, partial_report_doc["upload_failures"])
 
     def test_generated_uploaders_accept_empty_expected_target_set(self) -> None:
         """Validate an invocation without optimized targets ignores unrelated BEP rows."""

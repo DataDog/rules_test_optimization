@@ -1529,6 +1529,12 @@ function Stage-BepArtifacts {
         $resolvedBepJson = Resolve-RuntimeFilePath $bepJson
         if ([string]::IsNullOrWhiteSpace($resolvedBepJson) -or -not (Test-Path -LiteralPath $resolvedBepJson -PathType Leaf)) {
             Log "error: BEP JSON not found for artifact staging: $bepJson; continuing with other BEP files"
+            # BEP freshness normally accounts for this failure later. When it
+            # is disabled or another freshness source owns filtering, staging
+            # is the only phase that observes the missing requested input.
+            if ($script:FreshnessMode -eq "disabled" -or $script:FreshnessSource -eq "execution_log") {
+                $script:UploadFailures++
+            }
             continue
         }
         $resolvedBepJsonFiles.Add($resolvedBepJson) | Out-Null
@@ -4167,6 +4173,12 @@ function Save-FailedTestPayloadParts([string]$SourcePath, [string[]]$FailedParts
       $retryPayload.events = @($failedEvents.ToArray())
     }
     Write-Utf8NoBomFile -Path $retryPath -Content (($retryPayload | ConvertTo-Json -Depth 100 -Compress) + "`n")
+    try {
+      $sourceItem = Get-Item -LiteralPath $SourcePath -Force -ErrorAction Stop
+      if ($sourceItem.PSObject.Properties['IsReadOnly'] -and $sourceItem.IsReadOnly) {
+        $sourceItem.IsReadOnly = $false
+      }
+    } catch {}
     [System.IO.File]::Replace($retryPath, $SourcePath, $backupPath)
     Log "retained $($FailedParts.Count) failed split payload part(s) for retry: $SourcePath"
   } catch {

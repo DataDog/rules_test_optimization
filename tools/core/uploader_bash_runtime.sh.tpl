@@ -1718,6 +1718,12 @@ stage_bep_artifacts() {
         resolved_bep_json="$(resolve_runtime_file_path "$bep_json")"
         if [[ -z "$resolved_bep_json" || ! -f "$resolved_bep_json" ]]; then
             log "error: BEP JSON not found for artifact staging: $bep_json; continuing with other BEP files"
+            # BEP freshness normally accounts for this failure later. When it
+            # is disabled or another freshness source owns filtering, staging
+            # is the only phase that observes the missing requested input.
+            if [[ "$FRESHNESS_MODE" == "disabled" || "$FRESHNESS_SOURCE" == "execution_log" ]]; then
+                ((++UPLOAD_FAILURES))
+            fi
             continue
         fi
         resolved_bep_files+=("$resolved_bep_json")
