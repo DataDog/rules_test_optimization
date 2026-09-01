@@ -260,6 +260,34 @@ class FreshnessTests(unittest.TestCase):
                     freshness_mode="required",
                 )
 
+    def test_required_bep_ignores_empty_output_without_target_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            control_output = root / "pkg" / "control" / "test.outputs"
+            control_output.mkdir(parents=True)
+            payload_output = root / "pkg" / "target" / "test.outputs"
+            _payload(payload_output)
+            _metadata(payload_output, "//pkg:target")
+            discovery = discover_file_tasks((ScanRoot(root),))
+            plan = FreshnessPlan(
+                selected_source="bep",
+                eligibility_enabled=True,
+                eligible_outputs=frozenset(
+                    {("//pkg:target", "pkg/target/test.outputs")}
+                ),
+            )
+
+            filtered = filter_discovery_for_freshness(
+                discovery,
+                plan,
+                freshness_mode="required",
+            )
+
+            self.assertEqual(1, len(filtered.discovery.outputs))
+            self.assertEqual(1, len(filtered.discovery.tasks))
+            self.assertEqual("//pkg:target", filtered.discovery.tasks[0].target_label)
+            self.assertEqual((), filtered.skipped_outputs)
+
     def test_freshness_does_not_follow_symlinked_target_metadata(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

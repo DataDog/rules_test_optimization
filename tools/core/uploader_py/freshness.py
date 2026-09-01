@@ -270,6 +270,8 @@ def filter_discovery_for_freshness(
 
     for output in discovery.outputs:
         tasks = tasks_by_output.get(output.output_key, [])
+        if not tasks:
+            continue
         explicit_labels = {
             task.target_label for task in tasks if task.target_label is not None
         }
