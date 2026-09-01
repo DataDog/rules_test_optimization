@@ -123,7 +123,10 @@ class AggregateReport:
     def result_name(self) -> str:
         if self.exit_code == 0:
             return "success"
-        if any(result.status is FileStatus.SUCCEEDED for result in self.results):
+        if any(
+            result.status is FileStatus.SUCCEEDED or result.requests_succeeded > 0
+            for result in self.results
+        ):
             return "partial_failure"
         return "failure"
 

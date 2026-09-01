@@ -177,7 +177,7 @@ class ReportingTests(unittest.TestCase):
                 results=(),
             )
 
-    def test_schema_v1_keeps_legacy_telemetry_request_semantics(self) -> None:
+    def test_schema_v1_keeps_legacy_telemetry_semantics_for_partial_delivery(self) -> None:
         report = AggregateReport.create(
             dry_run=False,
             exit_code=1,
@@ -204,6 +204,7 @@ class ReportingTests(unittest.TestCase):
         context = LegacyReportContext(test_outputs_dirs=1)
         public = report.schema_v1_report(context)
 
+        self.assertEqual("partial_failure", report.result_name)
         self.assertEqual(1, public["schema_version"])
         self.assertEqual("dd-test-optimization-uploader", public["tool"])
         self.assertEqual(
