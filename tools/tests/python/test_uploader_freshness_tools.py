@@ -103,6 +103,27 @@ class FreshnessTests(unittest.TestCase):
                 fail_on_error=True,
             )
 
+    def test_expected_target_coverage_does_not_require_fail_on_error(self) -> None:
+        cases = (
+            (frozenset({"//pkg:missing"}), "mappable test.outputs"),
+            (frozenset(), "no TestResult matched"),
+        )
+        for missing_output_labels, expected_error in cases:
+            with self.subTest(expected_error=expected_error):
+                plan = FreshnessPlan(
+                    selected_source="bep",
+                    eligibility_enabled=True,
+                    missing_output_labels=missing_output_labels,
+                )
+                with self.assertRaisesRegex(FreshnessError, expected_error):
+                    validate_fresh_outputs_accounted(
+                        plan,
+                        DiscoveryResult(outputs=(), tasks=(), discovered_by_type={}),
+                        (),
+                        expected_targets=("//pkg:missing",),
+                        fail_on_error=False,
+                    )
+
     def _config(
         self,
         root: Path,

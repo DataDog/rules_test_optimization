@@ -300,16 +300,6 @@ def filter_discovery_for_freshness(
         if pair in plan.eligible_outputs:
             selected_outputs.append(output)
             continue
-        if (
-            plan.selected_source == "bep"
-            and freshness_mode == "required"
-            and target_label in plan.missing_output_labels
-        ):
-            raise FreshnessError(
-                "BEP required freshness cannot authorize "
-                f"{output.path} because the fresh TestResult for {target_label} "
-                "did not contain a mappable test.outputs reference"
-            )
         skipped_output_keys.append(output.output_key)
 
     selected_keys = {output.output_key for output in selected_outputs}
@@ -345,8 +335,31 @@ def validate_fresh_outputs_accounted(
     expected_targets: Iterable[str],
     fail_on_error: bool,
 ) -> None:
-    """Preserve the legacy fail-on-error check after all workers finish."""
-    if not fail_on_error or plan.selected_source != "bep":
+    """Validate BEP coverage after workers have processed usable outputs."""
+    if plan.selected_source != "bep":
+        return
+    expected_target_set = frozenset(expected_targets)
+    if expected_target_set:
+        represented_labels = {
+            label for label, _output_key in plan.eligible_outputs
+        }.union(
+            label for label, _output_key in plan.cached_outputs
+        ).union(output.label for output in plan.remote_only_outputs)
+        missing_expected = sorted(expected_target_set.difference(represented_labels))
+        if missing_expected:
+            label = missing_expected[0]
+            detail = (
+                "the fresh TestResult did not contain a mappable test.outputs reference"
+                if label in plan.missing_output_labels
+                else "no TestResult matched this target"
+            )
+            raise FreshnessError(
+                "expected target output is neither fresh nor exclusively cached in "
+                f"BEP: {label} ({detail})",
+                exit_code=1,
+            )
+
+    if not fail_on_error:
         return
     non_skipped_task_ids = {
         result.task_id
@@ -360,7 +373,6 @@ def validate_fresh_outputs_accounted(
         and task.target_label is not None
         and task.output_key is not None
     }
-    expected_target_set = frozenset(expected_targets)
     if expected_target_set:
         # Bazel may publish several TestResult outputs for one target while only
         # some attempts contain payloads. The target is accounted for once any
@@ -488,22 +500,6 @@ def _build_plan(
         cached_outputs = {pair for pair in cached_outputs if pair[0] in expected_targets}
         remote_outputs = tuple(item for item in remote_outputs if item.label in expected_targets)
         missing_output_labels.intersection_update(expected_targets)
-        covered_labels = {
-            label for label, _output_key in eligible_outputs.union(cached_outputs)
-        }.union(item.label for item in remote_outputs).union(missing_output_labels)
-        absent = sorted(expected_targets.difference(covered_labels))
-        if absent:
-            raise FreshnessError(
-                "expected target output is neither fresh nor exclusively cached in "
-                f"BEP: {absent[0]} (no TestResult matched this target)"
-            )
-        missing_expected = sorted(expected_targets.intersection(missing_output_labels))
-        if missing_expected:
-            raise FreshnessError(
-                "expected target output is neither fresh nor exclusively cached in "
-                f"BEP: {missing_expected[0]} (the fresh TestResult did not contain "
-                "a mappable test.outputs reference)"
-            )
 
     if remote_outputs:
         if config.freshness_mode == "required" or config.remote_artifacts == "required":

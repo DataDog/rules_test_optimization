@@ -42,6 +42,34 @@ def _write_payload(output: Path, kind: str, name: str, body: object) -> Path:
     return path
 
 
+def _bep_test_result(
+    label: str,
+    *,
+    attempt: int = 1,
+    status: str = "PASSED",
+    output: Path | None = None,
+) -> dict[str, object]:
+    test_action_output = (
+        []
+        if output is None
+        else [{"name": "test.outputs", "uri": output.as_uri()}]
+    )
+    return {
+        "id": {
+            "testResult": {
+                "label": label,
+                "run": 1,
+                "shard": 1,
+                "attempt": attempt,
+            }
+        },
+        "testResult": {
+            "status": status,
+            "testActionOutput": test_action_output,
+        },
+    }
+
+
 class ApplicationTests(unittest.TestCase):
     def _config(
         self,
@@ -330,28 +358,18 @@ class ApplicationTests(unittest.TestCase):
             )
             bep = root / "bep.ndjson"
             bep.write_text(
-                "".join(
+                "\n".join(
                     json.dumps(
-                        {
-                            "id": {
-                                "testResult": {
-                                    "label": "//pkg:target",
-                                    "run": 1,
-                                    "shard": 1,
-                                    "attempt": attempt,
-                                }
-                            },
-                            "testResult": {
-                                "status": "FAILED",
-                                "testActionOutput": [
-                                    {"name": "test.outputs", "uri": output.as_uri()}
-                                ],
-                            },
-                        }
+                        _bep_test_result(
+                            "//pkg:target",
+                            attempt=attempt,
+                            status="FAILED",
+                            output=output,
+                        )
                     )
-                    + "\n"
                     for attempt, output in enumerate(attempts, start=1)
-                ),
+                )
+                + "\n",
                 encoding="utf-8",
             )
             report_path = root / "report.json"
@@ -381,6 +399,71 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual("upload_skipped_dry_run", report["result"]["reason_code"])
             self.assertEqual(2, report["bep"]["eligible_outputs"])
             self.assertEqual(1, report["files"]["processed"])
+
+    def test_missing_expected_output_fails_after_valid_payload_is_processed(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            output = root / "bazel-testlogs" / "pkg" / "valid" / "test.outputs"
+            _write_payload(
+                output,
+                "tests",
+                "events.json",
+                {"events": [{"content": {}}]},
+            )
+            (output / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.target": "//pkg:valid"}),
+                encoding="utf-8",
+            )
+            bep = root / "bep.ndjson"
+            events = (
+                _bep_test_result("//pkg:valid", output=output),
+                _bep_test_result("//pkg:missing", status="TIMEOUT"),
+            )
+            bep.write_text(
+                "\n".join(json.dumps(event) for event in events) + "\n",
+                encoding="utf-8",
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                fail_on_error=True,
+                expected_targets=("//pkg:valid", "//pkg:missing"),
+                allow_cached_payload_uploads=False,
+                extra_arguments=(
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    f"--bep-json={bep}",
+                    f"--report-json={report_path}",
+                ),
+            )
+            log_stream = StringIO()
+
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=log_stream),
+                stream=StringIO(),
+            )
+
+            self.assertEqual(1, exit_code, log_stream.getvalue())
+            self.assertIn(
+                "the fresh TestResult did not contain a mappable test.outputs reference",
+                log_stream.getvalue(),
+            )
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "fresh_output_without_payloads",
+                report["result"]["reason_code"],
+            )
+            self.assertEqual(1, report["bep"]["eligible_outputs"])
+            self.assertEqual(1, report["bep"]["missing_output_labels"])
+            self.assertEqual(1, report["files"]["processed"])
+            self.assertEqual(1, report["files"]["succeeded"])
+            self.assertEqual(1, report["requests"]["planned"])
+            self.assertEqual(0, report["requests"]["attempted"])
 
     def test_fail_on_error_all_cached_bep_without_testlogs_is_noop(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
