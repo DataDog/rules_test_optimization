@@ -1970,6 +1970,62 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             result["executionInfo"] = {"cachedRemotely": True}
         return event
 
+    @staticmethod
+    def _bep_skipped_target(
+        label: str,
+        *,
+        snake_case: bool = False,
+        reason: str = "SKIPPED",
+    ) -> dict[str, object]:
+        """Return the target-completed event Bazel emits for a skipped target."""
+        id_key = "target_completed" if snake_case else "targetCompleted"
+        return {
+            "id": {id_key: {"label": label, "configuration": {"id": "config"}}},
+            "aborted": {
+                "reason": reason,
+                "description": f"Target {label} build was skipped.",
+            },
+        }
+
+    def test_bep_freshness_reads_only_platform_skipped_target_events(self) -> None:
+        """Treat Bazel's explicit SKIPPED reason as the platform-skip contract."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "skipped.ndjson"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_skipped_target("//pkg:camel"),
+                    self._bep_skipped_target("//pkg:snake", snake_case=True),
+                    self._bep_skipped_target("//pkg:failed", reason="ANALYSIS_FAILURE"),
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({"//pkg:camel", "//pkg:snake"}, freshness.skipped_targets)
+
+    def test_bep_freshness_rejects_target_reported_as_skipped_and_executed(self) -> None:
+        """Reject overlapping BEPs that disagree about whether a target ran."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bep = root / "ambiguous.ndjson"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_skipped_target("//pkg:target"),
+                    self._bep_test_result(
+                        "//pkg:target",
+                        (root / "bazel-testlogs/pkg/target/test.outputs").as_uri(),
+                    ),
+                ],
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                self.mod._parse_bep_freshness([bep])
+
+        self.assertIn("both platform-skipped and executed", stderr.getvalue())
+
     def _remote_outputs_zip_freshness(self, root: Path, *, label: str = "//pkg:remote_only") -> object:
         """Create BEP freshness for one remote stageable outputs.zip carrier."""
         bep = root / "freshness.bep.json"
@@ -2439,6 +2495,44 @@ $rows | ConvertTo-Json -Compress
             self.assertEqual(["//pkg:target"], report["targets"]["cached"])
             self.assertEqual(0, report["summary"]["validated_output_dirs"])
             self.assertEqual(0, report["summary"]["payloads"]["json"])
+
+    def test_doctor_report_accepts_platform_skipped_expected_target(self) -> None:
+        """A platform-incompatible target is accounted for without a payload."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bep = root / "skipped.ndjson"
+            self._write_bep(
+                bep,
+                [self._bep_skipped_target("//pkg:target")],
+            )
+            config = self._write_doctor_config(root, ["//pkg:target"])
+            report_path = root / "doctor-report.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {"BUILD_WORKSPACE_DIRECTORY": str(root)},
+                clear=False,
+            ):
+                os.environ.pop("TESTLOGS_DIR", None)
+                rc = self.mod.main([
+                    "--config",
+                    str(config),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--report-json",
+                    str(report_path),
+                ])
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, rc)
+        self.assertEqual("ok", report["result"]["reason_code"])
+        self.assertEqual(["//pkg:target"], report["bep"]["skipped_targets"])
+        self.assertEqual(["//pkg:target"], report["targets"]["skipped"])
+        self.assertEqual([], report["targets"]["missing"])
+        self.assertEqual(0, report["summary"]["validated_output_dirs"])
 
     def test_doctor_report_json_classifies_remote_only_without_downloader(self) -> None:
         """Validate strict BEP artifact mode reports remote-only artifacts without a downloader."""
@@ -7335,8 +7429,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                             )
                             self.assertEqual(1, partial_report_doc["upload_failures"])
 
-    def test_generated_uploaders_accept_empty_expected_target_set(self) -> None:
-        """Validate an invocation without optimized targets ignores unrelated BEP rows."""
+    def test_generated_uploaders_accept_empty_or_platform_skipped_targets(self) -> None:
+        """Validate expected targets that legitimately produce no payload."""
         _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
         bash = _require_functional_bash(self)
         if os.name == "nt":
@@ -7347,14 +7441,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             root = Path(tmp)
             (root / "bazel-testlogs").mkdir()
             bep = self._write_bep_staging_smoke_fixture(root)
+            unrelated_bep = bep.read_text(encoding="utf-8")
             expected_targets = root / "expected_targets.json"
-            expected_targets.write_text(
-                json.dumps({
-                    "schema_version": 1,
-                    "targets": [],
-                }),
-                encoding="utf-8",
-            )
             runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
 
@@ -7395,6 +7483,14 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 ),
             ]:
                 with self.subTest(runtime=name):
+                    expected_targets.write_text(
+                        json.dumps({
+                            "schema_version": 1,
+                            "targets": [],
+                        }),
+                        encoding="utf-8",
+                    )
+                    bep.write_text(unrelated_bep, encoding="utf-8")
                     report = root / f"{name.lower()}-empty-report.json"
                     result = subprocess.run(
                         [
@@ -7421,6 +7517,44 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     self.assertEqual("ok", report_doc["status"])
                     self.assertEqual(0, report_doc["bep"]["eligible_outputs"])
                     self.assertEqual(0, report_doc["payloads"]["tests"]["processed"])
+
+                    expected_targets.write_text(
+                        json.dumps({
+                            "schema_version": 1,
+                            "targets": ["//pkg:skipped"],
+                        }),
+                        encoding="utf-8",
+                    )
+                    TestOptimizationDoctorTests._write_bep(
+                        bep,
+                        [TestOptimizationDoctorTests._bep_skipped_target("//pkg:skipped")],
+                    )
+                    skipped_report = root / f"{name.lower()}-skipped-report.json"
+                    skipped_result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json",
+                            str(bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--report-json",
+                            str(skipped_report),
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    skipped_output = skipped_result.stdout + skipped_result.stderr
+                    self.assertEqual(0, skipped_result.returncode, skipped_output)
+                    skipped_report_doc = json.loads(skipped_report.read_text(encoding="utf-8"))
+                    self.assertEqual("ok", skipped_report_doc["status"])
+                    self.assertEqual(1, skipped_report_doc["bep"]["skipped_targets"])
+                    self.assertEqual(0, skipped_report_doc["upload_failures"])
 
     def test_generated_uploaders_validate_runtime_selection_before_discovery(self) -> None:
         """Validate Bash and PowerShell accept only complete keyed runtime selections."""
@@ -7720,6 +7854,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             "DD_TEST_OPTIMIZATION_BEP_JSON",
             "FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE",
             "FRESHNESS_MISSING_OUTPUT_LABELS_FILE",
+            "FRESHNESS_SKIPPED_TARGETS_FILE",
             "prepare_bep_eligibility",
             "test_output_dir_is_freshness_eligible",
         ]:
@@ -7734,6 +7869,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             "DD_TEST_OPTIMIZATION_BEP_JSON",
             "FreshnessRemoteOnlyOutputs",
             "FreshnessMissingOutputLabels",
+            "FreshnessSkippedTargets",
             "Initialize-BepEligibility",
             "Test-OutputDirFreshnessEligible",
         ]:
@@ -7752,6 +7888,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn('EndsWith("/outputs.zip"', powershell_text)
         self.assertIn("reported as both fresh and cached", bash_text)
         self.assertIn("reported as both fresh and cached", powershell_text)
+        self.assertIn("both platform-skipped and executed", bash_text)
+        self.assertIn("both platform-skipped and executed", powershell_text)
         self.assertIn("FreshnessRemoteOnlyOutputs.ToArray()", powershell_text)
         self.assertNotIn("@($script:FreshnessRemoteOnlyOutputs)", powershell_text)
         self.assertLess(bash_text.index("--bep-json"), bash_text.index("--execution-log-json"))

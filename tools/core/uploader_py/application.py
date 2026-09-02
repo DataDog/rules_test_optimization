@@ -158,22 +158,23 @@ def _run_uploader_with_lock(
         freshness_plan = freshness_preparation.plan
         logger.debug(
             "freshness prepared: selected_source=%s scan_roots=%s "
-            "staged_roots=%s eligible=%d cached=%d remote_only=%d",
+            "staged_roots=%s eligible=%d cached=%d remote_only=%d skipped_targets=%d",
             freshness_plan.selected_source,
             tuple(str(root.path) for root in freshness_preparation.scan_roots),
             tuple(str(path) for path in freshness_preparation.staged_roots),
             len(freshness_plan.eligible_outputs),
             len(freshness_plan.cached_outputs),
             len(freshness_plan.remote_only_outputs),
+            len(freshness_plan.skipped_targets),
         )
-        all_expected_outputs_cached = _all_expected_outputs_cached(
+        no_expected_payloads = _no_expected_payloads(
             expected_targets_plan,
             freshness_plan,
         )
         if (
             not freshness_preparation.scan_roots
             and config.fail_on_error
-            and not all_expected_outputs_cached
+            and not no_expected_payloads
         ):
             raise DiscoveryError(
                 "FAIL_ON_ERROR is set and no local or staged testlogs root was found"
@@ -181,7 +182,7 @@ def _run_uploader_with_lock(
         raw_discovery = _discover_payloads(
             config,
             freshness_preparation,
-            all_expected_outputs_cached=all_expected_outputs_cached,
+            no_expected_payloads=no_expected_payloads,
             logger=logger,
         )
 
@@ -260,12 +261,12 @@ def _run_uploader_with_lock(
                     )
 
         if not raw_discovery.tasks:
-            if all_expected_outputs_cached:
+            if no_expected_payloads:
                 report_reason = _ReportReason(
                     code="ok",
                     message=(
-                        "All expected target outputs were cached; nothing was "
-                        "uploaded."
+                        "All expected targets were cached or skipped as "
+                        "platform-incompatible; nothing was uploaded."
                     ),
                 )
             elif (
@@ -496,15 +497,17 @@ def _log_invocation(
     )
 
 
-def _all_expected_outputs_cached(
+def _no_expected_payloads(
     expected: ExpectedTargetsPlan,
     freshness: FreshnessPlan,
 ) -> bool:
+    """Return whether BEP accounts for every target without a fresh payload."""
     expected_labels = frozenset(expected.targets)
     cached_labels = frozenset(label for label, _key in freshness.cached_outputs)
+    accounted_labels = cached_labels.union(freshness.skipped_targets)
     return bool(
         expected_labels
-        and cached_labels == expected_labels
+        and accounted_labels == expected_labels
         and not freshness.eligible_outputs
         and not freshness.remote_only_outputs
         and not freshness.missing_output_labels
@@ -515,7 +518,7 @@ def _discover_payloads(
     config: UploaderConfig,
     preparation: FreshnessPreparation,
     *,
-    all_expected_outputs_cached: bool,
+    no_expected_payloads: bool,
     logger: logging.Logger,
 ) -> DiscoveryResult:
     """Discover a stable source-file snapshot after freshness has authorized it."""
@@ -533,8 +536,11 @@ def _discover_payloads(
             staged_output_keys=selected_output_keys,
         )
 
-    if all_expected_outputs_cached:
-        logger.debug("all expected target outputs were cached; skipping discovery wait")
+    if no_expected_payloads:
+        logger.debug(
+            "all expected targets were cached or platform-skipped; "
+            "skipping discovery wait"
+        )
         return _empty_discovery()
     if not preparation.scan_roots:
         logger.debug("no local or staged testlogs roots were found")
@@ -648,6 +654,7 @@ def _legacy_context(
         freshness_remote_only_outputs=len(freshness_plan.remote_only_outputs),
         freshness_skipped_outputs=freshness_skipped_count,
         freshness_missing_output_labels=len(freshness_plan.missing_output_labels),
+        freshness_skipped_targets=len(freshness_plan.skipped_targets),
         staging_dir=str(config.artifact_staging_dir),
         staged_testlogs_dirs=len(staged_roots),
         selected_remote_artifacts=len(freshness_plan.selected_artifact_outputs),

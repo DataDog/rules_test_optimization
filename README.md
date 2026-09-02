@@ -1558,10 +1558,11 @@ tools/test_optimization/run_test_optimization_ci.sh //...
 
 The wrapper creates a temporary BEP file for each Bazel test invocation and
 passes those files to doctor/uploader as repeatable `--bep-json` flags. The
-doctor accounts for configured expected targets using the union of fresh and
-cached BEP results, but validates payloads only from fresh outputs. An
-all-cached expected-target invocation is therefore a successful no-op. The
-uploader applies the same freshness filter and never uploads cached outputs.
+doctor accounts for configured expected targets using fresh, cached, and
+platform-incompatible `SKIPPED` BEP results, but validates payloads only from
+fresh outputs. An invocation whose expected targets are all cached or skipped
+is therefore a successful no-op. The uploader applies the same freshness filter
+and never uploads cached outputs.
 The default freshness source/mode is `auto`: when BEP is explicitly configured,
 the uploader uses it; otherwise it can use an explicitly configured legacy
 execution-log fallback. Artifact discovery defaults to local `bazel-testlogs`

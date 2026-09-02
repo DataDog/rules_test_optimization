@@ -37,6 +37,7 @@ class LegacyReportContext:
     freshness_remote_only_outputs: int = 0
     freshness_skipped_outputs: int = 0
     freshness_missing_output_labels: int = 0
+    freshness_skipped_targets: int = 0
     staging_dir: str = ""
     staged_testlogs_dirs: int = 0
     selected_remote_artifacts: int = 0
@@ -299,6 +300,7 @@ class AggregateReport:
                 "remote_only_outputs": context.freshness_remote_only_outputs,
                 "skipped_outputs": context.freshness_skipped_outputs,
                 "missing_output_labels": context.freshness_missing_output_labels,
+                "skipped_targets": context.freshness_skipped_targets,
             },
             "artifacts": {
                 "source": context.artifact_source,
