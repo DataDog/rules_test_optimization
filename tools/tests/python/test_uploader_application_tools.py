@@ -304,6 +304,84 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual("tests_ran_without_payloads", report["result"]["reason_code"])
             self.assertEqual(0, report["files"]["processed"])
 
+    def test_expected_target_accepts_payload_from_one_of_multiple_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            testlogs = root / "bazel-testlogs"
+            attempts = (
+                testlogs
+                / "pkg"
+                / "target"
+                / "test_attempts"
+                / "attempt_1.outputs"
+                / "test.outputs",
+                testlogs / "pkg" / "target" / "test.outputs",
+            )
+            attempts[0].mkdir(parents=True)
+            _write_payload(
+                attempts[1],
+                "tests",
+                "events.json",
+                {"events": [{"content": {}}]},
+            )
+            (attempts[1] / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.target": "//pkg:target"}),
+                encoding="utf-8",
+            )
+            bep = root / "bep.ndjson"
+            bep.write_text(
+                "".join(
+                    json.dumps(
+                        {
+                            "id": {
+                                "testResult": {
+                                    "label": "//pkg:target",
+                                    "run": 1,
+                                    "shard": 1,
+                                    "attempt": attempt,
+                                }
+                            },
+                            "testResult": {
+                                "status": "FAILED",
+                                "testActionOutput": [
+                                    {"name": "test.outputs", "uri": output.as_uri()}
+                                ],
+                            },
+                        }
+                    )
+                    + "\n"
+                    for attempt, output in enumerate(attempts, start=1)
+                ),
+                encoding="utf-8",
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                fail_on_error=True,
+                expected_targets=("//pkg:target",),
+                allow_cached_payload_uploads=False,
+                extra_arguments=(
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    f"--bep-json={bep}",
+                    f"--report-json={report_path}",
+                ),
+            )
+
+            exit_code = run_uploader(
+                config,
+                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=StringIO()),
+                stream=StringIO(),
+            )
+
+            self.assertEqual(0, exit_code)
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual("upload_skipped_dry_run", report["result"]["reason_code"])
+            self.assertEqual(2, report["bep"]["eligible_outputs"])
+            self.assertEqual(1, report["files"]["processed"])
+
     def test_fail_on_error_all_cached_bep_without_testlogs_is_noop(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

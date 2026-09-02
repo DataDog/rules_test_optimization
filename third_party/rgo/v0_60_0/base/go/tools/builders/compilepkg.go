@@ -124,7 +124,7 @@ func syntheticTestmainPackagefileManifestSidecarPath(archivePath string) string 
 	return archivePath + syntheticTestmainPackagefileManifestSidecarSuffix
 }
 
-func writeSyntheticTestmainPackagefileManifest(outputPath, sourcePath string) error {
+func writeSyntheticTestmainPackagefileManifest(outputPath, sourcePath, helperOutputDir string) error {
 	if strings.TrimSpace(outputPath) == "" {
 		return nil
 	}
@@ -136,10 +136,60 @@ func writeSyntheticTestmainPackagefileManifest(outputPath, sourcePath string) er
 			return fmt.Errorf("read synthetic testmain packagefile manifest %s: %w", sourcePath, err)
 		}
 	}
+	var err error
+	data, err = publishSyntheticTestmainPackagefiles(data, helperOutputDir)
+	if err != nil {
+		return err
+	}
 	if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 		return fmt.Errorf("write synthetic testmain packagefile manifest %s: %w", outputPath, err)
 	}
 	return nil
+}
+
+// publishSyntheticTestmainPackagefiles copies action-local helper archives into
+// a declared Bazel output tree. The final link may run in another sandbox or on
+// another remote worker, where compile-time cache paths are not available.
+func publishSyntheticTestmainPackagefiles(data []byte, outputDir string) ([]byte, error) {
+	if strings.TrimSpace(outputDir) == "" {
+		return data, nil
+	}
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		return nil, fmt.Errorf("create synthetic testmain helper output: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	published := make(map[string]bool)
+	for index, line := range lines {
+		directive := strings.TrimSpace(line)
+		if !strings.HasPrefix(directive, "packagefile ") {
+			continue
+		}
+		mapping := strings.TrimPrefix(directive, "packagefile ")
+		separator := strings.Index(mapping, "=")
+		if separator <= 0 {
+			return nil, fmt.Errorf("invalid synthetic testmain packagefile directive %q", directive)
+		}
+		packagePath := strings.TrimSpace(mapping[:separator])
+		archivePath := strings.TrimSpace(mapping[separator+1:])
+		if packagePath == "" || archivePath == "" {
+			return nil, fmt.Errorf("invalid synthetic testmain packagefile directive %q", directive)
+		}
+		if !filepath.IsAbs(archivePath) {
+			continue
+		}
+
+		digest := sha256.Sum256([]byte(packagePath))
+		publishedPath := filepath.Join(outputDir, fmt.Sprintf("%x.a", digest[:8]))
+		if !published[publishedPath] {
+			if err := copyArchiveFile(archivePath, publishedPath); err != nil {
+				return nil, fmt.Errorf("publish synthetic testmain helper %s: %w", packagePath, err)
+			}
+			published[publishedPath] = true
+		}
+		lines[index] = "packagefile " + packagePath + "=" + publishedPath
+	}
+	return []byte(strings.Join(lines, "\n")), nil
 }
 
 func compilePkg(args []string) error {
@@ -155,7 +205,7 @@ func compilePkg(args []string) error {
 	var unfilteredSrcs, coverSrcs, embedSrcs, embedLookupDirs, embedRoots, recompileInternalDeps, orchestrionSrcDirs multiFlag
 	var deps archiveMultiFlag
 	var importPath, packagePath, packageListPath, coverMode string
-	var outLinkobjPath, outInterfacePath, outSyntheticTestmainManifestPath, cgoExportHPath, cgoGoSrcsPath string
+	var outLinkobjPath, outInterfacePath, outSyntheticTestmainManifestPath, outSyntheticTestmainHelpersPath, cgoExportHPath, cgoGoSrcsPath string
 	var testFilter string
 	var gcFlags, asmFlags, cppFlags, cFlags, cxxFlags, objcFlags, objcxxFlags, ldFlags quoteMultiFlag
 	var coverFormat string
@@ -187,6 +237,7 @@ func compilePkg(args []string) error {
 	fs.StringVar(&outLinkobjPath, "lo", "", "The full output archive file required by the linker")
 	fs.StringVar(&outInterfacePath, "o", "", "The export-only output archive required to compile dependent packages")
 	fs.StringVar(&outSyntheticTestmainManifestPath, "synthetic_testmain_manifest", "", "Sidecar manifest that records compile-time Datadog helper packagefiles for synthetic Bazel testmain archives")
+	fs.StringVar(&outSyntheticTestmainHelpersPath, "synthetic_testmain_helpers", "", "Declared output directory containing Datadog helper archives for synthetic Bazel testmain links")
 	fs.StringVar(&cgoExportHPath, "cgoexport", "", "The _cgo_exports.h file to write")
 	fs.StringVar(&cgoGoSrcsPath, "cgo_go_srcs", "", "The directory to emit cgo-generated Go sources for nogo consumption to")
 	fs.StringVar(&testFilter, "testfilter", "off", "Controls test package filtering")
@@ -257,6 +308,7 @@ func compilePkg(args []string) error {
 		outLinkobjPath,
 		outInterfacePath,
 		outSyntheticTestmainManifestPath,
+		outSyntheticTestmainHelpersPath,
 		cgoExportHPath,
 		cgoGoSrcsPath,
 		coverFormat,
@@ -293,6 +345,7 @@ func compileArchive(
 	outLinkObj string,
 	outInterfacePath string,
 	outSyntheticTestmainManifestPath string,
+	outSyntheticTestmainHelpersPath string,
 	cgoExportHPath string,
 	cgoGoSrcsForNogoPath string,
 	coverFormat string,
@@ -618,10 +671,8 @@ func compileArchive(
 		if outSyntheticTestmainManifestPath == "" {
 			outSyntheticTestmainManifestPath = syntheticTestmainPackagefileManifestSidecarPath(outLinkObj)
 		}
-		if err := writeSyntheticTestmainPackagefileManifest(outSyntheticTestmainManifestPath, syntheticTestmainPackagefiles); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
+		if err := writeSyntheticTestmainPackagefileManifest(outSyntheticTestmainManifestPath, syntheticTestmainPackagefiles, outSyntheticTestmainHelpersPath); err != nil {
+			return err
 		}
 	}
 

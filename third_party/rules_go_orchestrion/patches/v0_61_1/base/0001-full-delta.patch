@@ -1154,10 +1154,10 @@ index 0bf46bf..735598d 100644
          "//go/private/skylib/lib:all_files",
          "//go/private/tools:all_files",
 diff --git a/go/private/actions/archive.bzl b/go/private/actions/archive.bzl
-index 3a5a76b..41a07f8 100644
+index 3a5a76b..dce1b9e 100644
 --- a/go/private/actions/archive.bzl
 +++ b/go/private/actions/archive.bzl
-@@ -37,6 +37,11 @@ load(
+@@ -37,6 +37,16 @@ load(
      "cgo_configure",
  )
  
@@ -1166,46 +1166,55 @@ index 3a5a76b..41a07f8 100644
 +        return None
 +    return go.declare_file(go, name = source.name, ext = pre_ext + ".a.orchestrion.pack")
 +
++def _declare_synthetic_testmain_helpers(go, source, pre_ext):
++    if not go.orchestrion or not source.name.endswith("~testmain"):
++        return None
++    return go.declare_directory(go, name = source.name, ext = pre_ext + ".a.orchestrion.helpers")
++
  def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_deps = None, is_external_pkg = False):
      """See go/toolchains.rst#archive for full documentation."""
  
-@@ -54,6 +59,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
+@@ -54,6 +64,8 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
      if _recompile_suffix:
          pre_ext += _recompile_suffix
      out_lib = go.declare_file(go, name = source.name, ext = pre_ext + ".a")
 +    out_synthetic_testmain_manifest = _declare_synthetic_testmain_manifest(go, source, pre_ext)
++    out_synthetic_testmain_helpers = _declare_synthetic_testmain_helpers(go, source, pre_ext)
  
      # store export information for compiling dependent packages separately
      out_export = go.declare_file(go, name = source.name, ext = pre_ext + ".x")
-@@ -126,6 +132,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
+@@ -126,6 +138,8 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
              headers = headers,
              out_lib = out_lib,
              out_export = out_export,
 +            out_synthetic_testmain_manifest = out_synthetic_testmain_manifest,
++            out_synthetic_testmain_helpers = out_synthetic_testmain_helpers,
              out_facts = out_facts,
              out_diagnostics = out_diagnostics,
              out_nogo_validation = out_nogo_validation,
-@@ -158,6 +165,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
+@@ -158,6 +172,8 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
              headers = headers,
              out_lib = out_lib,
              out_export = out_export,
 +            out_synthetic_testmain_manifest = out_synthetic_testmain_manifest,
++            out_synthetic_testmain_helpers = out_synthetic_testmain_helpers,
              out_facts = out_facts,
              out_diagnostics = out_diagnostics,
              out_nogo_validation = out_nogo_validation,
-@@ -202,6 +210,10 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
+@@ -202,6 +218,11 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
          # Information needed by dependents
          file = out_lib,
          export_file = out_export,
-+        # Synthetic Bazel testmain archives carry a sidecar manifest that pins
-+        # the Datadog helper packagefiles selected during compile. Final GoLink
-+        # must reuse that same helper family instead of regenerating a new one.
++        # Synthetic Bazel testmain archives carry a sidecar manifest and a
++        # declared tree with compile-time Datadog helper archives. Final GoLink
++        # reuses both so it can run in a different sandbox or remote worker.
 +        _synthetic_testmain_manifest = out_synthetic_testmain_manifest,
++        _synthetic_testmain_helpers = out_synthetic_testmain_helpers,
          facts_file = out_facts,
          runfiles = source.runfiles,
          _validation_output = out_nogo_validation,
 diff --git a/go/private/actions/compilepkg.bzl b/go/private/actions/compilepkg.bzl
-index 9c067b2..1b2ab71 100644
+index 9c067b2..f3b305a 100644
 --- a/go/private/actions/compilepkg.bzl
 +++ b/go/private/actions/compilepkg.bzl
 @@ -18,6 +18,13 @@ load(
@@ -1292,15 +1301,16 @@ index 9c067b2..1b2ab71 100644
  def emit_compilepkg(
          go,
          sources = None,
-@@ -69,6 +139,7 @@ def emit_compilepkg(
+@@ -69,6 +139,8 @@ def emit_compilepkg(
          ldflags = None,
          out_lib = None,
          out_export = None,
 +        out_synthetic_testmain_manifest = None,
++        out_synthetic_testmain_helpers = None,
          out_facts = None,
          out_diagnostics = None,
          out_nogo_validation = None,
-@@ -94,10 +165,15 @@ def emit_compilepkg(
+@@ -94,10 +166,17 @@ def emit_compilepkg(
          archives = archives + [go.coverdata]
  
      sdk = go.sdk
@@ -1313,21 +1323,25 @@ index 9c067b2..1b2ab71 100644
      outputs = [out_lib, out_export]
 +    if out_synthetic_testmain_manifest != None:
 +        outputs.append(out_synthetic_testmain_manifest)
++    if out_synthetic_testmain_helpers != None:
++        outputs.append(out_synthetic_testmain_helpers)
  
      shared_args = go.builder_args(go)
      shared_args.add_all(sources, before_each = "-src")
-@@ -140,6 +216,10 @@ def emit_compilepkg(
+@@ -140,6 +219,12 @@ def emit_compilepkg(
  
      compile_args.add("-lo", out_lib)
      compile_args.add("-o", out_export)
 +    if out_synthetic_testmain_manifest:
 +        compile_args.add("-synthetic_testmain_manifest", out_synthetic_testmain_manifest)
++    if out_synthetic_testmain_helpers:
++        compile_args.add("-synthetic_testmain_helpers", out_synthetic_testmain_helpers.path)
 +    if compile_orchestrion:
 +        compile_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
      if out_cgo_export_h:
          compile_args.add("-cgoexport", out_cgo_export_h)
          outputs.append(out_cgo_export_h)
-@@ -165,12 +245,27 @@ def emit_compilepkg(
+@@ -165,12 +250,27 @@ def emit_compilepkg(
  
      # cgo and the linker action don't support path mapping yet
      # TODO: Remove the second condition after https://github.com/bazelbuild/bazel/pull/21921.
@@ -1357,7 +1371,7 @@ index 9c067b2..1b2ab71 100644
          execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT
      cgo_go_srcs = None
      if cgo:
-@@ -196,6 +291,44 @@ def emit_compilepkg(
+@@ -196,6 +296,44 @@ def emit_compilepkg(
          compile_args.add("-pgoprofile", go.mode.pgoprofile)
          inputs_direct.append(go.mode.pgoprofile)
  
@@ -1403,7 +1417,7 @@ index 9c067b2..1b2ab71 100644
      if ldflags:
          arguments.append(ldflags)
 diff --git a/go/private/actions/link.bzl b/go/private/actions/link.bzl
-index 61f076f..3e2b178 100644
+index 61f076f..67b1efa 100644
 --- a/go/private/actions/link.bzl
 +++ b/go/private/actions/link.bzl
 @@ -33,10 +33,90 @@ load(
@@ -1497,11 +1511,12 @@ index 61f076f..3e2b178 100644
  def emit_link(
          go,
          archive = None,
-@@ -167,6 +247,12 @@ def emit_link(
+@@ -167,6 +247,13 @@ def emit_link(
      builder_args.add("-o", executable)
      builder_args.add("-main", archive.data.file)
      builder_args.add("-p", archive.data.importmap)
 +    synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
++    synthetic_testmain_helpers = getattr(archive.data, "_synthetic_testmain_helpers", None)
 +    orchestrion_mode = getattr(go, "orchestrion_mode", "general")
 +    link_orchestrion = _orchestrion_enabled_for_link(go, synthetic_testmain_manifest)
 +    stdlib_cache_needed_for_link = _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion)
@@ -1510,12 +1525,14 @@ index 61f076f..3e2b178 100644
      tool_args.add_all(gc_linkopts)
      tool_args.add_all(go.toolchain.flags.link)
  
-@@ -177,8 +263,14 @@ def emit_link(
+@@ -177,8 +264,16 @@ def emit_link(
      tool_args.add_joined("-extldflags", extldflags, join_with = " ")
  
      inputs_direct = stamp_inputs + [go.sdk.package_list]
 +    if synthetic_testmain_manifest:
 +        inputs_direct.append(synthetic_testmain_manifest)
++    if synthetic_testmain_helpers:
++        inputs_direct.append(synthetic_testmain_helpers)
      if go.coverage_enabled and go.coverdata:
          inputs_direct.append(go.coverdata.data.file)
 +    orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if link_orchestrion else None
@@ -1525,7 +1542,7 @@ index 61f076f..3e2b178 100644
      inputs_transitive = [
          archive.libs,
          archive.cgo_deps,
-@@ -187,6 +279,48 @@ def emit_link(
+@@ -187,6 +282,48 @@ def emit_link(
          go.sdk.tools,
          go.stdlib.libs,
      ]
@@ -1574,7 +1591,7 @@ index 61f076f..3e2b178 100644
      inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
  
      go.actions.run(
-@@ -195,7 +329,13 @@ def emit_link(
+@@ -195,7 +332,13 @@ def emit_link(
          mnemonic = "GoLink",
          executable = go.toolchain._builder,
          arguments = [builder_args, "--", tool_args],
@@ -4579,10 +4596,10 @@ index fdeda2d..e8a3e32 100644
  	}
  }
 diff --git a/go/tools/builders/compilepkg.go b/go/tools/builders/compilepkg.go
-index e2b0be5..02e5b2e 100644
+index e2b0be5..e097993 100644
 --- a/go/tools/builders/compilepkg.go
 +++ b/go/tools/builders/compilepkg.go
-@@ -17,17 +17,131 @@
+@@ -17,17 +17,181 @@
  package main
  
  import (
@@ -4693,7 +4710,7 @@ index e2b0be5..02e5b2e 100644
 +	return archivePath + syntheticTestmainPackagefileManifestSidecarSuffix
 +}
 +
-+func writeSyntheticTestmainPackagefileManifest(outputPath, sourcePath string) error {
++func writeSyntheticTestmainPackagefileManifest(outputPath, sourcePath, helperOutputDir string) error {
 +	if strings.TrimSpace(outputPath) == "" {
 +		return nil
 +	}
@@ -4705,16 +4722,66 @@ index e2b0be5..02e5b2e 100644
 +			return fmt.Errorf("read synthetic testmain packagefile manifest %s: %w", sourcePath, err)
 +		}
 +	}
++	var err error
++	data, err = publishSyntheticTestmainPackagefiles(data, helperOutputDir)
++	if err != nil {
++		return err
++	}
 +	if err := os.WriteFile(outputPath, data, 0o644); err != nil {
 +		return fmt.Errorf("write synthetic testmain packagefile manifest %s: %w", outputPath, err)
 +	}
 +	return nil
 +}
 +
++// publishSyntheticTestmainPackagefiles copies action-local helper archives into
++// a declared Bazel output tree. The final link may run in another sandbox or on
++// another remote worker, where compile-time cache paths are not available.
++func publishSyntheticTestmainPackagefiles(data []byte, outputDir string) ([]byte, error) {
++	if strings.TrimSpace(outputDir) == "" {
++		return data, nil
++	}
++	if err := os.MkdirAll(outputDir, 0o755); err != nil {
++		return nil, fmt.Errorf("create synthetic testmain helper output: %w", err)
++	}
++
++	lines := strings.Split(string(data), "\n")
++	published := make(map[string]bool)
++	for index, line := range lines {
++		directive := strings.TrimSpace(line)
++		if !strings.HasPrefix(directive, "packagefile ") {
++			continue
++		}
++		mapping := strings.TrimPrefix(directive, "packagefile ")
++		separator := strings.Index(mapping, "=")
++		if separator <= 0 {
++			return nil, fmt.Errorf("invalid synthetic testmain packagefile directive %q", directive)
++		}
++		packagePath := strings.TrimSpace(mapping[:separator])
++		archivePath := strings.TrimSpace(mapping[separator+1:])
++		if packagePath == "" || archivePath == "" {
++			return nil, fmt.Errorf("invalid synthetic testmain packagefile directive %q", directive)
++		}
++		if !filepath.IsAbs(archivePath) {
++			continue
++		}
++
++		digest := sha256.Sum256([]byte(packagePath))
++		publishedPath := filepath.Join(outputDir, fmt.Sprintf("%x.a", digest[:8]))
++		if !published[publishedPath] {
++			if err := copyArchiveFile(archivePath, publishedPath); err != nil {
++				return nil, fmt.Errorf("publish synthetic testmain helper %s: %w", packagePath, err)
++			}
++			published[publishedPath] = true
++		}
++		lines[index] = "packagefile " + packagePath + "=" + publishedPath
++	}
++	return []byte(strings.Join(lines, "\n")), nil
++}
++
  func compilePkg(args []string) error {
  	// Parse arguments.
  	args, _, err := expandParamsFiles(args)
-@@ -38,15 +152,20 @@ func compilePkg(args []string) error {
+@@ -38,15 +202,20 @@ func compilePkg(args []string) error {
  	fs := flag.NewFlagSet("GoCompilePkg", flag.ExitOnError)
  	goenv := envFlags(fs)
  	var pack string
@@ -4723,7 +4790,7 @@ index e2b0be5..02e5b2e 100644
  	var deps archiveMultiFlag
  	var importPath, packagePath, packageListPath, coverMode string
 -	var outLinkobjPath, outInterfacePath, cgoExportHPath, cgoGoSrcsPath string
-+	var outLinkobjPath, outInterfacePath, outSyntheticTestmainManifestPath, cgoExportHPath, cgoGoSrcsPath string
++	var outLinkobjPath, outInterfacePath, outSyntheticTestmainManifestPath, outSyntheticTestmainHelpersPath, cgoExportHPath, cgoGoSrcsPath string
  	var testFilter string
  	var gcFlags, asmFlags, cppFlags, cFlags, cxxFlags, objcFlags, objcxxFlags, ldFlags quoteMultiFlag
  	var coverFormat string
@@ -4737,15 +4804,16 @@ index e2b0be5..02e5b2e 100644
  	fs.Var(&unfilteredSrcs, "src", ".go, .c, .cc, .m, .mm, .s, or .S file to be filtered and compiled")
  	fs.Var(&coverSrcs, "cover", ".go file that should be instrumented for coverage (must also be a -src)")
  	fs.Var(&embedSrcs, "embedsrc", "file that may be compiled into the package with a //go:embed directive")
-@@ -67,6 +186,7 @@ func compilePkg(args []string) error {
+@@ -67,6 +236,8 @@ func compilePkg(args []string) error {
  	fs.StringVar(&coverMode, "cover_mode", "", "The coverage mode to use. Empty if coverage instrumentation should not be added.")
  	fs.StringVar(&outLinkobjPath, "lo", "", "The full output archive file required by the linker")
  	fs.StringVar(&outInterfacePath, "o", "", "The export-only output archive required to compile dependent packages")
 +	fs.StringVar(&outSyntheticTestmainManifestPath, "synthetic_testmain_manifest", "", "Sidecar manifest that records compile-time Datadog helper packagefiles for synthetic Bazel testmain archives")
++	fs.StringVar(&outSyntheticTestmainHelpersPath, "synthetic_testmain_helpers", "", "Declared output directory containing Datadog helper archives for synthetic Bazel testmain links")
  	fs.StringVar(&cgoExportHPath, "cgoexport", "", "The _cgo_exports.h file to write")
  	fs.StringVar(&cgoGoSrcsPath, "cgo_go_srcs", "", "The directory to emit cgo-generated Go sources for nogo consumption to")
  	fs.StringVar(&testFilter, "testfilter", "off", "Controls test package filtering")
-@@ -79,6 +199,11 @@ func compilePkg(args []string) error {
+@@ -79,6 +250,11 @@ func compilePkg(args []string) error {
  	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
  		return err
  	}
@@ -4757,11 +4825,12 @@ index e2b0be5..02e5b2e 100644
  	if importPath == "" {
  		importPath = packagePath
  	}
-@@ -131,17 +256,21 @@ func compilePkg(args []string) error {
+@@ -131,17 +307,22 @@ func compilePkg(args []string) error {
  		packageListPath,
  		outLinkobjPath,
  		outInterfacePath,
 +		outSyntheticTestmainManifestPath,
++		outSyntheticTestmainHelpersPath,
  		cgoExportHPath,
  		cgoGoSrcsPath,
  		coverFormat,
@@ -4781,11 +4850,12 @@ index e2b0be5..02e5b2e 100644
  	packagePath string,
  	srcs archiveSrcs,
  	deps []archive,
-@@ -163,12 +292,27 @@ func compileArchive(
+@@ -163,12 +344,28 @@ func compileArchive(
  	packageListPath string,
  	outLinkObj string,
  	outInterfacePath string,
 +	outSyntheticTestmainManifestPath string,
++	outSyntheticTestmainHelpersPath string,
  	cgoExportHPath string,
  	cgoGoSrcsForNogoPath string,
  	coverFormat string,
@@ -4810,7 +4880,7 @@ index e2b0be5..02e5b2e 100644
  	workDir, cleanup, err := goenv.workDir()
  	if err != nil {
  		return err
-@@ -275,8 +419,8 @@ func compileArchive(
+@@ -275,8 +472,8 @@ func compileArchive(
  			switch coverFormat {
  			case "go_cover":
  				srcName = origSrc
@@ -4821,7 +4891,7 @@ index e2b0be5..02e5b2e 100644
  				}
  			case "lcov":
  				// Bazel merges lcov reports across languages and thus assumes
-@@ -290,7 +434,7 @@ func compileArchive(
+@@ -290,7 +487,7 @@ func compileArchive(
  				// to write the lcov file with the expected exec root relative source
  				// path.
  				srcName = relCoverPath[origSrc]
@@ -4830,7 +4900,7 @@ index e2b0be5..02e5b2e 100644
  			default:
  				return fmt.Errorf("invalid value for -cover_format: %q", coverFormat)
  			}
-@@ -314,11 +458,11 @@ func compileArchive(
+@@ -314,11 +511,11 @@ func compileArchive(
  
  		// Modeled after go toolchain's coverage variables configuration.
  		// https://github.com/golang/go/blob/go1.24.5/src/cmd/go/internal/work/exec.go#L1932
@@ -4844,7 +4914,7 @@ index e2b0be5..02e5b2e 100644
  			if err != nil {
  				return err
  			}
-@@ -326,6 +470,24 @@ func compileArchive(
+@@ -326,6 +523,24 @@ func compileArchive(
  		}
  	}
  
@@ -4869,7 +4939,7 @@ index e2b0be5..02e5b2e 100644
  	// If we have cgo, generate separate C and go files, and compile the
  	// C files.
  	var objFiles []string
-@@ -384,7 +546,9 @@ func compileArchive(
+@@ -384,7 +599,9 @@ func compileArchive(
  		gcFlags = append(gcFlags, "-trimpath="+trimPath)
  	}
  
@@ -4880,7 +4950,7 @@ index e2b0be5..02e5b2e 100644
  	if err != nil {
  		return err
  	}
-@@ -442,9 +606,24 @@ func compileArchive(
+@@ -442,9 +659,22 @@ func compileArchive(
  	}
  
  	// Compile the filtered .go files.
@@ -4897,16 +4967,14 @@ index e2b0be5..02e5b2e 100644
 +		if outSyntheticTestmainManifestPath == "" {
 +			outSyntheticTestmainManifestPath = syntheticTestmainPackagefileManifestSidecarPath(outLinkObj)
 +		}
-+		if err := writeSyntheticTestmainPackagefileManifest(outSyntheticTestmainManifestPath, syntheticTestmainPackagefiles); err != nil {
-+			if !errors.Is(err, os.ErrNotExist) {
-+				return err
-+			}
++		if err := writeSyntheticTestmainPackagefileManifest(outSyntheticTestmainManifestPath, syntheticTestmainPackagefiles, outSyntheticTestmainHelpersPath); err != nil {
++			return err
 +		}
 +	}
  
  	// Compile the .s files with Go's assembler, if this is not a cgo package.
  	// Cgo is assembled by cc above.
-@@ -489,100 +668,1763 @@ func compileArchive(
+@@ -489,100 +719,1763 @@ func compileArchive(
  	return nil
  }
  
@@ -13503,10 +13571,10 @@ index 0000000..fbb5712
 +}
 diff --git a/go/tools/builders/orchestrion_skip_test.go b/go/tools/builders/orchestrion_skip_test.go
 new file mode 100644
-index 0000000..dad7665
+index 0000000..32c0cf4
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_skip_test.go
-@@ -0,0 +1,327 @@
+@@ -0,0 +1,383 @@
 +package main
 +
 +import (
@@ -13798,6 +13866,62 @@ index 0000000..dad7665
 +	}
 +	if got := gotArchive.linkClosure["github.com/DataDog/dd-trace-go/v2/ddtrace/tracer"]; got != externalArchive {
 +		t.Fatalf("external dependency = %q, want %q", got, externalArchive)
++	}
++}
++
++func TestSyntheticTestmainManifestPublishesExternalArchives(t *testing.T) {
++	execroot := t.TempDir()
++	externalArchive := filepath.Join(t.TempDir(), "helper.a")
++	if err := os.WriteFile(externalArchive, []byte("helper archive"), 0o644); err != nil {
++		t.Fatal(err)
++	}
++	localArchive := filepath.Join("bazel-out", "pkg", "existing.a")
++	sourceManifest := filepath.Join(t.TempDir(), "orchestrion.pack")
++	manifest := strings.Join([]string{
++		"importmap example.com/alias=example.com/helper",
++		"packagefile example.com/helper=" + externalArchive,
++		"packagefile example.com/existing=" + localArchive,
++		"",
++	}, "\n")
++	if err := os.WriteFile(sourceManifest, []byte(manifest), 0o644); err != nil {
++		t.Fatal(err)
++	}
++
++	outputManifest := filepath.Join(execroot, "testmain.a.orchestrion.pack")
++	helperOutputDir := filepath.Join(execroot, "testmain.a.orchestrion.helpers")
++	if err := writeSyntheticTestmainPackagefileManifest(outputManifest, sourceManifest, helperOutputDir); err != nil {
++		t.Fatalf("writeSyntheticTestmainPackagefileManifest error: %v", err)
++	}
++
++	data, err := os.ReadFile(outputManifest)
++	if err != nil {
++		t.Fatal(err)
++	}
++	gotManifest := string(data)
++	if strings.Contains(gotManifest, externalArchive) {
++		t.Fatalf("manifest retained worker-local archive path %q:\n%s", externalArchive, gotManifest)
++	}
++	if !strings.Contains(gotManifest, "packagefile example.com/existing="+localArchive) {
++		t.Fatalf("manifest rewrote declared Bazel archive %q:\n%s", localArchive, gotManifest)
++	}
++
++	entries, err := os.ReadDir(helperOutputDir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if len(entries) != 1 {
++		t.Fatalf("published helper archive count = %d, want 1", len(entries))
++	}
++	publishedArchive := filepath.Join(helperOutputDir, entries[0].Name())
++	if !strings.Contains(gotManifest, "packagefile example.com/helper="+publishedArchive) {
++		t.Fatalf("manifest does not reference published helper %q:\n%s", publishedArchive, gotManifest)
++	}
++	publishedData, err := os.ReadFile(publishedArchive)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if string(publishedData) != "helper archive" {
++		t.Fatalf("published helper contents = %q", publishedData)
 +	}
 +}
 +

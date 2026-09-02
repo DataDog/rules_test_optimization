@@ -45,7 +45,7 @@ from uploader_py.freshness import (  # noqa: E402
     prepare_freshness,
     validate_fresh_outputs_accounted,
 )
-from uploader_py.models import PayloadType  # noqa: E402
+from uploader_py.models import FileResult, FileStatus, PayloadType  # noqa: E402
 
 
 def _payload(output: Path) -> None:
@@ -418,5 +418,79 @@ class FreshnessTests(unittest.TestCase):
                 expected_targets=(),
                 fail_on_error=True,
             )
+
+    def test_expected_target_accepts_payload_from_one_of_multiple_attempts(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            empty_output_key = (
+                "pkg/target/test_attempts/attempt_1.outputs/test.outputs"
+            )
+            payload_output_key = "pkg/target/test.outputs"
+            empty_attempt = root / empty_output_key
+            empty_attempt.mkdir(parents=True)
+            payload_attempt = root / payload_output_key
+            _payload(payload_attempt)
+            _metadata(payload_attempt, "//pkg:target")
+            plan = FreshnessPlan(
+                selected_source="bep",
+                eligibility_enabled=True,
+                eligible_outputs=frozenset(
+                    {
+                        ("//pkg:target", empty_output_key),
+                        ("//pkg:target", payload_output_key),
+                    }
+                ),
+            )
+
+            filtered = filter_discovery_for_freshness(
+                discover_file_tasks((ScanRoot(root),)),
+                plan,
+                freshness_mode="required",
+            ).discovery
+            task = filtered.tasks[0]
+            result = FileResult(
+                task_id=task.task_id,
+                source_path=str(task.source_path),
+                payload_type=task.payload_type,
+                status=FileStatus.SUCCEEDED,
+            )
+
+            validate_fresh_outputs_accounted(
+                plan,
+                filtered,
+                (result,),
+                expected_targets=("//pkg:target",),
+                fail_on_error=True,
+            )
+
+    def test_expected_target_rejects_when_all_attempts_are_empty(self) -> None:
+        plan = FreshnessPlan(
+            selected_source="bep",
+            eligibility_enabled=True,
+            eligible_outputs=frozenset(
+                {
+                    (
+                        "//pkg:target",
+                        "pkg/target/test_attempts/attempt_1.outputs/test.outputs",
+                    ),
+                    ("//pkg:target", "pkg/target/test.outputs"),
+                }
+            ),
+        )
+        empty = DiscoveryResult(
+            outputs=(),
+            tasks=(),
+            discovered_by_type=tuple((kind, 0) for kind in PayloadType),
+        )
+
+        with self.assertRaisesRegex(FreshnessError, "produced no uploadable payloads"):
+            validate_fresh_outputs_accounted(
+                plan,
+                empty,
+                (),
+                expected_targets=("//pkg:target",),
+                fail_on_error=True,
+            )
+
 if __name__ == "__main__":
     unittest.main()

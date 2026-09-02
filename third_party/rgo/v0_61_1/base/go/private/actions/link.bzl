@@ -248,6 +248,7 @@ def emit_link(
     builder_args.add("-main", archive.data.file)
     builder_args.add("-p", archive.data.importmap)
     synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
+    synthetic_testmain_helpers = getattr(archive.data, "_synthetic_testmain_helpers", None)
     orchestrion_mode = getattr(go, "orchestrion_mode", "general")
     link_orchestrion = _orchestrion_enabled_for_link(go, synthetic_testmain_manifest)
     stdlib_cache_needed_for_link = _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion)
@@ -265,6 +266,8 @@ def emit_link(
     inputs_direct = stamp_inputs + [go.sdk.package_list]
     if synthetic_testmain_manifest:
         inputs_direct.append(synthetic_testmain_manifest)
+    if synthetic_testmain_helpers:
+        inputs_direct.append(synthetic_testmain_helpers)
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
     orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if link_orchestrion else None

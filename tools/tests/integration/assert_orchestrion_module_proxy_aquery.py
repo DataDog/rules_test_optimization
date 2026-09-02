@@ -412,6 +412,10 @@ def _assert_reduced_synthetic_testmain_link_inputs(
         _contains_path_suffix(inputs, main + ".orchestrion.pack"),
         f"synthetic testmain GoLink is missing synthetic packagefile manifest {main}.orchestrion.pack",
     )
+    _require(
+        _contains_path_suffix(inputs, main + ".orchestrion.helpers"),
+        f"synthetic testmain GoLink is missing declared helper archive tree {main}.orchestrion.helpers",
+    )
     for suffix in ("orchestrion.tool.go", "orchestrion.yml"):
         _require(
             not _contains_path_suffix(inputs, suffix),

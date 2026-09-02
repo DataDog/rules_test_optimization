@@ -292,6 +292,62 @@ func TestSyntheticHelperManifestKeepsExternalAbsoluteDependencies(t *testing.T) 
 	}
 }
 
+func TestSyntheticTestmainManifestPublishesExternalArchives(t *testing.T) {
+	execroot := t.TempDir()
+	externalArchive := filepath.Join(t.TempDir(), "helper.a")
+	if err := os.WriteFile(externalArchive, []byte("helper archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	localArchive := filepath.Join("bazel-out", "pkg", "existing.a")
+	sourceManifest := filepath.Join(t.TempDir(), "orchestrion.pack")
+	manifest := strings.Join([]string{
+		"importmap example.com/alias=example.com/helper",
+		"packagefile example.com/helper=" + externalArchive,
+		"packagefile example.com/existing=" + localArchive,
+		"",
+	}, "\n")
+	if err := os.WriteFile(sourceManifest, []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outputManifest := filepath.Join(execroot, "testmain.a.orchestrion.pack")
+	helperOutputDir := filepath.Join(execroot, "testmain.a.orchestrion.helpers")
+	if err := writeSyntheticTestmainPackagefileManifest(outputManifest, sourceManifest, helperOutputDir); err != nil {
+		t.Fatalf("writeSyntheticTestmainPackagefileManifest error: %v", err)
+	}
+
+	data, err := os.ReadFile(outputManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotManifest := string(data)
+	if strings.Contains(gotManifest, externalArchive) {
+		t.Fatalf("manifest retained worker-local archive path %q:\n%s", externalArchive, gotManifest)
+	}
+	if !strings.Contains(gotManifest, "packagefile example.com/existing="+localArchive) {
+		t.Fatalf("manifest rewrote declared Bazel archive %q:\n%s", localArchive, gotManifest)
+	}
+
+	entries, err := os.ReadDir(helperOutputDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("published helper archive count = %d, want 1", len(entries))
+	}
+	publishedArchive := filepath.Join(helperOutputDir, entries[0].Name())
+	if !strings.Contains(gotManifest, "packagefile example.com/helper="+publishedArchive) {
+		t.Fatalf("manifest does not reference published helper %q:\n%s", publishedArchive, gotManifest)
+	}
+	publishedData, err := os.ReadFile(publishedArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(publishedData) != "helper archive" {
+		t.Fatalf("published helper contents = %q", publishedData)
+	}
+}
+
 func TestWaitForJobserverReadyAcceptsListeningTCPPort(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

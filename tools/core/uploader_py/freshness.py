@@ -362,7 +362,13 @@ def validate_fresh_outputs_accounted(
     }
     expected_target_set = frozenset(expected_targets)
     if expected_target_set:
-        unhandled_outputs = sorted(plan.eligible_outputs.difference(handled_pairs))
+        # Bazel may publish several TestResult outputs for one target while only
+        # some attempts contain payloads. The target is accounted for once any
+        # of its fresh attempts produced a non-skipped worker result.
+        handled_labels = {label for label, _output_key in handled_pairs}
+        unhandled_outputs = sorted(
+            pair for pair in plan.eligible_outputs if pair[0] not in handled_labels
+        )
         if unhandled_outputs:
             label, output_key = unhandled_outputs[0]
             raise FreshnessError(
