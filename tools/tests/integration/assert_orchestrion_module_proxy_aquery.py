@@ -441,6 +441,19 @@ def _assert_shared_synthetic_testmain_helper_action(
         _contains_module_proxy_payload(inputs),
         "shared synthetic testmain helper action is missing module proxy payload files",
     )
+    if action.environment.get("CGO_ENABLED") == "1":
+        c_compiler = action.environment.get("CC", "")
+        _require(
+            c_compiler,
+            "non-pure shared synthetic testmain helper action is missing CC",
+        )
+        _require(
+            _contains_path_suffix(inputs, c_compiler),
+            (
+                "non-pure shared synthetic testmain helper action does not "
+                f"declare its C compiler input: {c_compiler}"
+            ),
+        )
     for name in (
         "RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT",
         "RULES_GO_ORCHESTRION_TOOL_VERSION_FILE",

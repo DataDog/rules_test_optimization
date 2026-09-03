@@ -150,7 +150,10 @@ def _build_stdlib_list_json(go):
     return out, cache_dir
 
 def _stdlib_list_env(go):
-    env = go.env
+    return _stdlib_env(go, go.env)
+
+def _stdlib_env(go, base_env):
+    env = dict(base_env)
 
     if go.mode.pure:
         env.update({"CGO_ENABLED": "0"})
@@ -227,6 +230,8 @@ def _build_shared_synthetic_testmain_helpers(go, goroot_file, stdlib_cache_dir):
         if file:
             inputs_direct.append(file)
     inputs_transitive = [go.sdk.headers, go.sdk.srcs, go.sdk.tools]
+    if not go.mode.pure:
+        inputs_transitive.append(go.cc_toolchain_files)
     if getattr(go, "orchestrion_module_proxy_files", None):
         inputs_transitive.append(go.orchestrion_module_proxy_files)
 
@@ -238,7 +243,7 @@ def _build_shared_synthetic_testmain_helpers(go, goroot_file, stdlib_cache_dir):
         arguments = [args],
         env = _orchestrion_action_env(
             go,
-            go.env_for_path_mapping,
+            _stdlib_env(go, go.env_for_path_mapping),
             orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None),
             orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None),
             orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None),

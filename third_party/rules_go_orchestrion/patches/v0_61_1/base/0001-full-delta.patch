@@ -1617,7 +1617,7 @@ index 61f076f..813c493 100644
      )
  
 diff --git a/go/private/actions/stdlib.bzl b/go/private/actions/stdlib.bzl
-index cd028a3..271df89 100644
+index cd028a3..ebf389c 100644
 --- a/go/private/actions/stdlib.bzl
 +++ b/go/private/actions/stdlib.bzl
 @@ -27,6 +27,7 @@ load(
@@ -1708,7 +1708,7 @@ index cd028a3..271df89 100644
      args = go.builder_args(go, "stdliblist")
      args.add("-out", out)
      args.add_all("-cache", [cache_dir], expand_directories = False)
-@@ -85,13 +143,13 @@ def _build_stdlib_list_json(go):
+@@ -85,14 +143,17 @@ def _build_stdlib_list_json(go):
          mnemonic = "GoStdlibList",
          executable = go.toolchain._builder,
          arguments = [args],
@@ -1720,11 +1720,16 @@ index cd028a3..271df89 100644
      return out, cache_dir
  
 -def _build_env(go):
+-    env = go.env
 +def _stdlib_list_env(go):
-     env = go.env
++    return _stdlib_env(go, go.env)
++
++def _stdlib_env(go, base_env):
++    env = dict(base_env)
  
      if go.mode.pure:
-@@ -117,10 +175,20 @@ def _build_env(go):
+         env.update({"CGO_ENABLED": "0"})
+@@ -117,10 +178,20 @@ def _build_env(go):
  
      return env
  
@@ -1745,7 +1750,7 @@ index cd028a3..271df89 100644
          cache_dir = depset([cache_dir]),
          libs = go.sdk.libs,
          root_file = go.sdk.root_file,
-@@ -129,13 +197,66 @@ def _sdk_stdlib(go):
+@@ -129,13 +200,68 @@ def _sdk_stdlib(go):
  def _dirname(file):
      return file.dirname
  
@@ -1779,6 +1784,8 @@ index cd028a3..271df89 100644
 +        if file:
 +            inputs_direct.append(file)
 +    inputs_transitive = [go.sdk.headers, go.sdk.srcs, go.sdk.tools]
++    if not go.mode.pure:
++        inputs_transitive.append(go.cc_toolchain_files)
 +    if getattr(go, "orchestrion_module_proxy_files", None):
 +        inputs_transitive.append(go.orchestrion_module_proxy_files)
 +
@@ -1790,7 +1797,7 @@ index cd028a3..271df89 100644
 +        arguments = [args],
 +        env = _orchestrion_action_env(
 +            go,
-+            go.env_for_path_mapping,
++            _stdlib_env(go, go.env_for_path_mapping),
 +            orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None),
 +            orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None),
 +            orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None),
@@ -1812,7 +1819,7 @@ index cd028a3..271df89 100644
      if go.mode.race:
          args.add("-race")
      if go.mode.msan:
-@@ -164,21 +285,62 @@ def _build_stdlib(go):
+@@ -164,21 +290,62 @@ def _build_stdlib(go):
          args.add("-pgoprofile", go.mode.pgoprofile)
          inputs_direct.append(go.mode.pgoprofile)
  
