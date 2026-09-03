@@ -447,13 +447,15 @@ def _assert_shared_synthetic_testmain_helper_action(
             c_compiler,
             "non-pure shared synthetic testmain helper action is missing CC",
         )
-        _require(
-            _contains_path_suffix(inputs, c_compiler),
-            (
+        # Auto-configured toolchains may use a host compiler such as
+        # /usr/bin/gcc, which cannot be a Bazel artifact. Hermetic toolchains
+        # use an execroot-relative compiler that must be declared as an input.
+        if not Path(c_compiler).is_absolute():
+            _require(
+                _contains_path_suffix(inputs, c_compiler),
                 "non-pure shared synthetic testmain helper action does not "
-                f"declare its C compiler input: {c_compiler}"
-            ),
-        )
+                f"declare its C compiler input: {c_compiler}",
+            )
     for name in (
         "RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT",
         "RULES_GO_ORCHESTRION_TOOL_VERSION_FILE",
