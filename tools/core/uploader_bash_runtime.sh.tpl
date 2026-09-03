@@ -865,6 +865,7 @@ FRESHNESS_ELIGIBLE_OUTPUTS_FILE=""
 FRESHNESS_CACHED_OUTPUTS_FILE=""
 FRESHNESS_SKIPPED_OUTPUTS_FILE=""
 FRESHNESS_SKIPPED_TARGETS_FILE=""
+FRESHNESS_TEST_RESULT_LABELS_FILE=""
 FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE=""
 FRESHNESS_MISSING_OUTPUT_LABELS_FILE=""
 FRESHNESS_SKIP_WAS_EMITTED=0
@@ -3294,29 +3295,19 @@ filter_bep_freshness_to_expected_targets() {
   filter_bep_rows_to_expected_targets "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
   filter_bep_rows_to_expected_targets "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
   filter_bep_rows_to_expected_targets "$FRESHNESS_SKIPPED_TARGETS_FILE"
+  filter_bep_rows_to_expected_targets "$FRESHNESS_TEST_RESULT_LABELS_FILE"
   cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
 }
 
 validate_bep_freshness_ambiguity() {
-  local conflicting_output conflicting_target represented_targets
+  local conflicting_output conflicting_target
   conflicting_output="$(comm -12 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_CACHED_OUTPUTS_FILE" | head -n 1 || true)"
   if [[ -n "$conflicting_output" ]]; then
     log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $conflicting_output. Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
     exit 2
   fi
 
-  represented_targets="$(mktemp "$TMP_PAYLOAD_DIR/bep_represented_targets.XXXXXX" 2>/dev/null || true)"
-  if [[ -z "$represented_targets" ]]; then
-    log "error: failed to create BEP freshness ambiguity temp file"
-    exit 2
-  fi
-  {
-    cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
-    cut -f1 "$FRESHNESS_CACHED_OUTPUTS_FILE"
-    cut -f1 "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
-    cat "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
-  } | LC_ALL=C sort -u >"$represented_targets"
-  conflicting_target="$(comm -12 "$FRESHNESS_SKIPPED_TARGETS_FILE" "$represented_targets" | head -n 1 || true)"
+  conflicting_target="$(comm -12 "$FRESHNESS_SKIPPED_TARGETS_FILE" "$FRESHNESS_TEST_RESULT_LABELS_FILE" | head -n 1 || true)"
   if [[ -n "$conflicting_target" ]]; then
     log "error: BEP freshness is ambiguous: the same target is reported as both platform-skipped and executed: $conflicting_target. Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
     exit 2
@@ -3337,16 +3328,18 @@ prepare_bep_eligibility() {
   FRESHNESS_CACHED_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_cached_outputs.txt"
   FRESHNESS_SKIPPED_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_skipped_outputs.txt"
   FRESHNESS_SKIPPED_TARGETS_FILE="$TMP_PAYLOAD_DIR/freshness_skipped_targets.txt"
+  FRESHNESS_TEST_RESULT_LABELS_FILE="$TMP_PAYLOAD_DIR/freshness_test_result_labels.txt"
   FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_remote_only_outputs.txt"
   FRESHNESS_MISSING_OUTPUT_LABELS_FILE="$TMP_PAYLOAD_DIR/freshness_missing_output_labels.txt"
   : >"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
   : >"$FRESHNESS_CACHED_OUTPUTS_FILE"
   : >"$FRESHNESS_SKIPPED_OUTPUTS_FILE"
   : >"$FRESHNESS_SKIPPED_TARGETS_FILE"
+  : >"$FRESHNESS_TEST_RESULT_LABELS_FILE"
   : >"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
   : >"$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
 
-  local bep_json resolved_bep tmp_records tmp_remote tmp_missing tmp_skipped bep_valid
+  local bep_json resolved_bep tmp_records tmp_remote tmp_missing tmp_event_labels bep_valid
   for bep_json in "${BEP_JSON_FILES[@]}"; do
     resolved_bep="$(resolve_runtime_file_path "$bep_json")"
     if [[ -z "$resolved_bep" || ! -f "$resolved_bep" ]]; then
@@ -3360,8 +3353,8 @@ prepare_bep_eligibility() {
     tmp_records="$(mktemp "$TMP_PAYLOAD_DIR/bep_records.XXXXXX" 2>/dev/null || true)"
     tmp_remote="$(mktemp "$TMP_PAYLOAD_DIR/bep_remote.XXXXXX" 2>/dev/null || true)"
     tmp_missing="$(mktemp "$TMP_PAYLOAD_DIR/bep_missing.XXXXXX" 2>/dev/null || true)"
-    tmp_skipped="$(mktemp "$TMP_PAYLOAD_DIR/bep_skipped.XXXXXX" 2>/dev/null || true)"
-    if [[ -z "$tmp_records" || -z "$tmp_remote" || -z "$tmp_missing" || -z "$tmp_skipped" ]]; then
+    tmp_event_labels="$(mktemp "$TMP_PAYLOAD_DIR/bep_event_labels.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$tmp_records" || -z "$tmp_remote" || -z "$tmp_missing" || -z "$tmp_event_labels" ]]; then
       log "error: failed to create BEP freshness temp files"
       exit 2
     fi
@@ -3523,17 +3516,28 @@ prepare_bep_eligibility() {
       ((++UPLOAD_FAILURES))
       continue
     fi
+    # A TestResult proves execution even when a cache hit omits test.outputs.
     if ! jq -r '
-      select(.id.targetCompleted? != null or .id.target_completed? != null)
-      | (.id.targetCompleted // .id.target_completed // {}) as $id
-      | select((.aborted.reason // "") == "SKIPPED")
-      | ($id.label // empty)
-      | select(. != "")
-    ' "$resolved_bep" >"$tmp_skipped"; then
-      if optional_bep_unavailable "failed to parse BEP skipped targets: $resolved_bep"; then
+      (
+        select(.id.testResult? != null or .id.test_result? != null)
+        | (.id.testResult // .id.test_result // {})
+        | (.label // empty)
+        | select(. != "")
+        | "test_result\t\(.)"
+      ),
+      (
+        select(.id.targetCompleted? != null or .id.target_completed? != null)
+        | (.id.targetCompleted // .id.target_completed // {}) as $id
+        | select((.aborted.reason // "") == "SKIPPED")
+        | ($id.label // empty)
+        | select(. != "")
+        | "skipped\t\(.)"
+      )
+    ' "$resolved_bep" >"$tmp_event_labels"; then
+      if optional_bep_unavailable "failed to parse BEP event labels: $resolved_bep"; then
         return 0
       fi
-      log "error: failed to parse BEP skipped targets: $resolved_bep; continuing with other BEP files"
+      log "error: failed to parse BEP event labels: $resolved_bep; continuing with other BEP files"
       ((++UPLOAD_FAILURES))
       continue
     fi
@@ -3541,7 +3545,8 @@ prepare_bep_eligibility() {
     awk -F '\t' '$3 == "cached" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_CACHED_OUTPUTS_FILE"
     cat "$tmp_remote" >>"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
     cat "$tmp_missing" >>"$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
-    cat "$tmp_skipped" >>"$FRESHNESS_SKIPPED_TARGETS_FILE"
+    awk -F '\t' '$1 == "skipped" { print $2 }' "$tmp_event_labels" >>"$FRESHNESS_SKIPPED_TARGETS_FILE"
+    awk -F '\t' '$1 == "test_result" { print $2 }' "$tmp_event_labels" >>"$FRESHNESS_TEST_RESULT_LABELS_FILE"
   done
 
 	  LC_ALL=C sort -u -o "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
@@ -3549,6 +3554,7 @@ prepare_bep_eligibility() {
 	  LC_ALL=C sort -u -o "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
 	  LC_ALL=C sort -u -o "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
 	  LC_ALL=C sort -u -o "$FRESHNESS_SKIPPED_TARGETS_FILE" "$FRESHNESS_SKIPPED_TARGETS_FILE"
+	  LC_ALL=C sort -u -o "$FRESHNESS_TEST_RESULT_LABELS_FILE" "$FRESHNESS_TEST_RESULT_LABELS_FILE"
   validate_bep_freshness_ambiguity
   cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
   filter_bep_freshness_to_expected_targets

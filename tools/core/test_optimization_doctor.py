@@ -1552,6 +1552,7 @@ def _parse_bep_freshness(
     missing_output_mappings: set[str] = set()
     artifact_references: list[BepArtifactReference] = []
     skipped_targets: set[str] = set()
+    test_result_labels: set[str] = set()
 
     for bep_file in bep_files:
         if not bep_file.is_file():
@@ -1606,6 +1607,8 @@ def _parse_bep_freshness(
             label = test_result_id.get("label")
             if not isinstance(label, str) or not label:
                 continue
+            # A TestResult proves execution even when a cache hit omits test.outputs.
+            test_result_labels.add(label)
 
             result = _coalesced_field(event, "testResult", "test_result", {})
             if not isinstance(result, dict):
@@ -1706,12 +1709,7 @@ def _parse_bep_freshness(
             "invocation and do not pass overlapping stale BEP files."
         )
 
-    output_labels = {
-        label for label, _output_key in eligible_outputs.union(cached_outputs)
-    }
-    output_labels.update(item.label for item in remote_only_outputs)
-    output_labels.update(missing_output_mappings)
-    conflicting_labels = skipped_targets.intersection(output_labels)
+    conflicting_labels = skipped_targets.intersection(test_result_labels)
     if conflicting_labels:
         label = sorted(conflicting_labels)[0]
         _fail(

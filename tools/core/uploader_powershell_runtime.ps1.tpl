@@ -834,6 +834,7 @@ $script:FreshnessEligibleOutputs = [System.Collections.Generic.HashSet[string]]:
 $script:FreshnessCachedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkippedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkippedTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessTestResultLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessRemoteOnlyOutputs = New-Object System.Collections.Generic.List[object]
 $script:FreshnessMissingOutputLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkipWasWritten = $false
@@ -3108,17 +3109,7 @@ function Assert-BepFreshnessUnambiguous {
     exit 2
   }
 
-  $representedTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
-  foreach ($entry in @($script:FreshnessEligibleOutputs) + @($script:FreshnessCachedOutputs)) {
-    $representedTargets.Add(([string]$entry -split "`t", 2)[0]) | Out-Null
-  }
-  foreach ($entry in @($script:FreshnessRemoteOnlyOutputs.ToArray())) {
-    $representedTargets.Add([string]$entry.Label) | Out-Null
-  }
-  foreach ($label in @($script:FreshnessMissingOutputLabels)) {
-    $representedTargets.Add([string]$label) | Out-Null
-  }
-  $conflictingTargets = @($script:FreshnessSkippedTargets | Where-Object { $representedTargets.Contains($_) })
+  $conflictingTargets = @($script:FreshnessSkippedTargets | Where-Object { $script:FreshnessTestResultLabels.Contains($_) })
   if ($conflictingTargets.Count -gt 0) {
     Log "error: BEP freshness is ambiguous: the same target is reported as both platform-skipped and executed: $($conflictingTargets[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
     exit 2
@@ -3131,6 +3122,7 @@ function Initialize-BepEligibility {
   $script:FreshnessCachedOutputs.Clear()
   $script:FreshnessSkippedOutputs.Clear()
   $script:FreshnessSkippedTargets.Clear()
+  $script:FreshnessTestResultLabels.Clear()
   $script:FreshnessRemoteOnlyOutputs.Clear()
   $script:FreshnessMissingOutputLabels.Clear()
 
@@ -3148,6 +3140,7 @@ function Initialize-BepEligibility {
     $eligibleOutputsBefore = @($script:FreshnessEligibleOutputs)
     $cachedOutputsBefore = @($script:FreshnessCachedOutputs)
     $skippedTargetsBefore = @($script:FreshnessSkippedTargets)
+    $testResultLabelsBefore = @($script:FreshnessTestResultLabels)
     $remoteOutputsBefore = @($script:FreshnessRemoteOnlyOutputs.ToArray())
     $missingLabelsBefore = @($script:FreshnessMissingOutputLabels)
     try {
@@ -3172,6 +3165,8 @@ function Initialize-BepEligibility {
         $label = [string](Get-MapValue $testResultId 'label')
         if ([string]::IsNullOrWhiteSpace($label)) { continue }
         if ($script:ExpectedTargetsConfigured -and -not $script:ExpectedTargets.Contains($label)) { continue }
+        # A TestResult proves execution even when a cache hit omits test.outputs.
+        $script:FreshnessTestResultLabels.Add($label) | Out-Null
         $result = Get-MapValue $event 'testResult'
         if ($null -eq $result) { $result = Get-MapValue $event 'test_result' }
         if ($null -eq $result) { continue }
@@ -3259,6 +3254,8 @@ function Initialize-BepEligibility {
 	      foreach ($entry in $cachedOutputsBefore) { $script:FreshnessCachedOutputs.Add([string]$entry) | Out-Null }
 	      $script:FreshnessSkippedTargets.Clear()
 	      foreach ($entry in $skippedTargetsBefore) { $script:FreshnessSkippedTargets.Add([string]$entry) | Out-Null }
+	      $script:FreshnessTestResultLabels.Clear()
+	      foreach ($entry in $testResultLabelsBefore) { $script:FreshnessTestResultLabels.Add([string]$entry) | Out-Null }
 	      $script:FreshnessRemoteOnlyOutputs.Clear()
 	      foreach ($entry in $remoteOutputsBefore) { $script:FreshnessRemoteOnlyOutputs.Add($entry) | Out-Null }
 	      $script:FreshnessMissingOutputLabels.Clear()

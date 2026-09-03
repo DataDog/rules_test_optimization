@@ -1937,7 +1937,7 @@ class TestOptimizationDoctorTests(unittest.TestCase):
     @staticmethod
     def _bep_test_result(
         label: str,
-        output: str,
+        output: str | None,
         *,
         cached_locally: bool = False,
         cached_remotely: bool = False,
@@ -1953,12 +1953,16 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 },
             },
             "testResult": {
-                "testActionOutput": [
-                    {
-                        "name": "test.outputs",
-                        "uri": output,
-                    },
-                ],
+                "testActionOutput": (
+                    []
+                    if output is None
+                    else [
+                        {
+                            "name": "test.outputs",
+                            "uri": output,
+                        },
+                    ]
+                ),
                 "status": "PASSED",
             },
         }
@@ -2025,6 +2029,30 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 self.mod._parse_bep_freshness([bep])
 
         self.assertIn("both platform-skipped and executed", stderr.getvalue())
+
+    def test_bep_freshness_rejects_cached_result_for_skipped_target_without_outputs(self) -> None:
+        """Treat every cached TestResult as execution evidence, even without outputs."""
+        for cache_kind in ("local", "remote"):
+            with self.subTest(cache_kind=cache_kind), tempfile.TemporaryDirectory() as tmp:
+                bep = Path(tmp) / "ambiguous.ndjson"
+                self._write_bep(
+                    bep,
+                    [
+                        self._bep_skipped_target("//pkg:target"),
+                        self._bep_test_result(
+                            "//pkg:target",
+                            None,
+                            cached_locally=cache_kind == "local",
+                            cached_remotely=cache_kind == "remote",
+                        ),
+                    ],
+                )
+
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                    self.mod._parse_bep_freshness([bep])
+
+            self.assertIn("both platform-skipped and executed", stderr.getvalue())
 
     def _remote_outputs_zip_freshness(self, root: Path, *, label: str = "//pkg:remote_only") -> object:
         """Create BEP freshness for one remote stageable outputs.zip carrier."""
@@ -7555,6 +7583,42 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     self.assertEqual("ok", skipped_report_doc["status"])
                     self.assertEqual(1, skipped_report_doc["bep"]["skipped_targets"])
                     self.assertEqual(0, skipped_report_doc["upload_failures"])
+
+                    TestOptimizationDoctorTests._write_bep(
+                        bep,
+                        [
+                            TestOptimizationDoctorTests._bep_skipped_target("//pkg:skipped"),
+                            TestOptimizationDoctorTests._bep_test_result(
+                                "//pkg:skipped",
+                                None,
+                                cached_locally=True,
+                            ),
+                        ],
+                    )
+                    conflict_result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json",
+                            str(bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--artifact-source=local",
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    conflict_output = conflict_result.stdout + conflict_result.stderr
+                    self.assertEqual(2, conflict_result.returncode, conflict_output)
+                    self.assertIn(
+                        "both platform-skipped and executed",
+                        conflict_output,
+                    )
 
     def test_generated_uploaders_validate_runtime_selection_before_discovery(self) -> None:
         """Validate Bash and PowerShell accept only complete keyed runtime selections."""
