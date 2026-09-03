@@ -221,6 +221,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
         # reuses both so it can run in a different sandbox or remote worker.
         _synthetic_testmain_manifest = out_synthetic_testmain_manifest,
         _synthetic_testmain_helpers = out_synthetic_testmain_helpers,
+        _synthetic_testmain_shared_helpers = getattr(go.stdlib, "_synthetic_testmain_helpers", None) if out_synthetic_testmain_manifest else None,
         facts_file = out_facts,
         runfiles = source.runfiles,
         _validation_output = out_nogo_validation,

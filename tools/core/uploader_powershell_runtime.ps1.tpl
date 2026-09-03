@@ -833,6 +833,8 @@ $script:FreshnessEligibleLabels = [System.Collections.Generic.HashSet[string]]::
 $script:FreshnessEligibleOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessCachedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkippedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessSkippedTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessTestResultLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessRemoteOnlyOutputs = New-Object System.Collections.Generic.List[object]
 $script:FreshnessMissingOutputLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkipWasWritten = $false
@@ -1347,6 +1349,7 @@ function Write-UploaderReport([string]$Status, [int]$ExitCode) {
             remote_only_outputs = Get-ReportCollectionCount $script:FreshnessRemoteOnlyOutputs
             skipped_outputs = Get-ReportCollectionCount $script:FreshnessSkippedOutputs
             missing_output_labels = Get-ReportCollectionCount $script:FreshnessMissingOutputLabels
+            skipped_targets = Get-ReportCollectionCount $script:FreshnessSkippedTargets
         }
         artifacts = [ordered]@{
             source = [string]$script:ArtifactSource
@@ -3099,11 +3102,27 @@ function Initialize-ExpectedTargets {
   Set-ExpectedTargetsWithRuntime $dynamicTargets $true
 }
 
+function Assert-BepFreshnessUnambiguous {
+  $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
+  if ($conflictingOutputs.Count -gt 0) {
+    Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  }
+
+  $conflictingTargets = @($script:FreshnessSkippedTargets | Where-Object { $script:FreshnessTestResultLabels.Contains($_) })
+  if ($conflictingTargets.Count -gt 0) {
+    Log "error: BEP freshness is ambiguous: the same target is reported as both platform-skipped and executed: $($conflictingTargets[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  }
+}
+
 function Initialize-BepEligibility {
   $script:FreshnessEligibleLabels.Clear()
   $script:FreshnessEligibleOutputs.Clear()
   $script:FreshnessCachedOutputs.Clear()
   $script:FreshnessSkippedOutputs.Clear()
+  $script:FreshnessSkippedTargets.Clear()
+  $script:FreshnessTestResultLabels.Clear()
   $script:FreshnessRemoteOnlyOutputs.Clear()
   $script:FreshnessMissingOutputLabels.Clear()
 
@@ -3120,17 +3139,34 @@ function Initialize-BepEligibility {
     $eligibleLabelsBefore = @($script:FreshnessEligibleLabels)
     $eligibleOutputsBefore = @($script:FreshnessEligibleOutputs)
     $cachedOutputsBefore = @($script:FreshnessCachedOutputs)
+    $skippedTargetsBefore = @($script:FreshnessSkippedTargets)
+    $testResultLabelsBefore = @($script:FreshnessTestResultLabels)
     $remoteOutputsBefore = @($script:FreshnessRemoteOnlyOutputs.ToArray())
     $missingLabelsBefore = @($script:FreshnessMissingOutputLabels)
     try {
       foreach ($event in @(Get-JsonStreamObjects $resolvedBep)) {
         $eventId = Get-MapValue $event 'id'
+        $targetCompletedId = Get-MapValue $eventId 'targetCompleted'
+        if ($null -eq $targetCompletedId) { $targetCompletedId = Get-MapValue $eventId 'target_completed' }
+        $aborted = Get-MapValue $event 'aborted'
+        if ($null -ne $targetCompletedId -and [string](Get-MapValue $aborted 'reason') -ceq 'SKIPPED') {
+          $skippedLabel = [string](Get-MapValue $targetCompletedId 'label')
+          if (
+            -not [string]::IsNullOrWhiteSpace($skippedLabel) -and
+            (-not $script:ExpectedTargetsConfigured -or $script:ExpectedTargets.Contains($skippedLabel))
+          ) {
+            $script:FreshnessSkippedTargets.Add($skippedLabel) | Out-Null
+          }
+          continue
+        }
         $testResultId = Get-MapValue $eventId 'testResult'
         if ($null -eq $testResultId) { $testResultId = Get-MapValue $eventId 'test_result' }
         if ($null -eq $testResultId) { continue }
         $label = [string](Get-MapValue $testResultId 'label')
         if ([string]::IsNullOrWhiteSpace($label)) { continue }
         if ($script:ExpectedTargetsConfigured -and -not $script:ExpectedTargets.Contains($label)) { continue }
+        # A TestResult proves execution even when a cache hit omits test.outputs.
+        $script:FreshnessTestResultLabels.Add($label) | Out-Null
         $result = Get-MapValue $event 'testResult'
         if ($null -eq $result) { $result = Get-MapValue $event 'test_result' }
         if ($null -eq $result) { continue }
@@ -3216,6 +3252,10 @@ function Initialize-BepEligibility {
 	      foreach ($entry in $eligibleOutputsBefore) { $script:FreshnessEligibleOutputs.Add([string]$entry) | Out-Null }
 	      $script:FreshnessCachedOutputs.Clear()
 	      foreach ($entry in $cachedOutputsBefore) { $script:FreshnessCachedOutputs.Add([string]$entry) | Out-Null }
+	      $script:FreshnessSkippedTargets.Clear()
+	      foreach ($entry in $skippedTargetsBefore) { $script:FreshnessSkippedTargets.Add([string]$entry) | Out-Null }
+	      $script:FreshnessTestResultLabels.Clear()
+	      foreach ($entry in $testResultLabelsBefore) { $script:FreshnessTestResultLabels.Add([string]$entry) | Out-Null }
 	      $script:FreshnessRemoteOnlyOutputs.Clear()
 	      foreach ($entry in $remoteOutputsBefore) { $script:FreshnessRemoteOnlyOutputs.Add($entry) | Out-Null }
 	      $script:FreshnessMissingOutputLabels.Clear()
@@ -3229,15 +3269,11 @@ function Initialize-BepEligibility {
 	    }
   }
 
-  $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
-  if ($conflictingOutputs.Count -gt 0) {
-    Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
-    exit 2
-  }
+  Assert-BepFreshnessUnambiguous
 
 	  $script:FreshnessSelectedSource = "bep"
 	  $script:FreshnessEligibilityEnabled = $true
-	  Log "freshness filtering enabled: source=bep files=$($script:BepJsonFiles.Count) eligible_outputs=$($script:FreshnessEligibleOutputs.Count) remote_only_outputs=$($script:FreshnessRemoteOnlyOutputs.Count)"
+	  Log "freshness filtering enabled: source=bep files=$($script:BepJsonFiles.Count) eligible_outputs=$($script:FreshnessEligibleOutputs.Count) remote_only_outputs=$($script:FreshnessRemoteOnlyOutputs.Count) skipped_targets=$($script:FreshnessSkippedTargets.Count)"
 	  if ($script:FreshnessMode -eq "optional" -and $script:RemoteArtifacts -ne "required" -and $script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
 	    $first = $script:FreshnessRemoteOnlyOutputs[0]
 	    $firstArtifact = Format-ArtifactReferenceForLog $first.Artifact
@@ -3396,11 +3432,7 @@ function Merge-StagedBepFreshness {
     }
   }
 
-  $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
-  if ($conflictingOutputs.Count -gt 0) {
-    Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
-    exit 2
-  }
+  Assert-BepFreshnessUnambiguous
 }
 
 function Assert-ExpectedTargetCoverage {
@@ -3412,6 +3444,7 @@ function Assert-ExpectedTargetCoverage {
     if ($hasFresh -or $hasCached) { continue }
     $hasRemote = @($script:FreshnessRemoteOnlyOutputs | Where-Object { $_.Label -eq $label }).Count -gt 0
     if ($hasRemote) { continue }
+    if ($script:FreshnessSkippedTargets.Contains($label)) { continue }
     if ($script:FreshnessMissingOutputLabels.Contains($label)) {
       Log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference); continuing with other fresh outputs"
     } else {
@@ -3476,6 +3509,10 @@ function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
       exit 2
     }
     Write-FreshnessSkipOnce $OutputsDir "missing bazel.target metadata"
+    return $false
+  }
+  if ($script:FreshnessSkippedTargets.Contains($targetLabel)) {
+    Write-FreshnessSkipOnce $OutputsDir "Bazel skipped platform-incompatible target $targetLabel"
     return $false
   }
   $outputKey = Get-TestOutputDirKey $OutputsDir

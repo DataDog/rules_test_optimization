@@ -443,13 +443,15 @@ a manual doctor invocation, or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`
 when CI needs a machine-readable debug artifact. The doctor writes the report
 on success and on controlled doctor failures. The report includes a `result`
 block with `status`, `reason_code`, `reason`, and `next_steps`, plus resolved
-config, expected targets, BEP files and seen targets, fresh/cached/remote-only
-BEP outputs, selected and blocked BEP artifact carriers, staged `outputs.zip`
-or `test.outputs` artifacts, local/staged payload directories, payload counts,
-Bazel metadata, payload-selection counts, and failure messages.
-When expected targets are configured, fresh and cached BEP labels jointly
-satisfy target coverage. Only fresh outputs are validated; an all-cached
-invocation succeeds with zero validated output directories.
+config, expected targets, BEP files and seen targets,
+fresh/cached/remote-only/platform-skipped BEP outputs, selected and blocked BEP
+artifact carriers, staged `outputs.zip` or `test.outputs` artifacts,
+local/staged payload directories, payload counts, Bazel metadata,
+payload-selection counts, and failure messages. When expected targets are
+configured, fresh, cached, and platform-skipped BEP labels jointly satisfy
+target coverage. Only fresh outputs are validated; an invocation with only
+cached or skipped expected targets succeeds with zero validated output
+directories.
 
 Example:
 
@@ -547,6 +549,9 @@ Cache-safety modes:
 When BEP filtering is active, the uploader:
 
 - Parses `TestResult` events from the BEP JSON file.
+- Accounts for explicit platform-incompatible targets from
+  `targetCompleted` events aborted with reason `SKIPPED`; these targets do not
+  require a payload.
 - Treats `cachedLocally: true` or `executionInfo.cachedRemotely: true` as ineligible.
 - Keeps only fresh outputs that map to local or staged
   `bazel-testlogs/.../test.outputs`.
@@ -835,10 +840,11 @@ invocation manifest. Static `expected_targets` and the generated file may be
 used together only when they describe the same set; disagreement is a hard
 error.
 
-A cached Bazel test does not produce a fresh payload for the current
-invocation. With exact expected targets configured on both doctor and uploader,
-fresh and cached BEP results jointly satisfy invocation coverage. Only fresh
-outputs are validated or uploaded; an all-cached invocation is a successful
+A cached Bazel test and a platform-incompatible target skipped by Bazel do not
+produce a fresh payload for the current invocation. With exact expected targets
+configured on both doctor and uploader, fresh, cached, and platform-skipped BEP
+results jointly satisfy invocation coverage. Only fresh outputs are validated
+or uploaded; an invocation with only cached or skipped targets is a successful
 no-op. A missing expected result is reported without blocking other fresh
 payloads. Every fresh expected output that exists must independently contain a
 handled payload, so one valid sibling output cannot hide an empty one.

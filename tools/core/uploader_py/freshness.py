@@ -56,6 +56,7 @@ class FreshnessPlan:
     cached_outputs: frozenset[tuple[str, str]] = frozenset()
     remote_only_outputs: tuple[RemoteOutput, ...] = ()
     missing_output_labels: frozenset[str] = frozenset()
+    skipped_targets: frozenset[str] = frozenset()
     blocked_labels: frozenset[str] = frozenset()
     selected_artifact_outputs: frozenset[tuple[str, str]] = frozenset()
     staged_outputs: frozenset[tuple[str, str]] = frozenset()
@@ -235,11 +236,12 @@ def prepare_freshness(
             )
         logger.debug(
             "freshness ready: source=%s eligible=%d cached=%d remote_only=%d "
-            "staged=%d",
+            "skipped_targets=%d staged=%d",
             plan.selected_source,
             len(plan.eligible_outputs),
             len(plan.cached_outputs),
             len(plan.remote_only_outputs),
+            len(plan.skipped_targets),
             len(plan.staged_outputs),
         )
         for warning in plan.warning_codes:
@@ -344,7 +346,9 @@ def validate_fresh_outputs_accounted(
             label for label, _output_key in plan.eligible_outputs
         }.union(
             label for label, _output_key in plan.cached_outputs
-        ).union(output.label for output in plan.remote_only_outputs)
+        ).union(
+            output.label for output in plan.remote_only_outputs
+        ).union(plan.skipped_targets)
         missing_expected = sorted(expected_target_set.difference(represented_labels))
         if missing_expected:
             label = missing_expected[0]
@@ -495,11 +499,13 @@ def _build_plan(
         for item in doctor_freshness.remote_only_outputs
     )
     missing_output_labels = set(doctor_freshness.missing_output_mappings)
+    skipped_targets = set(doctor_freshness.skipped_targets)
     if expected_targets:
         eligible_outputs = {pair for pair in eligible_outputs if pair[0] in expected_targets}
         cached_outputs = {pair for pair in cached_outputs if pair[0] in expected_targets}
         remote_outputs = tuple(item for item in remote_outputs if item.label in expected_targets)
         missing_output_labels.intersection_update(expected_targets)
+        skipped_targets.intersection_update(expected_targets)
 
     if remote_outputs:
         if config.freshness_mode == "required" or config.remote_artifacts == "required":
@@ -517,6 +523,7 @@ def _build_plan(
         cached_outputs=frozenset(cached_outputs),
         remote_only_outputs=remote_outputs,
         missing_output_labels=frozenset(missing_output_labels),
+        skipped_targets=frozenset(skipped_targets),
         blocked_labels=frozenset(blocked_labels),
         selected_artifact_outputs=frozenset(selected_artifact_outputs),
         staged_outputs=frozenset(

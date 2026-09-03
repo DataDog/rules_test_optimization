@@ -12,6 +12,7 @@ These tests isolate preflight, cleanup, and reporting regressions from HTTP beha
 
 from __future__ import annotations
 
+from contextlib import redirect_stderr
 from io import StringIO
 import json
 from pathlib import Path
@@ -48,13 +49,15 @@ def _bep_test_result(
     attempt: int = 1,
     status: str = "PASSED",
     output: Path | None = None,
+    cached_locally: bool = False,
+    cached_remotely: bool = False,
 ) -> dict[str, object]:
     test_action_output = (
         []
         if output is None
         else [{"name": "test.outputs", "uri": output.as_uri()}]
     )
-    return {
+    event: dict[str, object] = {
         "id": {
             "testResult": {
                 "label": label,
@@ -68,6 +71,13 @@ def _bep_test_result(
             "testActionOutput": test_action_output,
         },
     }
+    result = event["testResult"]
+    assert isinstance(result, dict)
+    if cached_locally:
+        result["cachedLocally"] = True
+    if cached_remotely:
+        result["executionInfo"] = {"cachedRemotely": True}
+    return event
 
 
 class ApplicationTests(unittest.TestCase):
@@ -516,6 +526,100 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(1, report["bep"]["cached_outputs"])
             self.assertEqual(0, report["files"]["discovered"])
             self.assertEqual(0, report["requests"]["attempted"])
+
+    def test_platform_skipped_target_without_testlogs_is_noop(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            bep = root / "skipped.ndjson"
+            skipped_event = {
+                "id": {
+                    "targetCompleted": {
+                        "label": "//pkg:target",
+                        "configuration": {"id": "config"},
+                    }
+                },
+                "aborted": {
+                    "reason": "SKIPPED",
+                    "description": "Target //pkg:target build was skipped.",
+                },
+            }
+            bep.write_text(
+                json.dumps(skipped_event) + "\n",
+                encoding="utf-8",
+            )
+            report_path = root / "report.json"
+            config = self._config(
+                root,
+                dry_run=False,
+                fail_on_error=True,
+                expected_targets=("//pkg:target",),
+                allow_cached_payload_uploads=False,
+                extra_arguments=(
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    f"--bep-json={bep}",
+                    f"--report-json={report_path}",
+                ),
+            )
+            transport_factory = mock.Mock(
+                side_effect=AssertionError("transport must not be created")
+            )
+
+            with mock.patch(
+                "uploader_py.application.resolve_local_testlogs_root",
+                return_value=None,
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=StringIO(),
+                    transport_factory=transport_factory,
+                )
+
+            self.assertEqual(0, exit_code)
+            transport_factory.assert_not_called()
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual("ok", report["result"]["reason_code"])
+            self.assertEqual(1, report["bep"]["skipped_targets"])
+            self.assertEqual(0, report["files"]["discovered"])
+            self.assertEqual(0, report["requests"]["attempted"])
+
+            bep.write_text(
+                "\n".join(
+                    json.dumps(event)
+                    for event in (
+                        skipped_event,
+                        _bep_test_result(
+                            "//pkg:target",
+                            cached_locally=True,
+                        ),
+                    )
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            conflict_log = StringIO()
+            with redirect_stderr(conflict_log), mock.patch(
+                "uploader_py.application.resolve_local_testlogs_root", return_value=None
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=conflict_log),
+                    stream=StringIO(),
+                    transport_factory=transport_factory,
+                )
+
+            self.assertEqual(2, exit_code, conflict_log.getvalue())
+            transport_factory.assert_not_called()
+            self.assertIn(
+                "both platform-skipped and executed",
+                conflict_log.getvalue(),
+            )
 
     def test_all_cached_bep_skips_wait_and_stale_test_markers(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

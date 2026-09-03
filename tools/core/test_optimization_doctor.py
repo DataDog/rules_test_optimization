@@ -119,12 +119,14 @@ class BepFreshness:
         remote_only_outputs: list[BepRemoteOnlyOutput],
         missing_output_mappings: set[str],
         artifact_references: list[BepArtifactReference] | None = None,
+        skipped_targets: set[str] | None = None,
     ) -> None:
         self.eligible_outputs = eligible_outputs
         self.cached_outputs = cached_outputs
         self.remote_only_outputs = remote_only_outputs
         self.missing_output_mappings = missing_output_mappings
         self.artifact_references = artifact_references or []
+        self.skipped_targets = skipped_targets or set()
 
 
 class StagedBepArtifact:
@@ -1549,6 +1551,8 @@ def _parse_bep_freshness(
     remote_only_outputs: list[BepRemoteOnlyOutput] = []
     missing_output_mappings: set[str] = set()
     artifact_references: list[BepArtifactReference] = []
+    skipped_targets: set[str] = set()
+    test_result_labels: set[str] = set()
 
     for bep_file in bep_files:
         if not bep_file.is_file():
@@ -1584,12 +1588,27 @@ def _parse_bep_freshness(
                     return None
                 _fail(f"invalid BEP JSON in {bep_file}:{line_number}: {exc}")
             event_id = event.get("id") if isinstance(event, dict) else {}
+            target_completed_id = _coalesced_field(
+                event_id, "targetCompleted", "target_completed", {}
+            )
+            aborted = event.get("aborted", {}) if isinstance(event, dict) else {}
+            if isinstance(target_completed_id, dict) and isinstance(aborted, dict):
+                skipped_label = target_completed_id.get("label")
+                if (
+                    isinstance(skipped_label, str)
+                    and skipped_label
+                    and aborted.get("reason") == "SKIPPED"
+                ):
+                    skipped_targets.add(skipped_label)
+                    continue
             test_result_id = _coalesced_field(event_id, "testResult", "test_result", {})
             if not isinstance(test_result_id, dict):
                 continue
             label = test_result_id.get("label")
             if not isinstance(label, str) or not label:
                 continue
+            # A TestResult proves execution even when a cache hit omits test.outputs.
+            test_result_labels.add(label)
 
             result = _coalesced_field(event, "testResult", "test_result", {})
             if not isinstance(result, dict):
@@ -1690,12 +1709,22 @@ def _parse_bep_freshness(
             "invocation and do not pass overlapping stale BEP files."
         )
 
+    conflicting_labels = skipped_targets.intersection(test_result_labels)
+    if conflicting_labels:
+        label = sorted(conflicting_labels)[0]
+        _fail(
+            "BEP freshness is ambiguous: the same target is reported as both "
+            f"platform-skipped and executed: {label}. Use one BEP file per Bazel "
+            "test invocation and do not pass overlapping stale BEP files."
+        )
+
     return BepFreshness(
         eligible_outputs=eligible_outputs,
         cached_outputs=cached_outputs,
         remote_only_outputs=remote_only_outputs,
         missing_output_mappings=missing_output_mappings,
         artifact_references=artifact_references,
+        skipped_targets=skipped_targets,
     )
 
 
@@ -1778,7 +1807,9 @@ def _validate_expected_target_bep_freshness(
             fresh_output_dirs.append(output_dir)
             fresh_labels.add(label)
 
-    missing_labels = expected_targets.difference(fresh_labels.union(cached_only_labels))
+    missing_labels = expected_targets.difference(
+        fresh_labels.union(cached_only_labels).union(freshness.skipped_targets)
+    )
     if missing_labels:
         missing_label = sorted(missing_labels)[0]
         if missing_label in freshness.missing_output_mappings:
@@ -2194,6 +2225,7 @@ def _new_diagnostic_report(args: argparse.Namespace) -> dict[str, Any]:
             "cached_output_keys": [],
             "remote_only_outputs": [],
             "missing_output_mappings": [],
+            "skipped_targets": [],
             "artifact_references": 0,
             "selected_artifact_outputs": [],
             "blocked_artifact_labels": [],
@@ -2212,6 +2244,7 @@ def _new_diagnostic_report(args: argparse.Namespace) -> dict[str, Any]:
             "cached": [],
             "missing": [],
             "remote_only": [],
+            "skipped": [],
         },
         "outputs": [],
         "summary": {
@@ -2392,6 +2425,7 @@ def _update_diagnostic_bep(
     }
     seen_targets.update(item.label for item in freshness.remote_only_outputs)
     seen_targets.update(ref.label for ref in freshness.artifact_references)
+    seen_targets.update(freshness.skipped_targets)
     expected = set(report.get("targets", {}).get("expected", []))
     cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
     fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
@@ -2413,6 +2447,7 @@ def _update_diagnostic_bep(
                 for item in freshness.remote_only_outputs
             ],
             "missing_output_mappings": sorted(freshness.missing_output_mappings),
+            "skipped_targets": sorted(freshness.skipped_targets),
             "artifact_references": len(freshness.artifact_references),
             "selected_artifact_outputs": _sorted_pairs(selected_bep_artifact_outputs or set()),
             "blocked_artifact_labels": sorted(blocked_bep_artifact_labels or set()),
@@ -2425,6 +2460,7 @@ def _update_diagnostic_bep(
             "cached": sorted(cached_labels),
             "missing": sorted(expected.difference(seen_targets)),
             "remote_only": sorted(remote_only_labels),
+            "skipped": sorted(freshness.skipped_targets),
         }
     )
 
@@ -2810,7 +2846,12 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
         _fail("runtime selection requires at least one --context-entry argument")
 
     workspace = _workspace_root()
-    testlogs_dir = _resolve_testlogs_dir(workspace, allow_missing=staging_requested)
+    testlogs_dir = _resolve_testlogs_dir(
+        workspace,
+        # Expected-target validation below uses BEP to distinguish a missing
+        # output from a cached or platform-skipped target.
+        allow_missing=staging_requested or bool(expected_targets and bep_files),
+    )
 
     if config["forbid_dd_git_test_env"]:
         _validate_bazelrc(workspace)
@@ -2844,7 +2885,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 target_output_dirs = _expected_target_outputs(
                     testlogs_dir,
                     label,
-                    allow_missing=staging_requested,
+                    allow_missing=staging_requested or bool(bep_files),
                 )
                 output_dirs.extend(target_output_dirs)
                 for output_dir in target_output_dirs:
@@ -2961,19 +3002,21 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 )
 
         if not output_dirs:
-            cached_only_expected_targets = False
+            non_fresh_expected_targets = False
             if expected_targets and freshness is not None:
                 bep_fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
                 bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
-                cached_only_expected_targets = set(expected_targets).issubset(
-                    bep_cached_labels.difference(bep_fresh_labels)
+                non_fresh_expected_targets = set(expected_targets).issubset(
+                    bep_cached_labels.difference(bep_fresh_labels).union(
+                        freshness.skipped_targets
+                    )
                 )
-            if cached_only_expected_targets:
+            if non_fresh_expected_targets:
                 _update_diagnostic_output_summary(report, [])
                 report["summary"]["payload_selection"] = {}
                 print(
-                    "[dd-test-optimization-doctor] OK: all expected targets were served "
-                    "from Bazel's test cache; no fresh payloads require validation"
+                    "[dd-test-optimization-doctor] OK: all expected targets were cached "
+                    "or skipped as platform-incompatible; no fresh payloads require validation"
                 )
                 return 0
             if expected_targets:

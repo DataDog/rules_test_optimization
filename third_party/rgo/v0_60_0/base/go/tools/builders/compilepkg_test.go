@@ -77,6 +77,101 @@ func TestCollectSyntheticTestmainExternalPackagesIsStable(t *testing.T) {
 	}
 }
 
+func TestSharedSyntheticTestmainHelperBundleRoundTrip(t *testing.T) {
+	sourceDir := t.TempDir()
+	compileArchive := filepath.Join(sourceDir, "helper.x")
+	linkArchive := filepath.Join(sourceDir, "helper.a")
+	dependencyArchive := filepath.Join(sourceDir, "dependency.a")
+	for path, data := range map[string]string{
+		compileArchive:    "compile archive",
+		linkArchive:       "link archive",
+		dependencyArchive: "dependency archive",
+	} {
+		if err := os.WriteFile(path, []byte(data), 0o644); err != nil {
+			t.Fatalf("write %s: %v", path, err)
+		}
+	}
+
+	bundleDir := filepath.Join(t.TempDir(), "shared-helpers")
+	compiled := map[string]compiledModuleArchive{
+		"example.com/helper": {
+			compilePath: compileArchive,
+			linkPath:    linkArchive,
+			linkClosure: map[string]string{
+				"example.com/dependency": dependencyArchive,
+			},
+		},
+	}
+	if err := writeSharedSyntheticTestmainHelperBundle(bundleDir, compiled, orchestrionModeTestOptimization); err != nil {
+		t.Fatalf("writeSharedSyntheticTestmainHelperBundle error: %v", err)
+	}
+
+	manifest, err := readSyntheticTestmainHelperManifest(bundleDir)
+	if err != nil {
+		t.Fatalf("readSyntheticTestmainHelperManifest error: %v", err)
+	}
+	if manifest.SharedBundleABI != sharedSyntheticTestmainHelperBundleABIVersion {
+		t.Fatalf("shared bundle ABI = %q, want %q", manifest.SharedBundleABI, sharedSyntheticTestmainHelperBundleABIVersion)
+	}
+	if manifest.OrchestrionMode != orchestrionModeTestOptimization {
+		t.Fatalf("shared bundle mode = %q, want %q", manifest.OrchestrionMode, orchestrionModeTestOptimization)
+	}
+	for _, archive := range manifest.Packages {
+		paths := []string{archive.CompilePath, archive.LinkPath}
+		for _, path := range archive.LinkClosure {
+			paths = append(paths, path)
+		}
+		for _, path := range paths {
+			if filepath.IsAbs(path) || !strings.HasPrefix(path, "archives"+string(os.PathSeparator)) {
+				t.Fatalf("bundle archive path %q is not bundle-relative", path)
+			}
+		}
+	}
+
+	loaded, _, err := loadSyntheticTestmainHelperBundle(bundleDir)
+	if err != nil {
+		t.Fatalf("loadSyntheticTestmainHelperBundle error: %v", err)
+	}
+	got := loaded["example.com/helper"]
+	for _, path := range []string{got.compilePath, got.linkPath, got.linkClosure["example.com/dependency"]} {
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("published bundle archive %s: %v", path, err)
+		}
+	}
+}
+
+func TestSharedSyntheticTestmainHelperBundleFallsBackOnTargetOverlap(t *testing.T) {
+	rootPackage := syntheticTestmainRootPackagesTestOptimization[0].packagePath
+	sourceDir := t.TempDir()
+	archivePath := filepath.Join(sourceDir, "helper.a")
+	if err := os.WriteFile(archivePath, []byte("archive"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	bundleDir := filepath.Join(t.TempDir(), "shared-helpers")
+	compiled := map[string]compiledModuleArchive{
+		rootPackage: {
+			compilePath: archivePath,
+			linkPath:    archivePath,
+			linkClosure: map[string]string{
+				"example.com/dependency": archivePath,
+			},
+		},
+	}
+	if err := writeSharedSyntheticTestmainHelperBundle(bundleDir, compiled, orchestrionModeTestOptimization); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, reused, err := reusableSharedSyntheticTestmainHelperBundle(bundleDir, []string{rootPackage}, nil, orchestrionModeTestOptimization); err != nil || !reused {
+		t.Fatalf("bundle without overlap: reused=%v err=%v", reused, err)
+	}
+	for _, pkg := range []string{rootPackage, "example.com/dependency"} {
+		existing := map[string]archive{pkg: {packagePath: pkg, file: "bazel-out/existing.x"}}
+		if _, reused, err := reusableSharedSyntheticTestmainHelperBundle(bundleDir, []string{rootPackage}, existing, orchestrionModeTestOptimization); err != nil || reused {
+			t.Fatalf("bundle with overlap %s: reused=%v err=%v", pkg, reused, err)
+		}
+	}
+}
+
 func TestPackageNeedsSyntheticSourceCompileWalksRootDependencies(t *testing.T) {
 	rootSet := map[string]bool{"example.com/root": true}
 	sourceDecisions := map[string]bool{}

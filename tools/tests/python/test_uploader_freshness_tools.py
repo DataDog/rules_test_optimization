@@ -124,6 +124,21 @@ class FreshnessTests(unittest.TestCase):
                         fail_on_error=False,
                     )
 
+    def test_platform_skipped_target_satisfies_expected_target_coverage(self) -> None:
+        plan = FreshnessPlan(
+            selected_source="bep",
+            eligibility_enabled=True,
+            skipped_targets=frozenset({"//pkg:skipped"}),
+        )
+
+        validate_fresh_outputs_accounted(
+            plan,
+            DiscoveryResult(outputs=(), tasks=(), discovered_by_type={}),
+            (),
+            expected_targets=("//pkg:skipped",),
+            fail_on_error=True,
+        )
+
     def _config(
         self,
         root: Path,
