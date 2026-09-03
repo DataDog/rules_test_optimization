@@ -27,6 +27,7 @@ load(
     "LINKMODE_NORMAL",
     "LINKMODE_PIE",
     "extldflags_from_cc_toolchain",
+    "installsuffix",
     "link_mode_arg",
 )
 load(
@@ -187,6 +188,7 @@ def _sdk_stdlib(go):
     list_json, cache_dir = _build_stdlib_list_json(go)
     return GoStdLib(
         _list_json = list_json,
+        _synthetic_testmain_helpers = None,
         cache_dir = depset([cache_dir]),
         libs = go.sdk.libs,
         root_file = go.sdk.root_file,
@@ -194,6 +196,57 @@ def _sdk_stdlib(go):
 
 def _dirname(file):
     return file.dirname
+
+def _build_shared_synthetic_testmain_helpers(go, goroot_file, stdlib_cache_dir):
+    """Builds the target-independent Test Optimization helper bundle."""
+    helpers = go.declare_directory(go, path = "synthetic_testmain_helpers")
+    args = go.actions.args()
+    args.use_param_file("-param=%s")
+    args.add("synthetic_testmain_helpers")
+    args.add("-out", helpers.path)
+    args.add("-sdk", go.sdk.root_file.dirname)
+    args.add_all("-goroot", [goroot_file], map_each = _dirname, expand_directories = False)
+    args.add("-installsuffix", installsuffix(go.mode))
+    args.add_joined("-tags", go.mode.tags, join_with = ",")
+    args.add_all("-stdlib_cache", [stdlib_cache_dir], expand_directories = False)
+    args.add("-pack", go.toolchain._pack)
+    args.add("-orchestrion_mode", getattr(go, "orchestrion_mode", "general"))
+
+    inputs_direct = [
+        go.sdk.go,
+        go.sdk.root_file,
+        go.toolchain._pack,
+        goroot_file,
+        stdlib_cache_dir,
+    ]
+    for file in [
+        getattr(go, "orchestrion_version_file", None),
+        getattr(go, "orchestrion_module_proxy_root_marker", None),
+        getattr(go, "orchestrion_tool_version_file", None),
+    ]:
+        if file:
+            inputs_direct.append(file)
+    inputs_transitive = [go.sdk.headers, go.sdk.srcs, go.sdk.tools]
+    if getattr(go, "orchestrion_module_proxy_files", None):
+        inputs_transitive.append(go.orchestrion_module_proxy_files)
+
+    go.actions.run(
+        inputs = depset(direct = inputs_direct, transitive = inputs_transitive),
+        outputs = [helpers],
+        mnemonic = "GoSyntheticTestmainHelpers",
+        executable = go.toolchain._builder,
+        arguments = [args],
+        env = _orchestrion_action_env(
+            go,
+            go.env_for_path_mapping,
+            orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None),
+            orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None),
+            orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None),
+        ),
+        toolchain = GO_TOOLCHAIN_LABEL,
+        execution_requirements = SUPPORTS_PATH_MAPPING_REQUIREMENT,
+    )
+    return helpers
 
 def _build_stdlib(go):
     pkg = go.declare_directory(go, path = "pkg")
@@ -279,10 +332,14 @@ def _build_stdlib(go):
     )
     list_json, list_cache_dir = _build_stdlib_list_json(go)
     cache_dir = depset([list_cache_dir])
+    shared_synthetic_testmain_helpers = None
     if stdlib_orchestrion:
         cache_dir = depset([stdlib_cache_dir])
+        if getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+            shared_synthetic_testmain_helpers = _build_shared_synthetic_testmain_helpers(go, pkg, stdlib_cache_dir)
     return GoStdLib(
         _list_json = list_json,
+        _synthetic_testmain_helpers = shared_synthetic_testmain_helpers,
         libs = depset([pkg]),
         cache_dir = cache_dir,
         root_file = pkg,

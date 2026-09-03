@@ -223,6 +223,12 @@ def emit_compilepkg(
         compile_args.add("-synthetic_testmain_manifest", out_synthetic_testmain_manifest)
     if out_synthetic_testmain_helpers:
         compile_args.add("-synthetic_testmain_helpers", out_synthetic_testmain_helpers.path)
+    shared_synthetic_testmain_helpers = None
+    if out_synthetic_testmain_manifest:
+        shared_synthetic_testmain_helpers = getattr(go.stdlib, "_synthetic_testmain_helpers", None)
+    if shared_synthetic_testmain_helpers:
+        inputs_direct.append(shared_synthetic_testmain_helpers)
+        compile_args.add("-shared_synthetic_testmain_helpers", shared_synthetic_testmain_helpers.path)
     if compile_orchestrion:
         compile_args.add_all("-stdlib_cache", go.stdlib.cache_dir.to_list(), expand_directories = False)
     if out_cgo_export_h:

@@ -47,7 +47,11 @@ def _first_target(dep):
 
 def _go_transition_stdlib_warmup_impl(ctx):
     stdlib = ctx.attr._stdlib[GoStdLib]
-    return [DefaultInfo(files = depset(transitive = [stdlib.libs, stdlib.cache_dir]))]
+    direct = []
+    shared_helpers = getattr(stdlib, "_synthetic_testmain_helpers", None)
+    if shared_helpers:
+        direct.append(shared_helpers)
+    return [DefaultInfo(files = depset(direct = direct, transitive = [stdlib.libs, stdlib.cache_dir]))]
 
 _go_transition_stdlib_warmup = rule(
     implementation = _go_transition_stdlib_warmup_impl,
