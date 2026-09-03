@@ -1,2 +1,2 @@
-# Unified diff context lines contain a required single-space prefix.
-third_party/rules_go_orchestrion/patches/**/0001-full-delta.patch whitespace=-blank-at-eol,-blank-at-eof
+# Unified diff context lines contain a required space before source-code tabs.
+third_party/rules_go_orchestrion/patches/**/0001-full-delta.patch whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab

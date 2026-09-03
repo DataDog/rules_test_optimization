@@ -70,6 +70,8 @@ func main() {
 		action = genNogoMain
 	case "stdlib":
 		action = stdlib
+	case "synthetic_testmain_helpers":
+		action = syntheticTestmainHelpers
 	case "stdliblist":
 		action = stdliblist
 	case "cc":

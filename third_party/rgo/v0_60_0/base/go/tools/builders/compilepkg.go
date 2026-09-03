@@ -117,8 +117,31 @@ func syntheticTestmainSourceCompiledPackagesForMode(mode string) map[string]bool
 	return syntheticTestmainSourceCompiledPackagesGeneral
 }
 
+func syntheticTestmainPackagesForMode(mode string) []string {
+	roots := syntheticTestmainRootPackagesForMode(mode)
+	closure := orchestrionLinkClosurePackagesForMode(mode)
+	packages := make([]string, 0, len(roots)+len(closure))
+	seen := make(map[string]bool, cap(packages))
+	for _, root := range roots {
+		if !seen[root.packagePath] {
+			seen[root.packagePath] = true
+			packages = append(packages, root.packagePath)
+		}
+	}
+	for _, pkg := range closure {
+		pkg = strings.TrimSpace(pkg)
+		if pkg == "" || seen[pkg] {
+			continue
+		}
+		seen[pkg] = true
+		packages = append(packages, pkg)
+	}
+	return packages
+}
+
 const syntheticTestmainPackagefileManifestName = "orchestrion.pack"
 const syntheticTestmainPackagefileManifestSidecarSuffix = "." + syntheticTestmainPackagefileManifestName
+const sharedSyntheticTestmainHelperBundleABIVersion = "v1"
 
 func syntheticTestmainPackagefileManifestSidecarPath(archivePath string) string {
 	return archivePath + syntheticTestmainPackagefileManifestSidecarSuffix
@@ -192,6 +215,54 @@ func publishSyntheticTestmainPackagefiles(data []byte, outputDir string) ([]byte
 	return []byte(strings.Join(lines, "\n")), nil
 }
 
+// syntheticTestmainHelpers builds the target-independent helper graph once as
+// a declared Bazel artifact. Synthetic testmain compile actions can then reuse
+// it across sandboxes and remote workers instead of rebuilding the same graph
+// for every test target.
+func syntheticTestmainHelpers(args []string) error {
+	flags := flag.NewFlagSet("GoSyntheticTestmainHelpers", flag.ExitOnError)
+	goenv := envFlags(flags)
+	out := flags.String("out", "", "Path to the shared synthetic testmain helper bundle")
+	pack := flags.String("pack", "", "Path to the pack tool")
+	orchestrionModeFlag := flags.String("orchestrion_mode", orchestrionModeGeneral, "Orchestrion integration mode")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*out) == "" {
+		return errors.New("-out was not set")
+	}
+	if strings.TrimSpace(*pack) == "" {
+		return errors.New("-pack was not set")
+	}
+	orchestrionMode, err := validateOrchestrionMode(*orchestrionModeFlag)
+	if err != nil {
+		return err
+	}
+	goenv.orchestrionMode = orchestrionMode
+
+	workDir, cleanup, err := goenv.workDir()
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	compiled, _, err := compileSyntheticTestmainSourcePackages(
+		goenv,
+		*pack,
+		workDir,
+		"",
+		syntheticTestmainPackagesForMode(orchestrionMode),
+		map[string]archive{},
+		orchestrionMode,
+	)
+	if err != nil {
+		return err
+	}
+	return writeSharedSyntheticTestmainHelperBundle(abs(*out), compiled, orchestrionMode)
+}
+
 func compilePkg(args []string) error {
 	// Parse arguments.
 	args, _, err := expandParamsFiles(args)
@@ -205,7 +276,7 @@ func compilePkg(args []string) error {
 	var unfilteredSrcs, coverSrcs, embedSrcs, embedLookupDirs, embedRoots, recompileInternalDeps, orchestrionSrcDirs multiFlag
 	var deps archiveMultiFlag
 	var importPath, packagePath, packageListPath, coverMode string
-	var outLinkobjPath, outInterfacePath, outSyntheticTestmainManifestPath, outSyntheticTestmainHelpersPath, cgoExportHPath, cgoGoSrcsPath string
+	var outLinkobjPath, outInterfacePath, outSyntheticTestmainManifestPath, outSyntheticTestmainHelpersPath, sharedSyntheticTestmainHelpersPath, cgoExportHPath, cgoGoSrcsPath string
 	var testFilter string
 	var gcFlags, asmFlags, cppFlags, cFlags, cxxFlags, objcFlags, objcxxFlags, ldFlags quoteMultiFlag
 	var coverFormat string
@@ -238,6 +309,7 @@ func compilePkg(args []string) error {
 	fs.StringVar(&outInterfacePath, "o", "", "The export-only output archive required to compile dependent packages")
 	fs.StringVar(&outSyntheticTestmainManifestPath, "synthetic_testmain_manifest", "", "Sidecar manifest that records compile-time Datadog helper packagefiles for synthetic Bazel testmain archives")
 	fs.StringVar(&outSyntheticTestmainHelpersPath, "synthetic_testmain_helpers", "", "Declared output directory containing Datadog helper archives for synthetic Bazel testmain links")
+	fs.StringVar(&sharedSyntheticTestmainHelpersPath, "shared_synthetic_testmain_helpers", "", "Declared input directory containing the target-independent Datadog helper bundle")
 	fs.StringVar(&cgoExportHPath, "cgoexport", "", "The _cgo_exports.h file to write")
 	fs.StringVar(&cgoGoSrcsPath, "cgo_go_srcs", "", "The directory to emit cgo-generated Go sources for nogo consumption to")
 	fs.StringVar(&testFilter, "testfilter", "off", "Controls test package filtering")
@@ -309,6 +381,7 @@ func compilePkg(args []string) error {
 		outInterfacePath,
 		outSyntheticTestmainManifestPath,
 		outSyntheticTestmainHelpersPath,
+		sharedSyntheticTestmainHelpersPath,
 		cgoExportHPath,
 		cgoGoSrcsPath,
 		coverFormat,
@@ -346,6 +419,7 @@ func compileArchive(
 	outInterfacePath string,
 	outSyntheticTestmainManifestPath string,
 	outSyntheticTestmainHelpersPath string,
+	sharedSyntheticTestmainHelpersPath string,
 	cgoExportHPath string,
 	cgoGoSrcsForNogoPath string,
 	coverFormat string,
@@ -530,7 +604,7 @@ func compileArchive(
 			newProbeField("package_path", packagePath),
 			newProbeField("orchestrion_mode", orchestrionMode),
 		)
-		srcs, deps, syntheticTestmainPackagefiles, err = augmentSyntheticTestmainRoots(goenv, pack, workDir, srcs, deps, embedLookupDirs, orchestrion, orchestrionMode)
+		srcs, deps, syntheticTestmainPackagefiles, err = augmentSyntheticTestmainRoots(goenv, pack, workDir, srcs, deps, embedLookupDirs, orchestrion, orchestrionMode, sharedSyntheticTestmainHelpersPath)
 		synthSpan.End(err)
 		if err != nil {
 			return err
@@ -719,7 +793,7 @@ func compileArchive(
 	return nil
 }
 
-func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiveSrcs, deps []archive, embedLookupDirs []string, orchestrion string, orchestrionMode string) (_ archiveSrcs, _ []archive, _ string, err error) {
+func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiveSrcs, deps []archive, embedLookupDirs []string, orchestrion string, orchestrionMode string, sharedHelpersPath string) (_ archiveSrcs, _ []archive, _ string, err error) {
 	rootPackages := syntheticTestmainRootPackagesForMode(orchestrionMode)
 	closurePackages := orchestrionLinkClosurePackagesForMode(orchestrionMode)
 	span := beginProbe(
@@ -732,16 +806,7 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 		span.End(err)
 	}()
 	existingArchives := existingArchivesByPackagePath(deps)
-	packages := make([]string, 0, len(rootPackages)+len(closurePackages))
-	for _, root := range rootPackages {
-		packages = append(packages, root.packagePath)
-	}
-	for _, pkg := range closurePackages {
-		if pkg == "" {
-			continue
-		}
-		packages = append(packages, pkg)
-	}
+	packages := syntheticTestmainPackagesForMode(orchestrionMode)
 	moduleDir := ""
 	for _, dir := range embedLookupDirs {
 		moduleDir = findContainingOrchestrionDir(dir)
@@ -768,23 +833,30 @@ func augmentSyntheticTestmainRoots(goenv *env, pack, workDir string, srcs archiv
 	}
 
 	forcedExportRoot := ""
-	if sourceCompiledExports, exportRoot, err := compileSyntheticTestmainSourcePackages(goenv, pack, workDir, moduleDir, packages, existingArchives, orchestrionMode); err != nil {
-		return srcs, deps, "", fmt.Errorf("compile synthetic testmain source packages: %w", err)
-	} else {
+	sourceCompiledExports, reusedSharedBundle, err := reusableSharedSyntheticTestmainHelperBundle(sharedHelpersPath, packages, existingArchives, orchestrionMode)
+	if err != nil {
+		return srcs, deps, "", fmt.Errorf("load shared synthetic testmain helper bundle: %w", err)
+	}
+	if !reusedSharedBundle {
+		var exportRoot string
+		sourceCompiledExports, exportRoot, err = compileSyntheticTestmainSourcePackages(goenv, pack, workDir, moduleDir, packages, existingArchives, orchestrionMode)
+		if err != nil {
+			return srcs, deps, "", fmt.Errorf("compile synthetic testmain source packages: %w", err)
+		}
 		forcedExportRoot = exportRoot
-		for pkg, archive := range sourceCompiledExports {
-			compileExports[pkg] = archive.compilePath
-			exports[pkg] = archive.linkPath
-			for depPkg, depPath := range archive.linkClosure {
-				if strings.TrimSpace(depPath) == "" {
-					continue
-				}
-				if _, ok := compileExports[depPkg]; ok {
-					continue
-				}
-				if _, ok := exports[depPkg]; !ok {
-					exports[depPkg] = depPath
-				}
+	}
+	for pkg, archive := range sourceCompiledExports {
+		compileExports[pkg] = archive.compilePath
+		exports[pkg] = archive.linkPath
+		for depPkg, depPath := range archive.linkClosure {
+			if strings.TrimSpace(depPath) == "" {
+				continue
+			}
+			if _, ok := compileExports[depPkg]; ok {
+				continue
+			}
+			if _, ok := exports[depPkg]; !ok {
+				exports[depPkg] = depPath
 			}
 		}
 	}
@@ -958,6 +1030,8 @@ type helperArchiveManifest struct {
 	SourcePackages        []string                            `json:"source_packages,omitempty"`
 	ExternalPackages      []string                            `json:"external_packages,omitempty"`
 	DependencyClosureHash string                              `json:"dependency_closure_hash,omitempty"`
+	SharedBundleABI       string                              `json:"shared_bundle_abi,omitempty"`
+	OrchestrionMode       string                              `json:"orchestrion_mode,omitempty"`
 	Packages              map[string]helperArchiveManifestPkg `json:"packages"`
 }
 
@@ -1501,6 +1575,11 @@ func syntheticTestmainHelperDecisionCacheKeyParts(goenv *env) ([]string, error) 
 }
 
 func writeSyntheticTestmainHelperManifest(entryDir string, compiled map[string]compiledModuleArchive, decisionState syntheticTestmainHelperDecisionState, keyParts []string) error {
+	manifest := syntheticTestmainHelperManifest(entryDir, compiled, decisionState, keyParts)
+	return writeJSONAtomically(filepath.Join(entryDir, cacheManifestFileName), manifest)
+}
+
+func syntheticTestmainHelperManifest(entryDir string, compiled map[string]compiledModuleArchive, decisionState syntheticTestmainHelperDecisionState, keyParts []string) helperArchiveManifest {
 	manifest := helperArchiveManifest{
 		Key:                   filepath.Base(entryDir),
 		KeyParts:              append([]string{}, keyParts...),
@@ -1525,7 +1604,7 @@ func writeSyntheticTestmainHelperManifest(entryDir string, compiled map[string]c
 			LinkClosure: linkClosure,
 		}
 	}
-	return writeJSONAtomically(filepath.Join(entryDir, cacheManifestFileName), manifest)
+	return manifest
 }
 
 // syntheticHelperManifestPath encodes a helper cache path so cache-owned files
@@ -1789,30 +1868,157 @@ func copyBoolMap(source map[string]bool) map[string]bool {
 }
 
 func loadSyntheticTestmainHelperCache(paths cachePaths) (map[string]compiledModuleArchive, string, error) {
-	data, err := os.ReadFile(paths.manifestPath)
+	return loadSyntheticTestmainHelperBundle(paths.entryDir)
+}
+
+func loadSyntheticTestmainHelperBundle(entryDir string) (map[string]compiledModuleArchive, string, error) {
+	manifest, err := readSyntheticTestmainHelperManifest(entryDir)
 	if err != nil {
-		return nil, "", fmt.Errorf("read synthetic helper cache manifest %s: %w", paths.manifestPath, err)
-	}
-	var manifest helperArchiveManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, "", fmt.Errorf("parse synthetic helper cache manifest %s: %w", paths.manifestPath, err)
+		return nil, "", err
 	}
 	if manifest.HelperArchiveCache != helperArchiveCacheABIVersion {
-		return nil, "", fmt.Errorf("synthetic helper cache manifest %s has archive cache ABI %q, want %q", paths.manifestPath, manifest.HelperArchiveCache, helperArchiveCacheABIVersion)
+		return nil, "", fmt.Errorf("synthetic helper cache manifest %s has archive cache ABI %q, want %q", filepath.Join(entryDir, cacheManifestFileName), manifest.HelperArchiveCache, helperArchiveCacheABIVersion)
 	}
 	compiled := make(map[string]compiledModuleArchive, len(manifest.Packages))
 	for pkg, archive := range manifest.Packages {
 		linkClosure := make(map[string]string, len(archive.LinkClosure))
 		for depPkg, depPath := range archive.LinkClosure {
-			linkClosure[depPkg] = resolveSyntheticHelperManifestPath(paths.entryDir, depPath)
+			linkClosure[depPkg] = resolveSyntheticHelperManifestPath(entryDir, depPath)
 		}
 		compiled[pkg] = compiledModuleArchive{
-			compilePath: resolveSyntheticHelperManifestPath(paths.entryDir, archive.CompilePath),
-			linkPath:    resolveSyntheticHelperManifestPath(paths.entryDir, archive.LinkPath),
+			compilePath: resolveSyntheticHelperManifestPath(entryDir, archive.CompilePath),
+			linkPath:    resolveSyntheticHelperManifestPath(entryDir, archive.LinkPath),
 			linkClosure: linkClosure,
 		}
 	}
-	return compiled, filepath.Join(paths.entryDir, manifest.ExportRoot), nil
+	return compiled, filepath.Join(entryDir, manifest.ExportRoot), nil
+}
+
+func readSyntheticTestmainHelperManifest(entryDir string) (helperArchiveManifest, error) {
+	manifestPath := filepath.Join(entryDir, cacheManifestFileName)
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return helperArchiveManifest{}, fmt.Errorf("read synthetic helper cache manifest %s: %w", manifestPath, err)
+	}
+	var manifest helperArchiveManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return helperArchiveManifest{}, fmt.Errorf("parse synthetic helper cache manifest %s: %w", manifestPath, err)
+	}
+	return manifest, nil
+}
+
+// writeSharedSyntheticTestmainHelperBundle publishes only the archives needed
+// by synthetic testmain compilation and linking. Keeping the declared tree
+// compact avoids exporting the much larger temporary Go build cache.
+func writeSharedSyntheticTestmainHelperBundle(outputDir string, compiled map[string]compiledModuleArchive, orchestrionMode string) error {
+	if err := os.MkdirAll(filepath.Join(outputDir, "archives"), 0o755); err != nil {
+		return fmt.Errorf("create shared synthetic helper output: %w", err)
+	}
+	publishedPaths := make(map[string]string)
+	publish := func(source string) (string, error) {
+		source = strings.TrimSpace(source)
+		if source == "" {
+			return "", nil
+		}
+		if published := publishedPaths[source]; published != "" {
+			return published, nil
+		}
+		digest, err := fullDigestFile(source)
+		if err != nil {
+			return "", fmt.Errorf("digest shared synthetic helper archive %s: %w", source, err)
+		}
+		destination := filepath.Join(outputDir, "archives", digest+".a")
+		if _, err := os.Stat(destination); errors.Is(err, os.ErrNotExist) {
+			if err := copyArchiveFile(source, destination); err != nil {
+				return "", fmt.Errorf("publish shared synthetic helper archive %s: %w", source, err)
+			}
+		} else if err != nil {
+			return "", fmt.Errorf("inspect shared synthetic helper archive %s: %w", destination, err)
+		}
+		publishedPaths[source] = destination
+		return destination, nil
+	}
+
+	published := make(map[string]compiledModuleArchive, len(compiled))
+	for pkg, archive := range compiled {
+		compilePath, err := publish(archive.compilePath)
+		if err != nil {
+			return err
+		}
+		linkPath, err := publish(archive.linkPath)
+		if err != nil {
+			return err
+		}
+		linkClosure := make(map[string]string, len(archive.linkClosure))
+		for depPkg, depPath := range archive.linkClosure {
+			publishedPath, err := publish(depPath)
+			if err != nil {
+				return err
+			}
+			linkClosure[depPkg] = publishedPath
+		}
+		published[pkg] = compiledModuleArchive{
+			compilePath: compilePath,
+			linkPath:    linkPath,
+			linkClosure: linkClosure,
+		}
+	}
+	manifest := syntheticTestmainHelperManifest(outputDir, published, syntheticTestmainHelperDecisionState{}, nil)
+	manifest.SharedBundleABI = sharedSyntheticTestmainHelperBundleABIVersion
+	manifest.OrchestrionMode = effectiveOrchestrionMode(orchestrionMode)
+	manifest.ExportRoot = ""
+	return writeJSONAtomically(filepath.Join(outputDir, cacheManifestFileName), manifest)
+}
+
+// reusableSharedSyntheticTestmainHelperBundle returns the declared shared
+// bundle only when it covers the requested roots and does not overlap archives
+// supplied by the current Bazel target. Overlap falls back to the existing
+// target-specific build so dependency fingerprints remain unchanged.
+func reusableSharedSyntheticTestmainHelperBundle(bundleDir string, packages []string, existingArchives map[string]archive, orchestrionMode string) (map[string]compiledModuleArchive, bool, error) {
+	if strings.TrimSpace(bundleDir) == "" {
+		return nil, false, nil
+	}
+	manifest, err := readSyntheticTestmainHelperManifest(bundleDir)
+	if err != nil {
+		return nil, false, err
+	}
+	if manifest.SharedBundleABI != sharedSyntheticTestmainHelperBundleABIVersion {
+		return nil, false, fmt.Errorf("shared synthetic helper bundle has ABI %q, want %q", manifest.SharedBundleABI, sharedSyntheticTestmainHelperBundleABIVersion)
+	}
+	if manifest.OrchestrionMode != effectiveOrchestrionMode(orchestrionMode) {
+		return nil, false, fmt.Errorf("shared synthetic helper bundle has mode %q, want %q", manifest.OrchestrionMode, effectiveOrchestrionMode(orchestrionMode))
+	}
+	compiled, _, err := loadSyntheticTestmainHelperBundle(bundleDir)
+	if err != nil {
+		return nil, false, err
+	}
+	for _, pkg := range packages {
+		if !isSyntheticTestmainSourceCompileCandidate(pkg, orchestrionMode) {
+			return nil, false, nil
+		}
+		if _, ok := compiled[pkg]; !ok {
+			return nil, false, nil
+		}
+	}
+	bundlePackages := make(map[string]bool, len(compiled))
+	for pkg, archive := range compiled {
+		bundlePackages[pkg] = true
+		for depPkg := range archive.linkClosure {
+			bundlePackages[depPkg] = true
+		}
+	}
+	for pkg := range existingArchives {
+		if bundlePackages[pkg] {
+			return nil, false, nil
+		}
+	}
+	emitProbeLine(
+		"compilepkg.synthetic_testmain_shared_helper_bundle_reused",
+		0,
+		newProbeField("bundle_dir", bundleDir),
+		newProbeField("status", "ok"),
+	)
+	return compiled, true, nil
 }
 
 // syntheticSourceCompiledSet returns the helper packages that must still be
