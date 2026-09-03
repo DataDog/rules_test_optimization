@@ -1466,6 +1466,7 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 
 func cacheStdlibGoListBaseEnv(goenv *env, cachePath string, environ []string) []string {
 	env := append([]string{}, environ...)
+	env = normalizeGoCompilerCommandEnv(env)
 	if goenv != nil && goenv.sdk != "" {
 		// This `go list` computes cache paths for later module export commands.
 		// It must use the complete SDK GOROOT so Go can find pkg/tool binaries;

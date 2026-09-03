@@ -8605,7 +8605,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..4c859ae 100644
+index c25763a..8a1bf1a 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -8703,7 +8703,7 @@ index c25763a..4c859ae 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1695 @@ package with this path is linked.`,
+@@ -213,6 +286,1696 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -9887,6 +9887,7 @@ index c25763a..4c859ae 100644
 +
 +func cacheStdlibGoListBaseEnv(goenv *env, cachePath string, environ []string) []string {
 +	env := append([]string{}, environ...)
++	env = normalizeGoCompilerCommandEnv(env)
 +	if goenv != nil && goenv.sdk != "" {
 +		// This `go list` computes cache paths for later module export commands.
 +		// It must use the complete SDK GOROOT so Go can find pkg/tool binaries;
@@ -10401,10 +10402,10 @@ index c25763a..4c859ae 100644
  	known   []string
 diff --git a/go/tools/builders/importcfg_test.go b/go/tools/builders/importcfg_test.go
 new file mode 100644
-index 0000000..35a1fa4
+index 0000000..b933b8a
 --- /dev/null
 +++ b/go/tools/builders/importcfg_test.go
-@@ -0,0 +1,857 @@
+@@ -0,0 +1,876 @@
 +package main
 +
 +import (
@@ -11102,6 +11103,25 @@ index 0000000..35a1fa4
 +	}
 +	if string(before) != string(after) {
 +		t.Fatalf("seedWovenStdlibCache rewrote ready archive: before=%q after=%q", string(before), string(after))
++	}
++}
++
++func TestCacheStdlibGoListBaseEnvAbsolutizesRelativeCompilerPaths(t *testing.T) {
++	baseDir := t.TempDir()
++	previousBaseDir := moduleProxyResolutionBaseDir
++	moduleProxyResolutionBaseDir = baseDir
++	defer func() {
++		moduleProxyResolutionBaseDir = previousBaseDir
++	}()
++
++	envv := cacheStdlibGoListBaseEnv(
++		&env{sdk: filepath.Join(baseDir, "sdk")},
++		filepath.Join(baseDir, "gocache"),
++		[]string{"CC=external/rules_cc/local_config_cc/cc_wrapper.sh"},
++	)
++
++	if got, want := getEnv(envv, "CC"), filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh"); got != want {
++		t.Fatalf("CC = %q, want %q", got, want)
 +	}
 +}
 +

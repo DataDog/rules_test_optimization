@@ -698,6 +698,25 @@ func TestSeedWovenStdlibCacheNoopWhenAlreadyReady(t *testing.T) {
 	}
 }
 
+func TestCacheStdlibGoListBaseEnvAbsolutizesRelativeCompilerPaths(t *testing.T) {
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	envv := cacheStdlibGoListBaseEnv(
+		&env{sdk: filepath.Join(baseDir, "sdk")},
+		filepath.Join(baseDir, "gocache"),
+		[]string{"CC=external/rules_cc/local_config_cc/cc_wrapper.sh"},
+	)
+
+	if got, want := getEnv(envv, "CC"), filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh"); got != want {
+		t.Fatalf("CC = %q, want %q", got, want)
+	}
+}
+
 func TestStdlibSeedPackagesForModeUsesRequestedFallbackInTestOptimization(t *testing.T) {
 	sourceExports := map[string]string{
 		"encoding/json": "/cache/encoding-json.a",
