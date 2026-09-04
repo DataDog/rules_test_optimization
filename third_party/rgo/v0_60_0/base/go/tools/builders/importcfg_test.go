@@ -491,8 +491,15 @@ func TestModuleExportRequestKeyIgnoresSdkExecrootPath(t *testing.T) {
 	}
 }
 
-func TestModuleExportGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
-	sdkRoot := filepath.Join(t.TempDir(), "sdk")
+func TestModuleExportGoListBaseEnvUsesSDKGoRootAndWrapsRelativeCgoPaths(t *testing.T) {
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	sdkRoot := filepath.Join(baseDir, "sdk")
 	wovenGoRoot := filepath.Join(t.TempDir(), "woven_goroot")
 	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
 		t.Fatalf("mkdir fake sdk bin: %v", err)
@@ -502,6 +509,10 @@ func TestModuleExportGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
 		sdk:    sdkRoot,
 		goroot: wovenGoRoot,
 	}, []string{
+		"CGO_ENABLED=1",
+		"CC=external/llvm_toolchain/bin/cc_wrapper.sh",
+		"CGO_CFLAGS=-DKEEP --sysroot=external/sysroot -isystem external/include",
+		"CGO_LDFLAGS=-Lexternal/lib",
 		"GOROOT=" + wovenGoRoot,
 		"PATH=/usr/bin",
 	})
@@ -527,6 +538,27 @@ func TestModuleExportGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
 	}
 	if got := getEnv(envv, "DD_ORCHESTRION_IS_GOMOD_VERSION"); got != "" {
 		t.Fatalf("DD_ORCHESTRION_IS_GOMOD_VERSION = %q, want empty", got)
+	}
+	wantGOCC := quoteCommandArgs([]string{filepath.Join(baseDir, "external/llvm_toolchain/bin/cc_wrapper.sh")})
+	if got := getEnv(envv, "GO_CC"); got != wantGOCC {
+		t.Fatalf("GO_CC = %q, want %q", got, wantGOCC)
+	}
+	if got := getEnv(envv, "GO_CC_ROOT"); got != baseDir {
+		t.Fatalf("GO_CC_ROOT = %q, want %q", got, baseDir)
+	}
+	ccArgs, err := splitGoCommandArgs(getEnv(envv, "CC"))
+	if err != nil {
+		t.Fatalf("split wrapped CC: %v", err)
+	}
+	wantCCArgs := []string{absolutePathFromBase(os.Args[0], baseDir), "cc"}
+	if got, want := strings.Join(ccArgs, "\x00"), strings.Join(wantCCArgs, "\x00"); got != want {
+		t.Fatalf("CC args = %q, want %q", ccArgs, wantCCArgs)
+	}
+	if got, want := getEnv(envv, "CGO_CFLAGS"), "-DKEEP --sysroot="+cgoAbsPlaceholder+"external/sysroot -isystem "+cgoAbsPlaceholder+"external/include"; got != want {
+		t.Fatalf("CGO_CFLAGS = %q, want %q", got, want)
+	}
+	if got, want := getEnv(envv, "CGO_LDFLAGS"), "-L"+cgoAbsPlaceholder+"external/lib"; got != want {
+		t.Fatalf("CGO_LDFLAGS = %q, want %q", got, want)
 	}
 }
 

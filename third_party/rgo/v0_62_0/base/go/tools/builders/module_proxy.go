@@ -56,7 +56,7 @@ func moduleProxyFileURLFromBase(path, baseDir string) (string, error) {
 // by Orchestrion subprocesses. When the offline proxy is present, it becomes
 // the sole module source for action-time module operations.
 func normalizeGoModuleResolutionEnv(env []string) ([]string, error) {
-	env = normalizeGoSubprocessCompilerEnv(env)
+	env = normalizeGoCompilerCommandEnv(env)
 
 	moduleProxyRoot := strings.TrimSpace(getEnv(env, rulesGoOrchestrionModuleProxyRootEnvVar))
 	if moduleProxyRoot != "" {

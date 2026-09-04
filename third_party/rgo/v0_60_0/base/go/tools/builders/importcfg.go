@@ -844,7 +844,7 @@ func moduleExportGoListBaseEnv(goenv *env, environ []string) ([]string, error) {
 		goBin := filepath.Join(abs(goenv.sdk), "bin")
 		env = setEnv(env, "PATH", goBin+string(os.PathListSeparator)+getEnv(env, "PATH"))
 	}
-	return normalizeGoActionCacheEnv(env)
+	return normalizeGoActionCacheEnv(normalizeGoSubprocessCompilerEnv(env))
 }
 
 func moduleExportModuleCacheRoot(exportRoot string) string {
