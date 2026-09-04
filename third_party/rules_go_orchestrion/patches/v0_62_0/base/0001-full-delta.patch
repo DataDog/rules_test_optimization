@@ -1424,10 +1424,10 @@ index 9c067b2..a77773d 100644
      if ldflags:
          arguments.append(ldflags)
 diff --git a/go/private/actions/link.bzl b/go/private/actions/link.bzl
-index c249ca7..f273105 100644
+index c249ca7..10a9443 100644
 --- a/go/private/actions/link.bzl
 +++ b/go/private/actions/link.bzl
-@@ -33,10 +33,90 @@ load(
+@@ -33,10 +33,91 @@ load(
      "//go/private:rpath.bzl",
      "rpath",
  )
@@ -1506,8 +1506,9 @@ index c249ca7..f273105 100644
 +    return synthetic_testmain_manifest == None
 +
 +def _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion):
++    if not go.orchestrion:
++        return False
 +    if (
-+        go.orchestrion and
 +        getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
 +        synthetic_testmain_manifest != None and
 +        not link_orchestrion
@@ -1518,7 +1519,7 @@ index c249ca7..f273105 100644
  def emit_link(
          go,
          archive = None,
-@@ -168,6 +248,14 @@ def emit_link(
+@@ -168,6 +249,14 @@ def emit_link(
      builder_args.add("-o", executable)
      builder_args.add("-main", archive.data.file)
      builder_args.add("-p", archive.data.importmap)
@@ -1533,7 +1534,7 @@ index c249ca7..f273105 100644
      tool_args.add_all(gc_linkopts)
      tool_args.add_all(go.toolchain.flags.link)
  
-@@ -178,8 +266,18 @@ def emit_link(
+@@ -178,8 +267,18 @@ def emit_link(
      tool_args.add_joined("-extldflags", extldflags, join_with = " ")
  
      inputs_direct = stamp_inputs + [go.sdk.package_list]
@@ -1552,7 +1553,7 @@ index c249ca7..f273105 100644
      inputs_transitive = [
          archive.libs,
          archive.cgo_deps,
-@@ -189,6 +287,48 @@ def emit_link(
+@@ -189,6 +288,48 @@ def emit_link(
          go.sdk.tools,
          go.stdlib.libs,
      ]
@@ -1601,7 +1602,7 @@ index c249ca7..f273105 100644
      inputs = depset(direct = inputs_direct, transitive = inputs_transitive)
  
      go.actions.run(
-@@ -197,7 +337,13 @@ def emit_link(
+@@ -197,7 +338,13 @@ def emit_link(
          mnemonic = "GoLink",
          executable = go.toolchain._builder,
          arguments = [builder_args, "--", tool_args],

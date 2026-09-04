@@ -647,6 +647,16 @@ def _assert_expected_action(
         not any("module_proxy/" in path.replace("\\", "/") for path in inputs),
         f"{action.mnemonic} unexpectedly declared module_proxy files as inputs",
     )
+    if action.mnemonic == "GoLink" and _argument_value(action.arguments, "-orchestrion_mode") is None:
+        _require(
+            "-stdlib_cache" not in action.arguments,
+            "ordinary GoLink unexpectedly received -stdlib_cache",
+        )
+        _require(
+            not _contains_path_fragment(inputs, "stdlib_/gocache")
+            and not _contains_path_fragment(inputs, "stdlib_/list_gocache"),
+            "ordinary GoLink unexpectedly declared a stdlib cache directory as an input",
+        )
     if action.mnemonic in {"GoCompilePkg", "GoCompilePkgExternal"}:
         _require(
             "-stdlib_cache" not in action.arguments,

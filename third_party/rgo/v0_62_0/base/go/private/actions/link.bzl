@@ -108,8 +108,9 @@ def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
     return synthetic_testmain_manifest == None
 
 def _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion):
+    if not go.orchestrion:
+        return False
     if (
-        go.orchestrion and
         getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
         synthetic_testmain_manifest != None and
         not link_orchestrion
