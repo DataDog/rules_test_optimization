@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -714,6 +715,64 @@ func TestCacheStdlibGoListBaseEnvAbsolutizesRelativeCompilerPaths(t *testing.T) 
 
 	if got, want := getEnv(envv, "CC"), filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh"); got != want {
 		t.Fatalf("CC = %q, want %q", got, want)
+	}
+}
+
+func TestResolveCacheStdlibExportsUsesBuilderWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake go executable is a POSIX shell script")
+	}
+
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	relativeHeader := filepath.Join("toolchain", "sysroot", "usr", "include", "stdlib.h")
+	if err := os.MkdirAll(filepath.Join(baseDir, filepath.Dir(relativeHeader)), 0o755); err != nil {
+		t.Fatalf("mkdir fake toolchain include dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, relativeHeader), []byte("/* fake stdlib */\n"), 0o644); err != nil {
+		t.Fatalf("write fake toolchain header: %v", err)
+	}
+
+	sdkRoot := filepath.Join(baseDir, "sdk")
+	goBinary := filepath.Join(sdkRoot, "bin", "go")
+	if err := os.MkdirAll(filepath.Dir(goBinary), 0o755); err != nil {
+		t.Fatalf("mkdir fake sdk bin: %v", err)
+	}
+	fakeGo := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"test -f \"$EXPECTED_RELATIVE_CGO_INPUT\" || { echo \"relative CGO input unavailable from $PWD\" >&2; exit 1; }\n" +
+		"printf 'runtime=%s\\n' \"$FAKE_STDLIB_EXPORT\"\n"
+	if err := os.WriteFile(goBinary, []byte(fakeGo), 0o755); err != nil {
+		t.Fatalf("write fake go executable: %v", err)
+	}
+
+	exportPath := filepath.Join(baseDir, "runtime.a")
+	if err := os.WriteFile(exportPath, []byte("runtime"), 0o644); err != nil {
+		t.Fatalf("write fake stdlib export: %v", err)
+	}
+	t.Setenv("CGO_CFLAGS", "-isystem "+filepath.Dir(relativeHeader))
+	t.Setenv("EXPECTED_RELATIVE_CGO_INPUT", relativeHeader)
+	t.Setenv("FAKE_STDLIB_EXPORT", exportPath)
+
+	wovenGoRoot := filepath.Join(baseDir, "woven-goroot")
+	if err := os.MkdirAll(filepath.Join(wovenGoRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir woven GOROOT src: %v", err)
+	}
+	exports, err := resolveCacheStdlibExportsAt(
+		&env{sdk: sdkRoot, goroot: wovenGoRoot},
+		[]string{"runtime"},
+		filepath.Join(baseDir, "gocache"),
+	)
+	if err != nil {
+		t.Fatalf("resolveCacheStdlibExportsAt error: %v", err)
+	}
+	if got := exports["runtime"]; got != exportPath {
+		t.Fatalf("runtime export = %q, want %q", got, exportPath)
 	}
 }
 

@@ -8601,7 +8601,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..8a1bf1a 100644
+index c25763a..53324ee 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -8699,7 +8699,7 @@ index c25763a..8a1bf1a 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1696 @@ package with this path is linked.`,
+@@ -213,6 +286,1698 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -9858,7 +9858,9 @@ index c25763a..8a1bf1a 100644
 +		packages...,
 +	)
 +	cmd := exec.Command(args[0], args[1:]...)
-+	cmd.Dir = gorootSrc
++	// The C toolchain may expose compiler flags relative to Bazel's execroot.
++	// Keep the builder's initial working directory while GOROOT selects the SDK.
++	cmd.Dir = moduleProxyResolutionBaseDir
 +	cmd.Env = append([]string{}, baseEnv...)
 +	runSpan := beginProbe("importcfg.resolve_cache_stdlib_exports_at.go_list_export_deps", newProbeField("package_count", strconv.Itoa(len(packages))))
 +	output, err := cmd.CombinedOutput()
@@ -10398,15 +10400,16 @@ index c25763a..8a1bf1a 100644
  	known   []string
 diff --git a/go/tools/builders/importcfg_test.go b/go/tools/builders/importcfg_test.go
 new file mode 100644
-index 0000000..b933b8a
+index 0000000..3cd8241
 --- /dev/null
 +++ b/go/tools/builders/importcfg_test.go
-@@ -0,0 +1,876 @@
+@@ -0,0 +1,935 @@
 +package main
 +
 +import (
 +	"os"
 +	"path/filepath"
++	"runtime"
 +	"strings"
 +	"testing"
 +)
@@ -11118,6 +11121,64 @@ index 0000000..b933b8a
 +
 +	if got, want := getEnv(envv, "CC"), filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh"); got != want {
 +		t.Fatalf("CC = %q, want %q", got, want)
++	}
++}
++
++func TestResolveCacheStdlibExportsUsesBuilderWorkingDirectory(t *testing.T) {
++	if runtime.GOOS == "windows" {
++		t.Skip("the fake go executable is a POSIX shell script")
++	}
++
++	baseDir := t.TempDir()
++	previousBaseDir := moduleProxyResolutionBaseDir
++	moduleProxyResolutionBaseDir = baseDir
++	defer func() {
++		moduleProxyResolutionBaseDir = previousBaseDir
++	}()
++
++	relativeHeader := filepath.Join("toolchain", "sysroot", "usr", "include", "stdlib.h")
++	if err := os.MkdirAll(filepath.Join(baseDir, filepath.Dir(relativeHeader)), 0o755); err != nil {
++		t.Fatalf("mkdir fake toolchain include dir: %v", err)
++	}
++	if err := os.WriteFile(filepath.Join(baseDir, relativeHeader), []byte("/* fake stdlib */\n"), 0o644); err != nil {
++		t.Fatalf("write fake toolchain header: %v", err)
++	}
++
++	sdkRoot := filepath.Join(baseDir, "sdk")
++	goBinary := filepath.Join(sdkRoot, "bin", "go")
++	if err := os.MkdirAll(filepath.Dir(goBinary), 0o755); err != nil {
++		t.Fatalf("mkdir fake sdk bin: %v", err)
++	}
++	fakeGo := "#!/bin/sh\n" +
++		"set -eu\n" +
++		"test -f \"$EXPECTED_RELATIVE_CGO_INPUT\" || { echo \"relative CGO input unavailable from $PWD\" >&2; exit 1; }\n" +
++		"printf 'runtime=%s\\n' \"$FAKE_STDLIB_EXPORT\"\n"
++	if err := os.WriteFile(goBinary, []byte(fakeGo), 0o755); err != nil {
++		t.Fatalf("write fake go executable: %v", err)
++	}
++
++	exportPath := filepath.Join(baseDir, "runtime.a")
++	if err := os.WriteFile(exportPath, []byte("runtime"), 0o644); err != nil {
++		t.Fatalf("write fake stdlib export: %v", err)
++	}
++	t.Setenv("CGO_CFLAGS", "-isystem "+filepath.Dir(relativeHeader))
++	t.Setenv("EXPECTED_RELATIVE_CGO_INPUT", relativeHeader)
++	t.Setenv("FAKE_STDLIB_EXPORT", exportPath)
++
++	wovenGoRoot := filepath.Join(baseDir, "woven-goroot")
++	if err := os.MkdirAll(filepath.Join(wovenGoRoot, "src"), 0o755); err != nil {
++		t.Fatalf("mkdir woven GOROOT src: %v", err)
++	}
++	exports, err := resolveCacheStdlibExportsAt(
++		&env{sdk: sdkRoot, goroot: wovenGoRoot},
++		[]string{"runtime"},
++		filepath.Join(baseDir, "gocache"),
++	)
++	if err != nil {
++		t.Fatalf("resolveCacheStdlibExportsAt error: %v", err)
++	}
++	if got := exports["runtime"]; got != exportPath {
++		t.Fatalf("runtime export = %q, want %q", got, exportPath)
 +	}
 +}
 +

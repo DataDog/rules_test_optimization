@@ -1441,7 +1441,9 @@ func resolveCacheStdlibExportsAt(goenv *env, packages []string, cacheRoot string
 		packages...,
 	)
 	cmd := exec.Command(args[0], args[1:]...)
-	cmd.Dir = gorootSrc
+	// The C toolchain may expose compiler flags relative to Bazel's execroot.
+	// Keep the builder's initial working directory while GOROOT selects the SDK.
+	cmd.Dir = moduleProxyResolutionBaseDir
 	cmd.Env = append([]string{}, baseEnv...)
 	runSpan := beginProbe("importcfg.resolve_cache_stdlib_exports_at.go_list_export_deps", newProbeField("package_count", strconv.Itoa(len(packages))))
 	output, err := cmd.CombinedOutput()
