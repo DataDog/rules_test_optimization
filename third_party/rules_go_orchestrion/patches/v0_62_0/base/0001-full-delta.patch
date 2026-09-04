@@ -4695,6 +4695,33 @@ index fdeda2d..76d69b6 100644
  		log.Fatal(err)
  	}
  }
+diff --git a/go/tools/builders/cc.go b/go/tools/builders/cc.go
+index 6f67914..0317bea 100644
+--- a/go/tools/builders/cc.go
++++ b/go/tools/builders/cc.go
+@@ -2,6 +2,7 @@ package main
+ 
+ import (
+ 	"errors"
++	"fmt"
+ 	"os"
+ 	"os/exec"
+ 	"path/filepath"
+@@ -20,7 +21,13 @@ func cc(args []string) error {
+ 		return errors.New("GO_CC_ROOT environment variable not set")
+ 	}
+ 
+-	normalized := []string{cc}
++	normalized, err := splitGoCommandArgs(cc)
++	if err != nil {
++		return fmt.Errorf("parse GO_CC command: %w", err)
++	}
++	if len(normalized) == 0 {
++		return errors.New("GO_CC environment variable contains no command")
++	}
+ 	normalized = append(normalized, args...)
+ 	transformArgs(normalized, cgoAbsEnvFlags, func(s string) string {
+ 		if strings.HasPrefix(s, cgoAbsPlaceholder) {
 diff --git a/go/tools/builders/compilepkg.go b/go/tools/builders/compilepkg.go
 index a1782d4..8004cd0 100644
 --- a/go/tools/builders/compilepkg.go
@@ -7956,7 +7983,7 @@ index 0000000..320fb66
 +	}
 +}
 diff --git a/go/tools/builders/env.go b/go/tools/builders/env.go
-index 2bea17e..154b543 100644
+index 2bea17e..7287686 100644
 --- a/go/tools/builders/env.go
 +++ b/go/tools/builders/env.go
 @@ -59,6 +59,16 @@ type env struct {
@@ -8047,7 +8074,72 @@ index 2bea17e..154b543 100644
  	os.Stderr.Write(relativizePaths(buf.Bytes()))
  	return err
  }
-@@ -281,6 +321,14 @@ func runAndLogCommand(cmd *exec.Cmd, verbose bool) error {
+@@ -250,37 +290,59 @@ func absCCLinker(argList []string) (func(), error) {
+ // for the absolute path and we replace CC with this builder so that
+ // we can expand the placeholder later.
+ func absCCCompiler(envNameList []string, argList []string) error {
+-	err := os.Setenv("GO_CC", os.Getenv("CC"))
+-	if err != nil {
+-		return err
+-	}
+-	err = os.Setenv("GO_CC_ROOT", abs("."))
+-	if err != nil {
+-		return err
+-	}
+-	err = os.Setenv("CC", abs(os.Args[0])+" cc")
+-	if err != nil {
+-		return err
++	wrapped := cgoCompilerWrapperEnv(os.Environ(), envNameList, argList, abs("."), abs(os.Args[0]))
++	for _, envName := range append([]string{"GO_CC", "GO_CC_ROOT", "CC"}, envNameList...) {
++		if err := os.Setenv(envName, getEnv(wrapped, envName)); err != nil {
++			return err
++		}
+ 	}
++	return nil
++}
++
++// cgoCompilerWrapperEnv prepares a Go subprocess to invoke the Bazel C
++// compiler through this builder. Go runs C compilation from package-specific
++// directories, so both the compiler and path-bearing CGO flags must remain
++// anchored to the original execroot.
++func cgoCompilerWrapperEnv(environ []string, envNameList, argList []string, root, builder string) []string {
++	env := append([]string{}, environ...)
++	if goCC := strings.TrimSpace(getEnv(env, "GO_CC")); goCC != "" && getEnv(env, "GO_CC_ROOT") != "" {
++		// GoStdlib already installed the wrapper in the parent process. Keep it
++		// idempotent, but normalize the wrapped compiler for nested go commands.
++		return setEnv(env, "GO_CC", normalizeGoCompilerCommand(goCC, root))
++	}
++
++	cc := strings.TrimSpace(getEnv(env, "CC"))
++	if cc == "" {
++		return env
++	}
++	env = setEnv(env, "GO_CC", normalizeGoCompilerCommand(cc, root))
++	env = setEnv(env, "GO_CC_ROOT", root)
++	env = setEnv(env, "CC", quoteCommandArgs([]string{builder, "cc"}))
+ 	for _, envName := range envNameList {
+-		splitedEnv := strings.Fields(os.Getenv(envName))
+-		transformArgs(splitedEnv, argList, func(s string) string {
+-			if filepath.IsAbs(s) {
+-				return s
++		args := strings.Fields(getEnv(env, envName))
++		transformArgs(args, argList, func(path string) string {
++			if filepath.IsAbs(path) || strings.HasPrefix(path, cgoAbsPlaceholder) {
++				return path
+ 			}
+-			return cgoAbsPlaceholder + s
++			return cgoAbsPlaceholder + path
+ 		})
+-		if err := os.Setenv(envName, strings.Join(splitedEnv, " ")); err != nil {
+-			return err
+-		}
++		env = setEnv(env, envName, strings.Join(args, " "))
+ 	}
+-	return nil
++	return env
+ }
+ 
+ func runAndLogCommand(cmd *exec.Cmd, verbose bool) error {
  	if verbose {
  		fmt.Fprintln(os.Stderr, formatCommand(cmd))
  	}
@@ -8605,7 +8697,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..53324ee 100644
+index c25763a..bcf27f5 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -8703,7 +8795,7 @@ index c25763a..53324ee 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1698 @@ package with this path is linked.`,
+@@ -213,6 +286,1707 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -9890,6 +9982,15 @@ index c25763a..53324ee 100644
 +func cacheStdlibGoListBaseEnv(goenv *env, cachePath string, environ []string) []string {
 +	env := append([]string{}, environ...)
 +	env = normalizeGoCompilerCommandEnv(env)
++	if getEnv(env, "CGO_ENABLED") == "1" {
++		env = cgoCompilerWrapperEnv(
++			env,
++			cgoEnvVars,
++			cgoAbsEnvFlags,
++			moduleProxyResolutionBaseDir,
++			absolutePathFromBase(os.Args[0], moduleProxyResolutionBaseDir),
++		)
++	}
 +	if goenv != nil && goenv.sdk != "" {
 +		// This `go list` computes cache paths for later module export commands.
 +		// It must use the complete SDK GOROOT so Go can find pkg/tool binaries;
@@ -10404,10 +10505,10 @@ index c25763a..53324ee 100644
  	known   []string
 diff --git a/go/tools/builders/importcfg_test.go b/go/tools/builders/importcfg_test.go
 new file mode 100644
-index 0000000..3cd8241
+index 0000000..a4099ac
 --- /dev/null
 +++ b/go/tools/builders/importcfg_test.go
-@@ -0,0 +1,935 @@
+@@ -0,0 +1,1001 @@
 +package main
 +
 +import (
@@ -11109,7 +11210,7 @@ index 0000000..3cd8241
 +	}
 +}
 +
-+func TestCacheStdlibGoListBaseEnvAbsolutizesRelativeCompilerPaths(t *testing.T) {
++func TestCacheStdlibGoListBaseEnvWrapsRelativeCgoPaths(t *testing.T) {
 +	baseDir := t.TempDir()
 +	previousBaseDir := moduleProxyResolutionBaseDir
 +	moduleProxyResolutionBaseDir = baseDir
@@ -11120,11 +11221,68 @@ index 0000000..3cd8241
 +	envv := cacheStdlibGoListBaseEnv(
 +		&env{sdk: filepath.Join(baseDir, "sdk")},
 +		filepath.Join(baseDir, "gocache"),
-+		[]string{"CC=external/rules_cc/local_config_cc/cc_wrapper.sh"},
++		[]string{
++			"CGO_ENABLED=1",
++			"CC=external/rules_cc/local_config_cc/cc_wrapper.sh",
++			"CGO_CFLAGS=-DKEEP --sysroot=external/sysroot -isystem external/include",
++			"CGO_LDFLAGS=-Lexternal/lib",
++		},
 +	)
 +
-+	if got, want := getEnv(envv, "CC"), filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh"); got != want {
-+		t.Fatalf("CC = %q, want %q", got, want)
++	wantGOCC := quoteCommandArgs([]string{filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh")})
++	if got := getEnv(envv, "GO_CC"); got != wantGOCC {
++		t.Fatalf("GO_CC = %q, want %q", got, wantGOCC)
++	}
++	if got := getEnv(envv, "GO_CC_ROOT"); got != baseDir {
++		t.Fatalf("GO_CC_ROOT = %q, want %q", got, baseDir)
++	}
++	ccArgs, err := splitGoCommandArgs(getEnv(envv, "CC"))
++	if err != nil {
++		t.Fatalf("split wrapped CC: %v", err)
++	}
++	wantCCArgs := []string{absolutePathFromBase(os.Args[0], baseDir), "cc"}
++	if got, want := strings.Join(ccArgs, "\x00"), strings.Join(wantCCArgs, "\x00"); got != want {
++		t.Fatalf("CC args = %q, want %q", ccArgs, wantCCArgs)
++	}
++	if got, want := getEnv(envv, "CGO_CFLAGS"), "-DKEEP --sysroot="+cgoAbsPlaceholder+"external/sysroot -isystem "+cgoAbsPlaceholder+"external/include"; got != want {
++		t.Fatalf("CGO_CFLAGS = %q, want %q", got, want)
++	}
++	if got, want := getEnv(envv, "CGO_LDFLAGS"), "-L"+cgoAbsPlaceholder+"external/lib"; got != want {
++		t.Fatalf("CGO_LDFLAGS = %q, want %q", got, want)
++	}
++}
++
++func TestCacheStdlibGoListBaseEnvPreservesExistingCgoWrapper(t *testing.T) {
++	baseDir := t.TempDir()
++	previousBaseDir := moduleProxyResolutionBaseDir
++	moduleProxyResolutionBaseDir = baseDir
++	defer func() {
++		moduleProxyResolutionBaseDir = previousBaseDir
++	}()
++
++	existingCC := quoteCommandArgs([]string{filepath.Join(baseDir, "builder"), "cc"})
++	existingFlags := "--sysroot=" + cgoAbsPlaceholder + "external/sysroot"
++	envv := cacheStdlibGoListBaseEnv(
++		&env{sdk: filepath.Join(baseDir, "sdk")},
++		filepath.Join(baseDir, "gocache"),
++		[]string{
++			"CGO_ENABLED=1",
++			"CC=" + existingCC,
++			"GO_CC=external/toolchain/cc",
++			"GO_CC_ROOT=" + baseDir,
++			"CGO_CFLAGS=" + existingFlags,
++		},
++	)
++
++	wantGOCC := quoteCommandArgs([]string{filepath.Join(baseDir, "external/toolchain/cc")})
++	if got := getEnv(envv, "GO_CC"); got != wantGOCC {
++		t.Fatalf("GO_CC = %q, want %q", got, wantGOCC)
++	}
++	if got := getEnv(envv, "CC"); got != existingCC {
++		t.Fatalf("CC = %q, want existing wrapper %q", got, existingCC)
++	}
++	if got := getEnv(envv, "CGO_CFLAGS"); got != existingFlags {
++		t.Fatalf("CGO_CFLAGS = %q, want existing placeholders %q", got, existingFlags)
 +	}
 +}
 +
@@ -11156,6 +11314,9 @@ index 0000000..3cd8241
 +	fakeGo := "#!/bin/sh\n" +
 +		"set -eu\n" +
 +		"test -f \"$EXPECTED_RELATIVE_CGO_INPUT\" || { echo \"relative CGO input unavailable from $PWD\" >&2; exit 1; }\n" +
++		"test \"$GO_CC\" = \"$EXPECTED_GO_CC\" || { echo \"GO_CC was not normalized: $GO_CC\" >&2; exit 1; }\n" +
++		"test \"$GO_CC_ROOT\" = \"$EXPECTED_GO_CC_ROOT\" || { echo \"GO_CC_ROOT was not preserved: $GO_CC_ROOT\" >&2; exit 1; }\n" +
++		"test \"$CGO_CFLAGS\" = \"$EXPECTED_CGO_CFLAGS\" || { echo \"CGO_CFLAGS were not wrapped: $CGO_CFLAGS\" >&2; exit 1; }\n" +
 +		"printf 'runtime=%s\\n' \"$FAKE_STDLIB_EXPORT\"\n"
 +	if err := os.WriteFile(goBinary, []byte(fakeGo), 0o755); err != nil {
 +		t.Fatalf("write fake go executable: %v", err)
@@ -11165,8 +11326,14 @@ index 0000000..3cd8241
 +	if err := os.WriteFile(exportPath, []byte("runtime"), 0o644); err != nil {
 +		t.Fatalf("write fake stdlib export: %v", err)
 +	}
++	relativeCompiler := filepath.Join("toolchain", "bin", "cc")
++	t.Setenv("CGO_ENABLED", "1")
++	t.Setenv("CC", relativeCompiler)
 +	t.Setenv("CGO_CFLAGS", "-isystem "+filepath.Dir(relativeHeader))
 +	t.Setenv("EXPECTED_RELATIVE_CGO_INPUT", relativeHeader)
++	t.Setenv("EXPECTED_GO_CC", quoteCommandArgs([]string{filepath.Join(baseDir, relativeCompiler)}))
++	t.Setenv("EXPECTED_GO_CC_ROOT", baseDir)
++	t.Setenv("EXPECTED_CGO_CFLAGS", "-isystem "+cgoAbsPlaceholder+filepath.Dir(relativeHeader))
 +	t.Setenv("FAKE_STDLIB_EXPORT", exportPath)
 +
 +	wovenGoRoot := filepath.Join(baseDir, "woven-goroot")
@@ -11786,7 +11953,7 @@ index 11dc0ab..610af53 100644
  	if *buildmode == "c-archive" {
 diff --git a/go/tools/builders/module_proxy.go b/go/tools/builders/module_proxy.go
 new file mode 100644
-index 0000000..1655ad7
+index 0000000..b44c0f3
 --- /dev/null
 +++ b/go/tools/builders/module_proxy.go
 @@ -0,0 +1,291 @@
@@ -11898,18 +12065,18 @@ index 0000000..1655ad7
 +		if value == "" {
 +			continue
 +		}
-+		args, err := splitGoCommandArgs(value)
-+		if err != nil || len(args) == 0 {
-+			continue
-+		}
-+		toolPath := args[0]
-+		if goCompilerPathIsAlreadyValid(toolPath) {
-+			continue
-+		}
-+		args[0] = absolutePathFromBase(toolPath, moduleProxyResolutionBaseDir)
-+		env = setEnv(env, name, quoteCommandArgs(args))
++		env = setEnv(env, name, normalizeGoCompilerCommand(value, moduleProxyResolutionBaseDir))
 +	}
 +	return env
++}
++
++func normalizeGoCompilerCommand(value, baseDir string) string {
++	args, err := splitGoCommandArgs(value)
++	if err != nil || len(args) == 0 || goCompilerPathIsAlreadyValid(args[0]) {
++		return value
++	}
++	args[0] = absolutePathFromBase(args[0], baseDir)
++	return quoteCommandArgs(args)
 +}
 +
 +// goCompilerPathIsAlreadyValid mirrors Go's CC/CXX/FC validation: absolute

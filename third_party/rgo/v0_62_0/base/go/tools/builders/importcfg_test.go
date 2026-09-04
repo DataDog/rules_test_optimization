@@ -699,7 +699,7 @@ func TestSeedWovenStdlibCacheNoopWhenAlreadyReady(t *testing.T) {
 	}
 }
 
-func TestCacheStdlibGoListBaseEnvAbsolutizesRelativeCompilerPaths(t *testing.T) {
+func TestCacheStdlibGoListBaseEnvWrapsRelativeCgoPaths(t *testing.T) {
 	baseDir := t.TempDir()
 	previousBaseDir := moduleProxyResolutionBaseDir
 	moduleProxyResolutionBaseDir = baseDir
@@ -710,11 +710,68 @@ func TestCacheStdlibGoListBaseEnvAbsolutizesRelativeCompilerPaths(t *testing.T) 
 	envv := cacheStdlibGoListBaseEnv(
 		&env{sdk: filepath.Join(baseDir, "sdk")},
 		filepath.Join(baseDir, "gocache"),
-		[]string{"CC=external/rules_cc/local_config_cc/cc_wrapper.sh"},
+		[]string{
+			"CGO_ENABLED=1",
+			"CC=external/rules_cc/local_config_cc/cc_wrapper.sh",
+			"CGO_CFLAGS=-DKEEP --sysroot=external/sysroot -isystem external/include",
+			"CGO_LDFLAGS=-Lexternal/lib",
+		},
 	)
 
-	if got, want := getEnv(envv, "CC"), filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh"); got != want {
-		t.Fatalf("CC = %q, want %q", got, want)
+	wantGOCC := quoteCommandArgs([]string{filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh")})
+	if got := getEnv(envv, "GO_CC"); got != wantGOCC {
+		t.Fatalf("GO_CC = %q, want %q", got, wantGOCC)
+	}
+	if got := getEnv(envv, "GO_CC_ROOT"); got != baseDir {
+		t.Fatalf("GO_CC_ROOT = %q, want %q", got, baseDir)
+	}
+	ccArgs, err := splitGoCommandArgs(getEnv(envv, "CC"))
+	if err != nil {
+		t.Fatalf("split wrapped CC: %v", err)
+	}
+	wantCCArgs := []string{absolutePathFromBase(os.Args[0], baseDir), "cc"}
+	if got, want := strings.Join(ccArgs, "\x00"), strings.Join(wantCCArgs, "\x00"); got != want {
+		t.Fatalf("CC args = %q, want %q", ccArgs, wantCCArgs)
+	}
+	if got, want := getEnv(envv, "CGO_CFLAGS"), "-DKEEP --sysroot="+cgoAbsPlaceholder+"external/sysroot -isystem "+cgoAbsPlaceholder+"external/include"; got != want {
+		t.Fatalf("CGO_CFLAGS = %q, want %q", got, want)
+	}
+	if got, want := getEnv(envv, "CGO_LDFLAGS"), "-L"+cgoAbsPlaceholder+"external/lib"; got != want {
+		t.Fatalf("CGO_LDFLAGS = %q, want %q", got, want)
+	}
+}
+
+func TestCacheStdlibGoListBaseEnvPreservesExistingCgoWrapper(t *testing.T) {
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	existingCC := quoteCommandArgs([]string{filepath.Join(baseDir, "builder"), "cc"})
+	existingFlags := "--sysroot=" + cgoAbsPlaceholder + "external/sysroot"
+	envv := cacheStdlibGoListBaseEnv(
+		&env{sdk: filepath.Join(baseDir, "sdk")},
+		filepath.Join(baseDir, "gocache"),
+		[]string{
+			"CGO_ENABLED=1",
+			"CC=" + existingCC,
+			"GO_CC=external/toolchain/cc",
+			"GO_CC_ROOT=" + baseDir,
+			"CGO_CFLAGS=" + existingFlags,
+		},
+	)
+
+	wantGOCC := quoteCommandArgs([]string{filepath.Join(baseDir, "external/toolchain/cc")})
+	if got := getEnv(envv, "GO_CC"); got != wantGOCC {
+		t.Fatalf("GO_CC = %q, want %q", got, wantGOCC)
+	}
+	if got := getEnv(envv, "CC"); got != existingCC {
+		t.Fatalf("CC = %q, want existing wrapper %q", got, existingCC)
+	}
+	if got := getEnv(envv, "CGO_CFLAGS"); got != existingFlags {
+		t.Fatalf("CGO_CFLAGS = %q, want existing placeholders %q", got, existingFlags)
 	}
 }
 
@@ -746,6 +803,9 @@ func TestResolveCacheStdlibExportsUsesBuilderWorkingDirectory(t *testing.T) {
 	fakeGo := "#!/bin/sh\n" +
 		"set -eu\n" +
 		"test -f \"$EXPECTED_RELATIVE_CGO_INPUT\" || { echo \"relative CGO input unavailable from $PWD\" >&2; exit 1; }\n" +
+		"test \"$GO_CC\" = \"$EXPECTED_GO_CC\" || { echo \"GO_CC was not normalized: $GO_CC\" >&2; exit 1; }\n" +
+		"test \"$GO_CC_ROOT\" = \"$EXPECTED_GO_CC_ROOT\" || { echo \"GO_CC_ROOT was not preserved: $GO_CC_ROOT\" >&2; exit 1; }\n" +
+		"test \"$CGO_CFLAGS\" = \"$EXPECTED_CGO_CFLAGS\" || { echo \"CGO_CFLAGS were not wrapped: $CGO_CFLAGS\" >&2; exit 1; }\n" +
 		"printf 'runtime=%s\\n' \"$FAKE_STDLIB_EXPORT\"\n"
 	if err := os.WriteFile(goBinary, []byte(fakeGo), 0o755); err != nil {
 		t.Fatalf("write fake go executable: %v", err)
@@ -755,8 +815,14 @@ func TestResolveCacheStdlibExportsUsesBuilderWorkingDirectory(t *testing.T) {
 	if err := os.WriteFile(exportPath, []byte("runtime"), 0o644); err != nil {
 		t.Fatalf("write fake stdlib export: %v", err)
 	}
+	relativeCompiler := filepath.Join("toolchain", "bin", "cc")
+	t.Setenv("CGO_ENABLED", "1")
+	t.Setenv("CC", relativeCompiler)
 	t.Setenv("CGO_CFLAGS", "-isystem "+filepath.Dir(relativeHeader))
 	t.Setenv("EXPECTED_RELATIVE_CGO_INPUT", relativeHeader)
+	t.Setenv("EXPECTED_GO_CC", quoteCommandArgs([]string{filepath.Join(baseDir, relativeCompiler)}))
+	t.Setenv("EXPECTED_GO_CC_ROOT", baseDir)
+	t.Setenv("EXPECTED_CGO_CFLAGS", "-isystem "+cgoAbsPlaceholder+filepath.Dir(relativeHeader))
 	t.Setenv("FAKE_STDLIB_EXPORT", exportPath)
 
 	wovenGoRoot := filepath.Join(baseDir, "woven-goroot")

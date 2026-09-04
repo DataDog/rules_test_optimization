@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -20,7 +21,13 @@ func cc(args []string) error {
 		return errors.New("GO_CC_ROOT environment variable not set")
 	}
 
-	normalized := []string{cc}
+	normalized, err := splitGoCommandArgs(cc)
+	if err != nil {
+		return fmt.Errorf("parse GO_CC command: %w", err)
+	}
+	if len(normalized) == 0 {
+		return errors.New("GO_CC environment variable contains no command")
+	}
 	normalized = append(normalized, args...)
 	transformArgs(normalized, cgoAbsEnvFlags, func(s string) string {
 		if strings.HasPrefix(s, cgoAbsPlaceholder) {

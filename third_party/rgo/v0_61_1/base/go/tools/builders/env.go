@@ -290,31 +290,45 @@ func absCCLinker(argList []string) (func(), error) {
 // for the absolute path and we replace CC with this builder so that
 // we can expand the placeholder later.
 func absCCCompiler(envNameList []string, argList []string) error {
-	err := os.Setenv("GO_CC", os.Getenv("CC"))
-	if err != nil {
-		return err
-	}
-	err = os.Setenv("GO_CC_ROOT", abs("."))
-	if err != nil {
-		return err
-	}
-	err = os.Setenv("CC", abs(os.Args[0])+" cc")
-	if err != nil {
-		return err
-	}
-	for _, envName := range envNameList {
-		splitedEnv := strings.Fields(os.Getenv(envName))
-		transformArgs(splitedEnv, argList, func(s string) string {
-			if filepath.IsAbs(s) {
-				return s
-			}
-			return cgoAbsPlaceholder + s
-		})
-		if err := os.Setenv(envName, strings.Join(splitedEnv, " ")); err != nil {
+	wrapped := cgoCompilerWrapperEnv(os.Environ(), envNameList, argList, abs("."), abs(os.Args[0]))
+	for _, envName := range append([]string{"GO_CC", "GO_CC_ROOT", "CC"}, envNameList...) {
+		if err := os.Setenv(envName, getEnv(wrapped, envName)); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// cgoCompilerWrapperEnv prepares a Go subprocess to invoke the Bazel C
+// compiler through this builder. Go runs C compilation from package-specific
+// directories, so both the compiler and path-bearing CGO flags must remain
+// anchored to the original execroot.
+func cgoCompilerWrapperEnv(environ []string, envNameList, argList []string, root, builder string) []string {
+	env := append([]string{}, environ...)
+	if goCC := strings.TrimSpace(getEnv(env, "GO_CC")); goCC != "" && getEnv(env, "GO_CC_ROOT") != "" {
+		// GoStdlib already installed the wrapper in the parent process. Keep it
+		// idempotent, but normalize the wrapped compiler for nested go commands.
+		return setEnv(env, "GO_CC", normalizeGoCompilerCommand(goCC, root))
+	}
+
+	cc := strings.TrimSpace(getEnv(env, "CC"))
+	if cc == "" {
+		return env
+	}
+	env = setEnv(env, "GO_CC", normalizeGoCompilerCommand(cc, root))
+	env = setEnv(env, "GO_CC_ROOT", root)
+	env = setEnv(env, "CC", quoteCommandArgs([]string{builder, "cc"}))
+	for _, envName := range envNameList {
+		args := strings.Fields(getEnv(env, envName))
+		transformArgs(args, argList, func(path string) string {
+			if filepath.IsAbs(path) || strings.HasPrefix(path, cgoAbsPlaceholder) {
+				return path
+			}
+			return cgoAbsPlaceholder + path
+		})
+		env = setEnv(env, envName, strings.Join(args, " "))
+	}
+	return env
 }
 
 func runAndLogCommand(cmd *exec.Cmd, verbose bool) error {
