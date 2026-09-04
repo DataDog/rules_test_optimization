@@ -27,6 +27,22 @@ func absCCCompiler(envNameList []string, argList []string) error {
 	return nil
 }
 
+// normalizeGoSubprocessCompilerEnv keeps Bazel compiler commands and
+// path-bearing CGO flags anchored to the builder's initial working directory.
+func normalizeGoSubprocessCompilerEnv(environ []string) []string {
+	env := normalizeGoCompilerCommandEnv(append([]string{}, environ...))
+	if getEnv(env, "CGO_ENABLED") != "1" {
+		return env
+	}
+	return cgoCompilerWrapperEnv(
+		env,
+		cgoEnvVars,
+		cgoAbsEnvFlags,
+		moduleProxyResolutionBaseDir,
+		absolutePathFromBase(os.Args[0], moduleProxyResolutionBaseDir),
+	)
+}
+
 // cgoCompilerWrapperEnv prepares a Go subprocess to invoke the Bazel C
 // compiler through this builder. Go runs C compilation from package-specific
 // directories, so both the compiler and path-bearing CGO flags must remain

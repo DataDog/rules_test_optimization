@@ -257,22 +257,42 @@ func TestNormalizeGoModuleResolutionEnvAbsolutizesRelativeCompilerPaths(t *testi
 	}()
 
 	env, err := normalizeGoModuleResolutionEnv([]string{
+		"CGO_ENABLED=1",
 		"CC=external/llvm_toolchain/bin/cc_wrapper.sh",
 		"CXX='external/llvm_toolchain/bin/cxx wrapper.sh' -stdlib=libc++",
 		"FC=external/llvm_toolchain/bin/flang",
+		"CGO_CFLAGS=-DKEEP --sysroot=external/sysroot -isystem external/include",
+		"CGO_LDFLAGS=-Lexternal/lib",
 	})
 	if err != nil {
 		t.Fatalf("normalizeGoModuleResolutionEnv error: %v", err)
 	}
 	envMap := envSliceToMap(env)
-	if got, want := envMap["CC"], filepath.Join(baseDir, "external/llvm_toolchain/bin/cc_wrapper.sh"); got != want {
-		t.Fatalf("CC=%q, want %q", got, want)
+	ccArgs, err := splitGoCommandArgs(envMap["CC"])
+	if err != nil {
+		t.Fatalf("split wrapped CC: %v", err)
+	}
+	wantCCArgs := []string{absolutePathFromBase(os.Args[0], baseDir), "cc"}
+	if got, want := strings.Join(ccArgs, "\x00"), strings.Join(wantCCArgs, "\x00"); got != want {
+		t.Fatalf("CC args=%q, want %q", ccArgs, wantCCArgs)
+	}
+	if got, want := envMap["GO_CC"], quoteCommandArgs([]string{filepath.Join(baseDir, "external/llvm_toolchain/bin/cc_wrapper.sh")}); got != want {
+		t.Fatalf("GO_CC=%q, want %q", got, want)
+	}
+	if got := envMap["GO_CC_ROOT"]; got != baseDir {
+		t.Fatalf("GO_CC_ROOT=%q, want %q", got, baseDir)
 	}
 	if got, want := envMap["CXX"], "'"+filepath.Join(baseDir, "external/llvm_toolchain/bin/cxx wrapper.sh")+"' -stdlib=libc++"; got != want {
 		t.Fatalf("CXX=%q, want %q", got, want)
 	}
 	if got, want := envMap["FC"], filepath.Join(baseDir, "external/llvm_toolchain/bin/flang"); got != want {
 		t.Fatalf("FC=%q, want %q", got, want)
+	}
+	if got, want := envMap["CGO_CFLAGS"], "-DKEEP --sysroot="+cgoAbsPlaceholder+"external/sysroot -isystem "+cgoAbsPlaceholder+"external/include"; got != want {
+		t.Fatalf("CGO_CFLAGS=%q, want %q", got, want)
+	}
+	if got, want := envMap["CGO_LDFLAGS"], "-L"+cgoAbsPlaceholder+"external/lib"; got != want {
+		t.Fatalf("CGO_LDFLAGS=%q, want %q", got, want)
 	}
 }
 

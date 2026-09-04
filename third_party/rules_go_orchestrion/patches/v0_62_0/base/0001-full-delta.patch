@@ -4696,7 +4696,7 @@ index fdeda2d..76d69b6 100644
  	}
  }
 diff --git a/go/tools/builders/cc.go b/go/tools/builders/cc.go
-index 6f67914..bb77ca1 100644
+index 6f67914..5451c67 100644
 --- a/go/tools/builders/cc.go
 +++ b/go/tools/builders/cc.go
 @@ -2,6 +2,7 @@ package main
@@ -4707,7 +4707,7 @@ index 6f67914..bb77ca1 100644
  	"os"
  	"os/exec"
  	"path/filepath"
-@@ -10,6 +11,54 @@ import (
+@@ -10,6 +11,70 @@ import (
  	"syscall"
  )
  
@@ -4725,6 +4725,22 @@ index 6f67914..bb77ca1 100644
 +		}
 +	}
 +	return nil
++}
++
++// normalizeGoSubprocessCompilerEnv keeps Bazel compiler commands and
++// path-bearing CGO flags anchored to the builder's initial working directory.
++func normalizeGoSubprocessCompilerEnv(environ []string) []string {
++	env := normalizeGoCompilerCommandEnv(append([]string{}, environ...))
++	if getEnv(env, "CGO_ENABLED") != "1" {
++		return env
++	}
++	return cgoCompilerWrapperEnv(
++		env,
++		cgoEnvVars,
++		cgoAbsEnvFlags,
++		moduleProxyResolutionBaseDir,
++		absolutePathFromBase(os.Args[0], moduleProxyResolutionBaseDir),
++	)
 +}
 +
 +// cgoCompilerWrapperEnv prepares a Go subprocess to invoke the Bazel C
@@ -4762,7 +4778,7 @@ index 6f67914..bb77ca1 100644
  func cc(args []string) error {
  	cc := os.Getenv("GO_CC")
  	if cc == "" {
-@@ -20,7 +69,13 @@ func cc(args []string) error {
+@@ -20,7 +85,13 @@ func cc(args []string) error {
  		return errors.New("GO_CC_ROOT environment variable not set")
  	}
  
@@ -8270,7 +8286,7 @@ index 0000000..73c7992
 +	return strings.Contains(output, "failed to connect to NATS job server")
 +}
 diff --git a/go/tools/builders/env_test.go b/go/tools/builders/env_test.go
-index 979c230..3a776cc 100644
+index 979c230..886bab2 100644
 --- a/go/tools/builders/env_test.go
 +++ b/go/tools/builders/env_test.go
 @@ -3,6 +3,9 @@
@@ -8283,7 +8299,7 @@ index 979c230..3a776cc 100644
  	"reflect"
  	"strings"
  	"testing"
-@@ -75,3 +78,314 @@ func TestTransformArgs(t *testing.T) {
+@@ -75,3 +78,334 @@ func TestTransformArgs(t *testing.T) {
  		})
  	}
  }
@@ -8513,22 +8529,42 @@ index 979c230..3a776cc 100644
 +	}()
 +
 +	env, err := normalizeGoModuleResolutionEnv([]string{
++		"CGO_ENABLED=1",
 +		"CC=external/llvm_toolchain/bin/cc_wrapper.sh",
 +		"CXX='external/llvm_toolchain/bin/cxx wrapper.sh' -stdlib=libc++",
 +		"FC=external/llvm_toolchain/bin/flang",
++		"CGO_CFLAGS=-DKEEP --sysroot=external/sysroot -isystem external/include",
++		"CGO_LDFLAGS=-Lexternal/lib",
 +	})
 +	if err != nil {
 +		t.Fatalf("normalizeGoModuleResolutionEnv error: %v", err)
 +	}
 +	envMap := envSliceToMap(env)
-+	if got, want := envMap["CC"], filepath.Join(baseDir, "external/llvm_toolchain/bin/cc_wrapper.sh"); got != want {
-+		t.Fatalf("CC=%q, want %q", got, want)
++	ccArgs, err := splitGoCommandArgs(envMap["CC"])
++	if err != nil {
++		t.Fatalf("split wrapped CC: %v", err)
++	}
++	wantCCArgs := []string{absolutePathFromBase(os.Args[0], baseDir), "cc"}
++	if got, want := strings.Join(ccArgs, "\x00"), strings.Join(wantCCArgs, "\x00"); got != want {
++		t.Fatalf("CC args=%q, want %q", ccArgs, wantCCArgs)
++	}
++	if got, want := envMap["GO_CC"], quoteCommandArgs([]string{filepath.Join(baseDir, "external/llvm_toolchain/bin/cc_wrapper.sh")}); got != want {
++		t.Fatalf("GO_CC=%q, want %q", got, want)
++	}
++	if got := envMap["GO_CC_ROOT"]; got != baseDir {
++		t.Fatalf("GO_CC_ROOT=%q, want %q", got, baseDir)
 +	}
 +	if got, want := envMap["CXX"], "'"+filepath.Join(baseDir, "external/llvm_toolchain/bin/cxx wrapper.sh")+"' -stdlib=libc++"; got != want {
 +		t.Fatalf("CXX=%q, want %q", got, want)
 +	}
 +	if got, want := envMap["FC"], filepath.Join(baseDir, "external/llvm_toolchain/bin/flang"); got != want {
 +		t.Fatalf("FC=%q, want %q", got, want)
++	}
++	if got, want := envMap["CGO_CFLAGS"], "-DKEEP --sysroot="+cgoAbsPlaceholder+"external/sysroot -isystem "+cgoAbsPlaceholder+"external/include"; got != want {
++		t.Fatalf("CGO_CFLAGS=%q, want %q", got, want)
++	}
++	if got, want := envMap["CGO_LDFLAGS"], "-L"+cgoAbsPlaceholder+"external/lib"; got != want {
++		t.Fatalf("CGO_LDFLAGS=%q, want %q", got, want)
 +	}
 +}
 +
@@ -8725,7 +8761,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..bcf27f5 100644
+index c25763a..51b8088 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -8823,7 +8859,7 @@ index c25763a..bcf27f5 100644
  // checkImports verifies that each import in files refers to a
  // direct dependency in archives or to a standard library package
  // listed in the file at stdPackageListPath. checkImports returns
-@@ -213,6 +286,1707 @@ package with this path is linked.`,
+@@ -213,6 +286,1697 @@ package with this path is linked.`,
  	return filename, nil
  }
  
@@ -10008,17 +10044,7 @@ index c25763a..bcf27f5 100644
 +}
 +
 +func cacheStdlibGoListBaseEnv(goenv *env, cachePath string, environ []string) []string {
-+	env := append([]string{}, environ...)
-+	env = normalizeGoCompilerCommandEnv(env)
-+	if getEnv(env, "CGO_ENABLED") == "1" {
-+		env = cgoCompilerWrapperEnv(
-+			env,
-+			cgoEnvVars,
-+			cgoAbsEnvFlags,
-+			moduleProxyResolutionBaseDir,
-+			absolutePathFromBase(os.Args[0], moduleProxyResolutionBaseDir),
-+		)
-+	}
++	env := normalizeGoSubprocessCompilerEnv(environ)
 +	if goenv != nil && goenv.sdk != "" {
 +		// This `go list` computes cache paths for later module export commands.
 +		// It must use the complete SDK GOROOT so Go can find pkg/tool binaries;
@@ -11981,7 +12007,7 @@ index 11dc0ab..610af53 100644
  	if *buildmode == "c-archive" {
 diff --git a/go/tools/builders/module_proxy.go b/go/tools/builders/module_proxy.go
 new file mode 100644
-index 0000000..b44c0f3
+index 0000000..b55c9f6
 --- /dev/null
 +++ b/go/tools/builders/module_proxy.go
 @@ -0,0 +1,291 @@
@@ -12043,7 +12069,7 @@ index 0000000..b44c0f3
 +// by Orchestrion subprocesses. When the offline proxy is present, it becomes
 +// the sole module source for action-time module operations.
 +func normalizeGoModuleResolutionEnv(env []string) ([]string, error) {
-+	env = normalizeGoCompilerCommandEnv(env)
++	env = normalizeGoSubprocessCompilerEnv(env)
 +
 +	moduleProxyRoot := strings.TrimSpace(getEnv(env, rulesGoOrchestrionModuleProxyRootEnvVar))
 +	if moduleProxyRoot != "" {
