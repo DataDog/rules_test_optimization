@@ -647,6 +647,7 @@ write_fixture_bazelrc() {
 
   cat > "$ws_dir/.bazelrc" <<EOF
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+common --incompatible_allow_tags_propagation
 build:test-optimization --@${rules_go_repo}//go/private/orchestrion:enabled=true
 EOF
 }
@@ -730,6 +731,7 @@ dd_go_test(
         ":fixture_tool_reset",
     ],
     embed = [":hello_lib"],
+    tags = ["no-remote-exec"] if "${ORCHESTRION_MODE}" == "test_optimization" else [],
     orchestrion_pin_files = [
         "//:go.mod",
         "//:go.sum",
@@ -1160,12 +1162,17 @@ run_fixture_subscenario() {
   local aquery_output="$hermetic_root/hello_test_aquery.textproto"
   local opt_aquery_output="$hermetic_root/hello_test_opt_aquery.textproto"
   local no_strip_aquery_output="$hermetic_root/hello_test_no_strip_aquery.textproto"
+  local -a execution_policy_assertion=()
   local output_base=""
   local start_ns=""
   local end_ns=""
   local elapsed_seconds=""
   local proxy_size_bytes=""
   mkdir -p "$hermetic_home" "$hermetic_xdg"
+
+  if [[ "$ORCHESTRION_MODE" == "test_optimization" ]]; then
+    execution_policy_assertion+=(--require-test-runner-only-no-remote-exec)
+  fi
 
   if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     (
@@ -1236,6 +1243,7 @@ PY
     --require-reduced-synthetic-testmain-link-inputs \
     --require-test-optimization-linker-flags \
     --expected-test-optimization-linker-flag-count 2 \
+    "${execution_policy_assertion[@]}" \
     "$aquery_output"
 
   (
@@ -1259,6 +1267,7 @@ PY
     --require-reduced-synthetic-testmain-link-inputs \
     --require-test-optimization-linker-flags \
     --expected-test-optimization-linker-flag-count 1 \
+    "${execution_policy_assertion[@]}" \
     "$opt_aquery_output"
 
   (
@@ -1282,6 +1291,7 @@ PY
     --require-reduced-synthetic-testmain-link-inputs \
     --require-test-optimization-linker-flags \
     --expected-test-optimization-linker-flag-count 0 \
+    "${execution_policy_assertion[@]}" \
     "$no_strip_aquery_output"
 }
 

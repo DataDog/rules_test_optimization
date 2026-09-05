@@ -30,6 +30,7 @@ load(
     "orch_go_test",
     "orch_transition_impl_for_tests",
     "select_wrapper_output_name_for_tests",
+    "test_execution_requirements_for_tests",
     "windows_wrapper_content_for_tests",
 )
 load(
@@ -636,6 +637,7 @@ def _go_macro_disabled_raw_wiring_test_impl(ctx):
     asserts.equals(env, ["-disabled-link-flag"], captured.gc_linkopts)
     asserts.equals(env, "example.com/disabled/pkg", captured.importpath)
     asserts.equals(env, "disabled/rundir", captured.rundir)
+    asserts.equals(env, ["manual", "no-remote-exec"], captured.tags)
     return analysistest.end(env)
 
 def _go_macro_multi_service_wiring_test_impl(ctx):
@@ -1136,7 +1138,7 @@ def _stdlib_warmup_tags_test_impl(ctx):
     return unittest.end(env)
 
 def _hidden_raw_tags_test_impl(ctx):
-    """Assert public selection markers never leak to the hidden raw test."""
+    """Assert TestRunner-only policy stays off optimized build actions."""
     env = unittest.begin(ctx)
     asserts.equals(
         env,
@@ -1145,9 +1147,33 @@ def _hidden_raw_tags_test_impl(ctx):
             "manual",
             "dd-test-optimization",
             "dd-requires-docker",
+            "no-remote-exec",
             "dd-test-optimization-source-manual",
             "manual",
-        ]),
+        ], "test_optimization"),
+    )
+    asserts.equals(
+        env,
+        ["dd-requires-docker", "no-remote-exec", "manual"],
+        hidden_raw_tags_for_tests([
+            "dd-requires-docker",
+            "no-remote-exec",
+        ], "general"),
+    )
+    return unittest.end(env)
+
+def _test_execution_requirements_test_impl(ctx):
+    """Assert local-only policy is attached directly to TestRunner execution."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        {"no-remote-exec": ""},
+        test_execution_requirements_for_tests(["manual", "no-remote-exec"]),
+    )
+    asserts.equals(
+        env,
+        {},
+        test_execution_requirements_for_tests(["manual", "dd-requires-docker"]),
     )
     return unittest.end(env)
 
@@ -1352,6 +1378,9 @@ stdlib_warmup_tags_test = unittest.make(
 )
 hidden_raw_tags_test = unittest.make(
     _hidden_raw_tags_test_impl,
+)
+test_execution_requirements_test = unittest.make(
+    _test_execution_requirements_test_impl,
 )
 stdlib_warmup_target_has_outputs_test = analysistest.make(
     _stdlib_warmup_target_has_outputs_test_impl,

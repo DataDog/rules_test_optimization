@@ -112,6 +112,14 @@ def parse_args() -> argparse.Namespace:
             "action."
         ),
     )
+    parser.add_argument(
+        "--require-test-runner-only-no-remote-exec",
+        action="store_true",
+        help=(
+            "Require no-remote-exec on the TestRunner while keeping Go build "
+            "actions eligible for remote execution."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -555,6 +563,36 @@ def _assert_test_optimization_linker_flags(action: Action, expected_count: int |
         )
 
 
+def _assert_test_runner_only_no_remote_exec(actions: list[Action]) -> None:
+    """Keep the runtime local without constraining deterministic Go builds."""
+
+    test_actions = [action for action in actions if action.mnemonic == "TestRunner"]
+    _require(test_actions, "aquery did not contain a TestRunner action")
+    _require(
+        any("no-remote-exec" in action.execution_info for action in test_actions),
+        "no TestRunner has the requested no-remote-exec policy",
+    )
+
+    build_mnemonics = {
+        "GoCompilePkg",
+        "GoCompilePkgExternal",
+        "GoLink",
+        "GoStdlib",
+        "GoSyntheticTestmainHelpers",
+    }
+    constrained_build_actions = [
+        action.mnemonic
+        for action in actions
+        if action.mnemonic in build_mnemonics
+        and "no-remote-exec" in action.execution_info
+    ]
+    _require(
+        not constrained_build_actions,
+        "no-remote-exec leaked from TestRunner to Go build actions: "
+        + ", ".join(sorted(set(constrained_build_actions))),
+    )
+
+
 def _assert_expected_action(
     action: Action,
     inputs: list[str],
@@ -696,6 +734,9 @@ def main() -> int:
     shared_helper_actions = [a for a in actions if a.mnemonic == "GoSyntheticTestmainHelpers"]
     link_actions = [a for a in actions if a.mnemonic == "GoLink"]
     stdlib_list_actions = [a for a in actions if a.mnemonic == "GoStdlibList"]
+
+    if args.require_test_runner_only_no_remote_exec:
+        _assert_test_runner_only_no_remote_exec(actions)
 
     _require(compile_actions, "aquery did not contain any GoCompilePkg or GoCompilePkgExternal actions")
     _require(stdlib_actions, "aquery did not contain any GoStdlib actions")
