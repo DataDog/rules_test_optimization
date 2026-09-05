@@ -12,6 +12,14 @@ _ORCHESTRION_MODE_SETTING = "@rules_go//go/private/orchestrion:mode"
 _ORCHESTRION_MODE_GENERAL = "general"
 _ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
+def _test_execution_requirements(tags):
+    """Keep caller-requested local execution scoped to the TestRunner action."""
+    if "no-remote-exec" in tags:
+        return {"no-remote-exec": ""}
+    return {}
+
+test_execution_requirements_for_tests = _test_execution_requirements
+
 def _orch_transition_impl(_settings, _attr):
     return {
         _ORCHESTRION_ENABLED_SETTING: True,
@@ -136,6 +144,9 @@ def _orch_go_test_impl(ctx):
     )]
     if dep_run_environment:
         providers.append(dep_run_environment)
+    execution_requirements = _test_execution_requirements(ctx.attr.tags)
+    if execution_requirements:
+        providers.append(testing.ExecutionInfo(requirements = execution_requirements))
     return providers
 
 orch_go_test = rule(

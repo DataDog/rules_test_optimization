@@ -222,13 +222,21 @@ def _normalize_static_descriptor(descriptor, topt_service):
 
 normalize_static_descriptor_for_tests = _normalize_static_descriptor
 
-def _hidden_raw_tags(public_tags):
-    """Keep operational tags on the hidden test and normalize its manual tag."""
+def _hidden_raw_tags(public_tags, orchestrion_mode):
+    """Return the tags needed by the hidden build target.
+
+    The public wrapper owns TestRunner execution policy. In Test Optimization
+    mode, keeping no-remote-exec on the hidden go_test would also force its
+    deterministic compile and link actions to run locally. Opaque select()
+    values cannot be filtered safely, so they retain the existing behavior.
+    """
     if type(public_tags) == "select":
         return public_tags + ["manual"]
     tags = []
     for tag in list(public_tags or []):
         if tag == "manual" or tag in _PUBLIC_WRAPPER_ONLY_TAGS:
+            continue
+        if orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and tag == "no-remote-exec":
             continue
         tags.append(tag)
     tags.append("manual")
@@ -713,7 +721,7 @@ def dd_topt_go_test(
         )
 
     user_tags = wrapper_kwargs.get("tags")
-    kwargs["tags"] = _hidden_raw_tags(user_tags)
+    kwargs["tags"] = _hidden_raw_tags(user_tags, orchestrion_mode)
     kwargs["visibility"] = ["//visibility:private"]
     for key, value in raw_passthrough.items():
         kwargs[key] = value
