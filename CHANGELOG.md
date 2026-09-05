@@ -32,6 +32,8 @@ versioning.
   contract.
 - Added a non-default `rules_go` v0.62.0 support line with the maintained
   Orchestrion integration and public consumer patch profile.
+- Added a non-default `rules_go` v0.63.0 support line with the maintained
+  Orchestrion integration and public consumer patch profile.
 
 ### Changed
 - Updated the maintained `rules_go` Orchestrion integration to Orchestrion

@@ -12,6 +12,9 @@ RULES_GO_FORKS = {
     "v0_62_0": {
         "base": "third_party/rgo/v0_62_0/base",
     },
+    "v0_63_0": {
+        "base": "third_party/rgo/v0_63_0/base",
+    },
 }
 
 def rules_go_fork_strip_prefix(upstream, variant):
