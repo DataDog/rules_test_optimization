@@ -80,7 +80,7 @@ func TestReplaceManagedSectionAppendsWhenMissing(t *testing.T) {
 
 func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.9.0",
+		orchestrionVersion: "v1.12.0",
 		ddTraceGoVersion:   "v2.5.0",
 		runtimeVersion:     "1.25.0",
 		rulesGoRemote:      "https://github.com/example/repo.git",
@@ -108,7 +108,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 	if !strings.Contains(got, `orchestrion.from_source(`) {
 		t.Fatalf("expected orchestrion extension call in managed block:\n%s", got)
 	}
-	if !strings.Contains(got, `version = "v1.9.0"`) {
+	if !strings.Contains(got, `version = "v1.12.0"`) {
 		t.Fatalf("expected orchestrion version in managed block:\n%s", got)
 	}
 	if strings.Contains(got, `enabled_by_env`) {
@@ -124,7 +124,7 @@ func TestManagedModuleBlockIncludesRulesGoExtension(t *testing.T) {
 
 func TestManagedModuleBlockWithoutRuntimeVersionPreservesLegacyShape(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.9.0",
+		orchestrionVersion: "v1.12.0",
 		ddTraceGoVersion:   "v2.5.0",
 		rulesGoRemote:      "https://github.com/example/repo.git",
 		rulesGoCommit:      "deadbeef",
@@ -139,7 +139,7 @@ func TestManagedModuleBlockWithoutRuntimeVersionPreservesLegacyShape(t *testing.
 
 func TestManagedModuleBlockCanSelectBaseRulesGoVariant(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.9.0",
+		orchestrionVersion: "v1.12.0",
 		ddTraceGoVersion:   "v2.5.0",
 		rulesGoRemote:      "https://github.com/example/repo.git",
 		rulesGoCommit:      "deadbeef",
@@ -164,6 +164,65 @@ func TestValidateRulesGoVariantRejectsCompleteVariant(t *testing.T) {
 	}
 }
 
+func TestValidateGoRuntimeCompatibility(t *testing.T) {
+	tests := []struct {
+		name        string
+		orchestrion string
+		runtime     string
+		wantError   bool
+	}{
+		{name: "minimum supported", orchestrion: "v1.12.0", runtime: "1.25.0"},
+		{name: "newer Go", orchestrion: "v1.12.1", runtime: "1.26"},
+		{name: "older Orchestrion", orchestrion: "v1.11.0", runtime: "1.24.9"},
+		{name: "runtime omitted", orchestrion: "v1.12.0"},
+		{name: "runtime too old", orchestrion: "v1.12.0", runtime: "1.24.9", wantError: true},
+		{name: "malformed runtime", orchestrion: "v1.12.0", runtime: "latest", wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateGoRuntimeCompatibility(config{
+				orchestrionVersion: test.orchestrion,
+				runtimeVersion:     test.runtime,
+			})
+			if (err != nil) != test.wantError {
+				t.Fatalf("validateGoRuntimeCompatibility() error=%v, wantError=%v", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestRunRejectsUnsupportedGoRuntimeBeforeWriting(t *testing.T) {
+	dir := t.TempDir()
+	modulePath := filepath.Join(dir, "MODULE.bazel")
+	const originalModule = "module(name = \"example\")\n"
+	if err := os.WriteFile(modulePath, []byte(originalModule), 0o644); err != nil {
+		t.Fatalf("write MODULE.bazel: %v", err)
+	}
+	err := run(config{
+		workspaceDir:       dir,
+		guided:             true,
+		service:            "example",
+		runtimeVersion:     "1.24.9",
+		orchestrionVersion: "v1.12.0",
+		rulesGoUpstream:    "v0_60_0",
+		rulesGoVariant:     "base",
+		datadogFetch:       defaultDatadogFetch,
+		rulesGoFetch:       defaultRulesGoFetch,
+		goBinary:           defaultGoBinary,
+		goModSync:          defaultGoModSync,
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires Go 1.25.0 or newer") {
+		t.Fatalf("run() error=%v, want minimum Go version error", err)
+	}
+	got, readErr := os.ReadFile(modulePath)
+	if readErr != nil {
+		t.Fatalf("read MODULE.bazel: %v", readErr)
+	}
+	if string(got) != originalModule {
+		t.Fatalf("MODULE.bazel changed before runtime validation:\n%s", got)
+	}
+}
+
 func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
 	cfg := config{
 		rulesGoRemote:      "https://github.com/example/repo.git",
@@ -177,8 +236,8 @@ func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
 		rtoArchiveSHA256:   strings.Repeat("0", 64),
 		rtoArchivePrefix:   "rules_test_optimization-published-sha",
 		rtoArchiveType:     "tar.gz",
-		orchestrionVersion: "v1.9.0",
-		ddTraceGoVersion:   "v2.9.0",
+		orchestrionVersion: "v1.12.0",
+		ddTraceGoVersion:   "v2.9.1",
 		runtimeVersion:     "1.25.0",
 	}
 	got, err := workspaceSnippet(cfg)
@@ -195,7 +254,7 @@ func TestWorkspaceSnippetSupportsMixedFetchModes(t *testing.T) {
 		`rules_go_upstream = "v0_60_0"`,
 		`rules_go_variant = "base"`,
 		`go_orchestrion_tool_repo(`,
-		`dd_trace_go_version = "v2.9.0"`,
+		`dd_trace_go_version = "v2.9.1"`,
 		`go_sdk_root = "@go_sdk//:ROOT"`,
 		`go_sdk_version = "1.25.0"`,
 		`go_register_toolchains(version = "1.25.0")`,
@@ -219,8 +278,8 @@ func TestWorkspaceSnippetFallsBackToRulesGoCommit(t *testing.T) {
 		rulesGoFetch:       "git",
 		rulesGoRepoName:    "io_bazel_rules_go",
 		rulesGoVariant:     "base",
-		orchestrionVersion: "v1.9.0",
-		ddTraceGoVersion:   "v2.9.0",
+		orchestrionVersion: "v1.12.0",
+		ddTraceGoVersion:   "v2.9.1",
 	}
 	got, err := workspaceSnippet(cfg)
 	if err != nil {
@@ -239,8 +298,8 @@ func TestWorkspaceSnippetDoesNotRequireModuleFiles(t *testing.T) {
 		rulesGoFetch:       "git",
 		rulesGoRepoName:    "io_bazel_rules_go",
 		rulesGoVariant:     "base",
-		orchestrionVersion: "v1.9.0",
-		ddTraceGoVersion:   "v2.9.0",
+		orchestrionVersion: "v1.12.0",
+		ddTraceGoVersion:   "v2.9.1",
 	}
 	if _, err := workspaceSnippet(cfg); err != nil {
 		t.Fatalf("workspaceSnippet should not inspect MODULE.bazel or go.mod: %v", err)
@@ -256,8 +315,8 @@ func TestWorkspaceModeSnippetIncludesSyncAndBaseVariant(t *testing.T) {
 		rulesGoFetch:         "git",
 		rulesGoRepoName:      "io_bazel_rules_go",
 		rulesGoVariant:       "base",
-		orchestrionVersion:   "v1.9.0",
-		ddTraceGoVersion:     "v2.9.0",
+		orchestrionVersion:   "v1.12.0",
+		ddTraceGoVersion:     "v2.9.1",
 		syncRepoName:         "test_optimization_data_worker",
 		service:              "worker",
 		runtimeVersion:       "1.25.9",
@@ -473,7 +532,6 @@ func TestBazelrcSnippetUsesRepoEnvOnlyForSyncMetadata(t *testing.T) {
 		`common:test-optimization --repo_env=DD_GIT_REPOSITORY_URL`,
 		`common:test-optimization --repo_env=DD_PR_NUMBER`,
 		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`,
-		`build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`,
 		`test:test-optimization --remote_download_minimal`,
 		`test:test-optimization --remote_download_regex=.*test[.]outputs.*`,
 		`test:test-optimization --zip_undeclared_test_outputs`,
@@ -716,7 +774,7 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`SYNC_REPO='test_optimization_data_worker'`,
 		`DOCTOR_TARGET='//:dd_test_optimization_doctor'`,
 		`UPLOAD_TARGET='//:dd_upload_payloads'`,
-		`RULES_GO_ENABLED_LABEL='@rules_go//go/private/orchestrion:enabled'`,
+		`RULES_GO_ORCHESTRION_PACKAGE='@rules_go//go/private/orchestrion'`,
 		`WORKSPACE_DIR="$(pwd -P)"`,
 		`BEP_TMP_ROOT=""`,
 		`BEP_JSON_DIR=""`,
@@ -740,16 +798,15 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`--artifact-source=bep`,
 		`--artifact-staging-dir=${ARTIFACT_STAGING_DIR}`,
 		`doctor-report.json`,
-		`uploader-dry-run-report.json`,
-		`uploader-upload-report.json`,
+		`uploader-report.json`,
 		`--report-json`,
 		`mktemp -d "${tmp_parent%/}/dd-go-topt.XXXXXX"`,
-		`sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload`,
+		`sync -> controls -> instrumented tests -> doctor -> validated uploader`,
 		`validate ordinary no-config bootstrap`,
 		`validate explicit disabled precedence`,
 		`query "@${SYNC_REPO}//:test_optimization_files"`,
 		`"${BAZEL}" cquery \
-      "${RULES_GO_ENABLED_LABEL%:enabled}:tool_binary"`,
+      "${RULES_GO_ORCHESTRION_PACKAGE}:tool_binary"`,
 		`--repo_env=DD_TEST_OPTIMIZATION_ENABLED=0`,
 		`upload skipped; rerun with --upload`,
 		`${BAZEL}" shutdown`,
@@ -870,7 +927,7 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 	for _, want := range []string{
 		"query @test_optimization_data//:test_optimization_files",
 		"cquery @rules_go//go/private/orchestrion:tool_binary --output=files",
-		"query --config=test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0 --@rules_go//go/private/orchestrion:enabled=false @test_optimization_data//:test_optimization_files",
+		"query --config=test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=0 @test_optimization_data//:test_optimization_files",
 		"sync --config=test-optimization --repo_env=FETCH_SALT=",
 		"test --config=test-optimization --build_event_json_file=",
 		"//pkg:go_default_test",
@@ -978,8 +1035,7 @@ set -euo pipefail
 		"test --config=test-optimization --build_event_json_file=" + twoBEPPath + " //pkg:two_test",
 		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
 		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
-		"uploader-dry-run-report.json --dry-run --validate-enrichment",
-		"uploader-upload-report.json",
+		"uploader-report.json --validate-enrichment",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
@@ -1006,6 +1062,63 @@ set -euo pipefail
 		if !strings.Contains(string(bepBytes), `"label":"`+entry.label+`"`) {
 			t.Fatalf("BEP file %s missing label %s:\n%s", entry.path, entry.label, bepBytes)
 		}
+	}
+}
+
+func TestValidationScriptUploadsAfterPartialFailures(t *testing.T) {
+	dir := t.TempDir()
+	fakeBazel := filepath.Join(dir, "bazel")
+	logPath := filepath.Join(dir, "bazel.log")
+	fakeBazelScript := `#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$BAZEL_LOG"
+if [[ "${1:-}" == "test" ]]; then exit 7; fi
+if [[ "${1:-}" == "run" && "$*" == *"//:dd_test_optimization_doctor"* ]]; then exit 8; fi
+if [[ "${1:-}" == "run" && "$*" == *"//:dd_upload_payloads"*"--dry-run"* ]]; then exit 9; fi
+if [[ "${1:-}" == "run" && "$*" == *"//:dd_upload_payloads"* ]]; then exit 10; fi
+exit 0
+`
+	if err := os.WriteFile(fakeBazel, []byte(fakeBazelScript), 0o755); err != nil {
+		t.Fatalf("write fake bazel: %v", err)
+	}
+
+	script, err := validationScript(config{
+		printValidationScript:  true,
+		bazelCommand:           fakeBazel,
+		bazelConfig:            "test-optimization",
+		syncRepoName:           defaultSyncRepoName,
+		validationDoctorTarget: "//:dd_test_optimization_doctor",
+		validationUploadTarget: "//:dd_upload_payloads",
+		expectedTargets:        []string{"//pkg:go_default_test"},
+		minFreeDiskGB:          defaultMinFreeDiskGB,
+	})
+	if err != nil {
+		t.Fatalf("validationScript error: %v", err)
+	}
+	scriptPath := filepath.Join(dir, "validate.sh")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write validation script: %v", err)
+	}
+
+	cmd := exec.Command("bash", scriptPath, "--upload")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "BAZEL_LOG="+logPath)
+	output, err := cmd.CombinedOutput()
+	exitErr, ok := err.(*exec.ExitError)
+	if !ok || exitErr.ExitCode() != 7 {
+		t.Fatalf("validation script error=%v, want test exit 7\n%s", err, output)
+	}
+
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read fake bazel log: %v", err)
+	}
+	logText := string(logBytes)
+	if got := strings.Count(logText, "run --config=test-optimization //:dd_upload_payloads"); got != 1 {
+		t.Fatalf("uploader command count=%d, want one validated real upload:\n%s", got, logText)
+	}
+	if strings.Contains(logText, "--dry-run") ||
+		!strings.Contains(logText, "uploader-report.json --validate-enrichment") {
+		t.Fatalf("validation script did not run one validated real upload:\n%s", logText)
 	}
 }
 
@@ -1053,8 +1166,7 @@ func TestValidationScriptUsesBepArtifactSourceForZippedOutputs(t *testing.T) {
 		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=",
 		"--freshness-source=bep --freshness-mode=required --artifact-source=bep",
 		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=",
-		"uploader-dry-run-report.json --dry-run --validate-enrichment",
-		"uploader-upload-report.json",
+		"uploader-report.json --validate-enrichment",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
@@ -1250,7 +1362,6 @@ test:old --test_env=DD_GIT_BRANCH=main
 	}
 	for _, want := range []string{
 		`common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`,
-		`build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("migrated managed block missing %q:\n%s", want, text)
@@ -1361,7 +1472,7 @@ git_override(
 
 func TestManagedModuleBlockIncludesPerModuleVersions(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.9.0",
+		orchestrionVersion: "v1.12.0",
 		ddTraceGoVersions: map[string]string{
 			"github.com/DataDog/dd-trace-go/v2":                  "v2.7.0-rc.4",
 			"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -1440,8 +1551,8 @@ git_override(
 
 	cfg := config{
 		moduleFile:          moduleFile,
-		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0",
+		orchestrionVersion:  "v1.12.0",
+		ddTraceGoVersion:    "v2.9.1",
 		rulesGoRemote:       defaultRulesGoRemote,
 		rulesGoVariant:      defaultRulesGoVariant,
 		rulesGoCommitSet:    false,
@@ -1479,8 +1590,8 @@ git_override(
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0",
+    version = "v1.12.0",
+    dd_trace_go_version = "v2.9.1",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 # END Datadog Go Orchestrion bootstrap
@@ -1491,8 +1602,8 @@ use_repo(orchestrion, "rules_go_orchestrion_tool")
 
 	cfg := config{
 		moduleFile:          moduleFile,
-		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0",
+		orchestrionVersion:  "v1.12.0",
+		ddTraceGoVersion:    "v2.9.1",
 		rulesGoRemote:       defaultRulesGoRemote,
 		rulesGoVariant:      "base",
 		ddTraceGoVersionSet: true,
@@ -1529,8 +1640,8 @@ git_override(
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.9.0",
-    dd_trace_go_version = "v2.9.0",
+    version = "v1.12.0",
+    dd_trace_go_version = "v2.9.1",
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 # END Datadog Go Orchestrion bootstrap
@@ -1541,8 +1652,8 @@ use_repo(orchestrion, "rules_go_orchestrion_tool")
 
 	cfg := config{
 		moduleFile:          moduleFile,
-		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0",
+		orchestrionVersion:  "v1.12.0",
+		ddTraceGoVersion:    "v2.9.1",
 		rulesGoRemote:       defaultRulesGoRemote,
 		ddTraceGoVersionSet: true,
 	}
@@ -1575,8 +1686,8 @@ func TestPatchModuleFileRequiresRulesGoCommitWhenNoPublishedSourceExists(t *test
 
 	cfg := config{
 		moduleFile:          moduleFile,
-		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0",
+		orchestrionVersion:  "v1.12.0",
+		ddTraceGoVersion:    "v2.9.1",
 		rulesGoRemote:       defaultRulesGoRemote,
 		rulesGoVariant:      defaultRulesGoVariant,
 		ddTraceGoVersionSet: true,
@@ -1669,8 +1780,8 @@ func TestWriteOrchestrionToolFileWritesManagedImports(t *testing.T) {
 
 func TestBootstrapSyncCommandsTargetedModeAvoidsGoModTidy(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.9.0",
-		ddTraceGoVersion:   "v2.9.0",
+		orchestrionVersion: "v1.12.0",
+		ddTraceGoVersion:   "v2.9.1",
 		goModSync:          "targeted",
 	}
 
@@ -1678,7 +1789,7 @@ func TestBootstrapSyncCommandsTargetedModeAvoidsGoModTidy(t *testing.T) {
 	if len(got) < 3 {
 		t.Fatalf("bootstrapSyncCommands returned too few commands: %#v", got)
 	}
-	if strings.Join(got[0], " ") != "mod edit -require=github.com/DataDog/orchestrion@v1.9.0" {
+	if strings.Join(got[0], " ") != "mod edit -require=github.com/DataDog/orchestrion@v1.12.0" {
 		t.Fatalf("first bootstrap sync command=%q, want orchestrion version pin", strings.Join(got[0], " "))
 	}
 	joined := strings.Join(flattenCommands(got), "\n")
@@ -1700,10 +1811,10 @@ func TestBootstrapSyncCommandsTargetedModeAvoidsGoModTidy(t *testing.T) {
 		}
 	}
 	expectedDownloads := []string{
-		"github.com/DataDog/orchestrion@v1.9.0",
-		"github.com/DataDog/dd-trace-go/v2@v2.9.0",
-		"github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0",
-		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0",
+		"github.com/DataDog/orchestrion@v1.12.0",
+		"github.com/DataDog/dd-trace-go/v2@v2.9.1",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1",
 	}
 	for _, moduleVersion := range expectedDownloads {
 		want := "mod download " + moduleVersion
@@ -1720,8 +1831,8 @@ func TestBootstrapSyncCommandsTargetedModeAvoidsGoModTidy(t *testing.T) {
 
 func TestBootstrapSyncCommandsDefaultsToTargetedMode(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.9.0",
-		ddTraceGoVersion:   "v2.9.0",
+		orchestrionVersion: "v1.12.0",
+		ddTraceGoVersion:   "v2.9.1",
 	}
 
 	joined := strings.Join(flattenCommands(bootstrapSyncCommands(cfg)), "\n")
@@ -1735,8 +1846,8 @@ func TestBootstrapSyncCommandsDefaultsToTargetedMode(t *testing.T) {
 
 func TestBootstrapSyncCommandsTidyModeKeepsExplicitGoModTidy(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.9.0",
-		ddTraceGoVersion:   "v2.9.0",
+		orchestrionVersion: "v1.12.0",
+		ddTraceGoVersion:   "v2.9.1",
 		goModSync:          "tidy",
 	}
 
@@ -1748,8 +1859,8 @@ func TestBootstrapSyncCommandsTidyModeKeepsExplicitGoModTidy(t *testing.T) {
 
 func TestBootstrapSyncCommandsOffModeSkipsGoCommands(t *testing.T) {
 	cfg := config{
-		orchestrionVersion: "v1.9.0",
-		ddTraceGoVersion:   "v2.9.0",
+		orchestrionVersion: "v1.12.0",
+		ddTraceGoVersion:   "v2.9.1",
 		goModSync:          "off",
 	}
 
@@ -1800,8 +1911,8 @@ exit 0
 		goBinary:            goPath,
 		goModuleDir:         dir,
 		goModSync:           "targeted",
-		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0",
+		orchestrionVersion:  "v1.12.0",
+		ddTraceGoVersion:    "v2.9.1",
 		ddTraceGoVersions:   nil,
 		ddTraceGoVersionSet: true,
 	}
@@ -1840,8 +1951,8 @@ esac
 		goBinary:            goPath,
 		goModuleDir:         dir,
 		goModSync:           "targeted",
-		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0",
+		orchestrionVersion:  "v1.12.0",
+		ddTraceGoVersion:    "v2.9.1",
 		ddTraceGoVersionSet: true,
 	}
 
@@ -2218,9 +2329,9 @@ exit 0
 		goBinary:    goPath,
 		goModuleDir: t.TempDir(),
 		ddTraceGoVersions: map[string]string{
-			"github.com/DataDog/dd-trace-go/v2":                  "v2.9.0",
-			"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0",
-			"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0",
+			"github.com/DataDog/dd-trace-go/v2":                  "v2.9.1",
+			"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1",
+			"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.1",
 		},
 	}
 	if err := warmOrchestrionModuleCache(cfg); err != nil {
@@ -2384,7 +2495,7 @@ func TestEnsureBootstrapCanManageTracerConfigRejectsManualTracerConfig(t *testin
 	content := `module(name = "example")
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.9.0",
+    version = "v1.12.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -2409,7 +2520,7 @@ git_override(
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.9.0",
+    version = "v1.12.0",
     dd_trace_go_versions = {
         "github.com/DataDog/dd-trace-go/v2": "v2.7.0-rc.4",
         "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.8.0-dev.0.20260316165907-0cdd3b7576b7",
@@ -2436,17 +2547,17 @@ func TestParseGoRepositoryDeclarations(t *testing.T) {
 go_repository(
     name = "com_github_datadog_orchestrion",
     importpath = "github.com/DataDog/orchestrion",
-    version = "v1.9.0",
+    version = "v1.12.0",
 )
 
 go_repository(
     name = 'com_github_datadog_dd_trace_go_v2',
     importpath = 'github.com/DataDog/dd-trace-go/v2',
-    version = 'v2.9.0',
+    version = 'v2.9.1',
 )
 `
 	got := parseGoRepositoryDeclarations(content)
-	if got["github.com/DataDog/orchestrion"].version != "v1.9.0" {
+	if got["github.com/DataDog/orchestrion"].version != "v1.12.0" {
 		t.Fatalf("unexpected orchestrion declaration: %#v", got)
 	}
 	if got["github.com/DataDog/dd-trace-go/v2"].name != "com_github_datadog_dd_trace_go_v2" {
@@ -2465,11 +2576,11 @@ func TestParseGoRepositoryDeclarationsIgnoresCommentedBlocks(t *testing.T) {
 go_repository(
     name = "com_github_datadog_orchestrion",
     importpath = "github.com/DataDog/orchestrion",  # active declaration
-    version = "v1.9.0",
+    version = "v1.12.0",
 )
 `
 	got := parseGoRepositoryDeclarations(content)
-	if got["github.com/DataDog/orchestrion"].version != "v1.9.0" {
+	if got["github.com/DataDog/orchestrion"].version != "v1.12.0" {
 		t.Fatalf("commented declaration should be ignored: %#v", got)
 	}
 }
@@ -2477,10 +2588,10 @@ go_repository(
 func TestCheckGoRepositoriesAcceptsMatchingVersions(t *testing.T) {
 	dir := t.TempDir()
 	writeRepositoriesFile(t, filepath.Join(dir, "repositories.bzl"), map[string]string{
-		"github.com/DataDog/orchestrion":                     "v1.9.0",
-		"github.com/DataDog/dd-trace-go/v2":                  "v2.9.0",
-		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0",
-		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0",
+		"github.com/DataDog/orchestrion":                     "v1.12.0",
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.9.1",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.1",
 	})
 	cfg := goRepositoryDiagnosticsTestConfig(dir)
 	if err := checkGoRepositories(cfg, false); err != nil {
@@ -2492,9 +2603,9 @@ func TestCheckGoRepositoriesRejectsStaleVersionWithActionableMessage(t *testing.
 	dir := t.TempDir()
 	writeRepositoriesFile(t, filepath.Join(dir, "repositories.bzl"), map[string]string{
 		"github.com/DataDog/orchestrion":                     "v1.8.0",
-		"github.com/DataDog/dd-trace-go/v2":                  "v2.9.0",
-		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0",
-		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0",
+		"github.com/DataDog/dd-trace-go/v2":                  "v2.9.1",
+		"github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1",
+		"github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.1",
 	})
 	cfg := goRepositoryDiagnosticsTestConfig(dir)
 	err := checkGoRepositories(cfg, false)
@@ -2505,7 +2616,7 @@ func TestCheckGoRepositoriesRejectsStaleVersionWithActionableMessage(t *testing.
 	for _, want := range []string{
 		"github.com/DataDog/orchestrion",
 		"v1.8.0",
-		"v1.9.0",
+		"v1.12.0",
 		"--go-repositories-refresh-command",
 		"go_repository(",
 	} {
@@ -2518,7 +2629,7 @@ func TestCheckGoRepositoriesRejectsStaleVersionWithActionableMessage(t *testing.
 func TestCheckGoRepositoriesRejectsMissingModule(t *testing.T) {
 	dir := t.TempDir()
 	writeRepositoriesFile(t, filepath.Join(dir, "repositories.bzl"), map[string]string{
-		"github.com/DataDog/orchestrion": "v1.9.0",
+		"github.com/DataDog/orchestrion": "v1.12.0",
 	})
 	cfg := goRepositoryDiagnosticsTestConfig(dir)
 	err := checkGoRepositories(cfg, false)
@@ -2545,10 +2656,10 @@ func TestCheckGoRepositoriesRefreshHookRepairsStaleFile(t *testing.T) {
 	refreshPath := filepath.Join(dir, "refresh.sh")
 	if err := os.WriteFile(refreshPath, []byte(`#!/bin/sh
 cat > repositories.bzl <<'EOF'
-go_repository(name = "com_github_datadog_orchestrion", importpath = "github.com/DataDog/orchestrion", version = "v1.9.0")
-go_repository(name = "com_github_datadog_dd_trace_go_v2", importpath = "github.com/DataDog/dd-trace-go/v2", version = "v2.9.0")
-go_repository(name = "com_github_datadog_dd_trace_go_contrib_net_http_v2", importpath = "github.com/DataDog/dd-trace-go/contrib/net/http/v2", version = "v2.9.0")
-go_repository(name = "com_github_datadog_dd_trace_go_contrib_log_slog_v2", importpath = "github.com/DataDog/dd-trace-go/contrib/log/slog/v2", version = "v2.9.0")
+go_repository(name = "com_github_datadog_orchestrion", importpath = "github.com/DataDog/orchestrion", version = "v1.12.0")
+go_repository(name = "com_github_datadog_dd_trace_go_v2", importpath = "github.com/DataDog/dd-trace-go/v2", version = "v2.9.1")
+go_repository(name = "com_github_datadog_dd_trace_go_contrib_net_http_v2", importpath = "github.com/DataDog/dd-trace-go/contrib/net/http/v2", version = "v2.9.1")
+go_repository(name = "com_github_datadog_dd_trace_go_contrib_log_slog_v2", importpath = "github.com/DataDog/dd-trace-go/contrib/log/slog/v2", version = "v2.9.1")
 EOF
 `), 0o755); err != nil {
 		t.Fatalf("write refresh hook: %v", err)
@@ -2592,8 +2703,8 @@ func goRepositoryDiagnosticsTestConfig(dir string) config {
 		workspaceDir:        dir,
 		goRepositoriesFile:  "repositories.bzl",
 		checkGoRepositories: true,
-		orchestrionVersion:  "v1.9.0",
-		ddTraceGoVersion:    "v2.9.0",
+		orchestrionVersion:  "v1.12.0",
+		ddTraceGoVersion:    "v2.9.1",
 		ddTraceGoVersions:   nil,
 		ddTraceGoVersionSet: true,
 	}

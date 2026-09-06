@@ -40,7 +40,7 @@ SNAPSHOT_DIR="$REPO_ROOT/tools/tests/integration/snapshots"
 PYTHON="${PYTHON:-python3}"
 # Keep the mock-server harness aligned with the supported Orchestrion version
 # under test instead of relying on the old hardcoded bootstrap tag.
-ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
+ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
 export ORCHESTRION_VERSION
 GO_VERSION="${GO_VERSION:-1.25.0}"
 RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
@@ -292,6 +292,12 @@ sh_test(
 
 dd_payload_uploader(
     name = "dd_upload_payloads",
+    use_python_uploader = False,
+)
+
+dd_payload_uploader(
+    name = "dd_upload_payloads_python",
+    workers = 3,
 )
 
 dd_payload_uploader(
@@ -922,6 +928,62 @@ if grep -qiE "DD_API_KEY mismatch|API[ _-]?key mismatch" "$UPLOADER_LOG"; then
   cat "$UPLOADER_LOG" || true
   exit 1
 fi
+
+# Exercise the default Python implementation through its real Bazel launcher and
+# the same three protocol sources used by the legacy baseline above. Keep the
+# source files so both implementations can run in one deterministic scenario.
+PYTHON_UPLOAD_LOG_START="$(log_line_count)"
+PYTHON_UPLOADER_LOG="$TMP_WS/uploader_python.log"
+if ! TESTLOGS_DIR="$TESTLOGS_DIR" \
+BUILD_WORKSPACE_DIRECTORY="$WORKSPACE_FOR_UPLOADER" \
+DD_TEST_OPTIMIZATION_CODEOWNERS_FILE="$CODEOWNERS_FOR_UPLOADER" \
+DD_API_KEY=mock \
+DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1 \
+DD_TEST_OPTIMIZATION_AGENTLESS_URL="http://127.0.0.1:$PORT" \
+DD_TEST_OPTIMIZATION_MAX_WAIT_SEC=30 \
+DD_TEST_OPTIMIZATION_QUIESCENT_SEC=1 \
+DD_TEST_OPTIMIZATION_AGENT_URL= \
+"$BAZEL" "${BAZEL_FLAGS[@]}" run //:dd_upload_payloads_python \
+  "${REPO_ENVS[@]}" -- --debug >"$PYTHON_UPLOADER_LOG" 2>&1; then
+  echo "error: default Python uploader command failed"
+  cat "$PYTHON_UPLOADER_LOG" || true
+  exit 1
+fi
+if ! grep -q "summary: mode=upload result=success exit_code=0 workers=3" "$PYTHON_UPLOADER_LOG"; then
+  echo "error: default Python uploader did not emit the expected final statistics"
+  cat "$PYTHON_UPLOADER_LOG" || true
+  exit 1
+fi
+LOG_FILE="$LOG_FILE" LOG_START="$PYTHON_UPLOAD_LOG_START" "$PYTHON" - <<'PY'
+import json
+import os
+import sys
+
+expected = {
+    "/api/v2/citestcycle",
+    "/api/v2/citestcov",
+    "/api/v2/apmtelemetry",
+}
+start = int(os.environ["LOG_START"])
+paths = set()
+with open(os.environ["LOG_FILE"], "r", encoding="utf-8") as handle:
+    for index, line in enumerate(handle):
+        if index < start:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        path = record.get("path")
+        if isinstance(path, str):
+            paths.add(path)
+
+missing = sorted(expected - paths)
+if missing:
+    print("error: default Python uploader missed protocol endpoints:", missing)
+    print("seen:", sorted(paths))
+    sys.exit(1)
+PY
 
 # Scenario: CI defaults to cache-safe uploads. If no BEP or legacy execution log
 # is available, the uploader must fail closed unless the caller opts out explicitly.
@@ -3188,7 +3250,7 @@ cat > "$BOOT_WS/bin/go" <<'FAKE_GO_EOF'
 #!/bin/sh
 set -eu
 
-ORCH_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
+ORCH_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
 
 # The plain bootstrap scenario still validates file edits, but deterministic
 # proxy generation now resolves real modules during repository bootstrap. Keep
@@ -3272,9 +3334,9 @@ fi
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
     github.com/DataDog/orchestrion@${ORCH_VERSION}|\
-    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
       run_real_go "$@"
       exit 0
       ;;
@@ -3295,9 +3357,9 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
       ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
       exit 0
       ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
       module_and_version="${3#-require=}"
       module_path="${module_and_version%@*}"
       version="${module_and_version##*@}"
@@ -3307,8 +3369,8 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0"
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.1" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.1"
   exit 0
 fi
 
@@ -3322,7 +3384,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0\n'
+      printf 'v2.9.1\n'
       exit 0
       ;;
   esac
@@ -3330,10 +3392,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
-      printf '{"Version":"v2.9.0"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
+      printf '{"Version":"v2.9.1"}\n'
       exit 0
       ;;
   esac
@@ -3348,7 +3410,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0"}\n'
+      printf '{"Version":"v2.9.1"}\n'
       exit 0
       ;;
   esac
@@ -3522,7 +3584,7 @@ cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
 #!/bin/sh
 set -eu
 
-ORCH_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
+ORCH_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
 
 # The guided bootstrap scenario later builds a real Go test, so the fake Go
 # tool delegates the download-heavy paths to the host Go binary using temporary
@@ -3605,9 +3667,9 @@ fi
 if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
   case "${3:-}" in
     github.com/DataDog/orchestrion@${ORCH_VERSION}|\
-    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
       run_real_go "$@"
       exit 0
       ;;
@@ -3620,9 +3682,9 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
       ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
       exit 0
       ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
+    -require=github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
       module_and_version="${3#-require=}"
       module_path="${module_and_version%@*}"
       version="${module_and_version##*@}"
@@ -3632,8 +3694,8 @@ if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
   esac
 fi
 
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.0" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.0"
+if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.1" ]; then
+  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.1"
   exit 0
 fi
 
@@ -3647,7 +3709,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.0\n'
+      printf 'v2.9.1\n'
       exit 0
       ;;
   esac
@@ -3655,10 +3717,10 @@ fi
 
 if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
   case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.0|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.0)
-      printf '{"Version":"v2.9.0"}\n'
+    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
+    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
+      printf '{"Version":"v2.9.1"}\n'
       exit 0
       ;;
   esac
@@ -3673,7 +3735,7 @@ if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && 
     github.com/DataDog/dd-trace-go/v2|\
     github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
     github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.0"}\n'
+      printf '{"Version":"v2.9.1"}\n'
       exit 0
       ;;
   esac
@@ -4032,13 +4094,6 @@ if ! grep -q 'orchestrion_mode = "test_optimization"' "$GUIDED_BOOT_WS/tools/bui
   exit 1
 fi
 
-# The release tracer pinned by default in this fixture is v2.9.0. The generated
-# wrapper above must still default to test_optimization mode, but that release
-# does not include the unreleased Go testing Orchestrion package needed to build
-# a real instrumented test binary. Run the raw target for this temporary runtime
-# smoke so the integration still validates generated Bazel wiring, staged
-# sources, metadata shape, doctor behavior, and payload discovery without
-# depending on unreleased tracer internals.
 GUIDED_BEP_JSON="$GUIDED_BOOT_WS/.topt/guided-bootstrap.bep.json"
 mkdir -p "$(dirname "$GUIDED_BEP_JSON")"
 rm -f "$GUIDED_BEP_JSON"
@@ -4046,7 +4101,7 @@ rm -f "$GUIDED_BEP_JSON"
   cd "$GUIDED_BOOT_WS"
   "$BAZEL" "${BAZEL_FLAGS[@]}" test --config=test-optimization \
     --build_event_json_file="$GUIDED_BEP_JSON" \
-    //src/go-project:hello_test__raw_go_test \
+    //src/go-project:hello_test \
     "${BAZEL_TEST_FLAGS[@]}" \
     "${REPO_ENVS[@]}"
 )
@@ -4071,7 +4126,7 @@ import sys
 import zipfile
 from pathlib import Path
 
-root = Path(os.environ["GUIDED_TESTLOGS_DIR"]) / "src" / "go-project" / "hello_test__raw_go_test"
+root = Path(os.environ["GUIDED_TESTLOGS_DIR"]) / "src" / "go-project" / "hello_test"
 direct_path = root / "test.outputs" / "bazel_target_metadata.json"
 payload = None
 source = ""
@@ -4425,13 +4480,8 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   cat "$UPLOADER_DRY_RUN_LOG" || true
   exit 1
 fi
-if ! grep -q "dry-run validated enriched test payload" "$UPLOADER_DRY_RUN_LOG"; then
-  echo "error: uploader dry-run did not validate enriched test payloads"
-  cat "$UPLOADER_DRY_RUN_LOG" || true
-  exit 1
-fi
-if ! grep -q "dry-run done" "$UPLOADER_DRY_RUN_LOG"; then
-  echo "error: uploader dry-run did not finish in dry-run mode"
+if ! grep -q "summary: mode=dry-run result=success exit_code=0" "$UPLOADER_DRY_RUN_LOG"; then
+  echo "error: uploader did not report a successful enrichment dry-run"
   cat "$UPLOADER_DRY_RUN_LOG" || true
   exit 1
 fi
@@ -4689,7 +4739,7 @@ DD_TEST_OPTIMIZATION_AGENT_URL= \
   exit 1
 fi
 
-if ! grep -q "no bundled context matched repo 'missing_runtime_repo'" "$UPLOADER_MULTI_CONTEXT_MISS_LOG"; then
+if ! grep -q "warning_code=context_repo_not_found" "$UPLOADER_MULTI_CONTEXT_MISS_LOG"; then
   echo "error: missing expected warning for unmatched multi-context payload"
   cat "$UPLOADER_MULTI_CONTEXT_MISS_LOG" || true
   exit 1
@@ -6104,7 +6154,7 @@ PY
 
 # Scenario: when no tracer message-batch exists, the uploader should keep the
 # raw tracer telemetry files intact, normalize outbound env across the matched
-# tracer set, and send one synthetic tracer-derived batch after the normal loop.
+# tracer set, and send one synthetic tracer-derived batch from the anchor file.
 TELEMETRY_SYNTH_TESTLOGS="$TMP_WS/telemetry_synth_testlogs"
 TELEMETRY_SYNTH_DIR="$TELEMETRY_SYNTH_TESTLOGS/manual_telemetry_synth/test.outputs/payloads/telemetry"
 mkdir -p "$TELEMETRY_SYNTH_DIR"
@@ -6189,11 +6239,11 @@ if len(telemetry_records) != 3:
 
 decoded = [json.loads(base64.b64decode(rec["body_b64"]).decode("utf-8")) for rec in telemetry_records]
 request_types = [payload.get("request_type") for payload in decoded]
-if request_types != ["app-started", "app-closing", "message-batch"]:
-    print(f"error: synthetic scenario expected message-batch after raw tracer uploads, saw {request_types!r}")
+if sorted(request_types) != ["app-closing", "app-started", "message-batch"]:
+    print(f"error: synthetic scenario expected one upload of each request type, saw {request_types!r}")
     sys.exit(1)
 
-synthetic = decoded[-1]
+synthetic = next(payload for payload in decoded if payload.get("request_type") == "message-batch")
 if synthetic.get("runtime_id") != "synthetic-runtime":
     print("error: synthetic telemetry should preserve runtime_id from tracer anchor")
     sys.exit(1)
@@ -6214,7 +6264,7 @@ for message in synthetic.get("payload", []):
 if "git_requests.settings" not in metric_names or "known_tests.response_tests" not in metric_names:
     print(f"error: synthetic telemetry missing expected rule metrics: {metric_names!r}")
     sys.exit(1)
-for raw_payload in decoded[:-1]:
+for raw_payload in (payload for payload in decoded if payload is not synthetic):
     raw_app = raw_payload.get("application") or {}
     if raw_app.get("env") != "ci":
         print(f"error: raw tracer uploads should also rewrite application.env from facts, saw {raw_app.get('env')!r}")

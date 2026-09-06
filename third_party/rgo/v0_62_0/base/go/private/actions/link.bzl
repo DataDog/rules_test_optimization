@@ -98,6 +98,8 @@ def _orchestrion_pin_file_inputs(go, allowed_pin_files):
 def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
     if not go.orchestrion:
         return False
+    if getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION:
+        return False
 
     # Synthetic testmain compile already produced the Datadog helper packagefile
     # manifest that final link needs. Keep that final test-binary link on the
@@ -106,8 +108,9 @@ def _orchestrion_enabled_for_link(go, synthetic_testmain_manifest):
     return synthetic_testmain_manifest == None
 
 def _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion):
+    if not go.orchestrion:
+        return False
     if (
-        go.orchestrion and
         getattr(go, "orchestrion_mode", "") == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
         synthetic_testmain_manifest != None and
         not link_orchestrion
@@ -247,6 +250,8 @@ def emit_link(
     builder_args.add("-main", archive.data.file)
     builder_args.add("-p", archive.data.importmap)
     synthetic_testmain_manifest = getattr(archive.data, "_synthetic_testmain_manifest", None)
+    synthetic_testmain_helpers = getattr(archive.data, "_synthetic_testmain_helpers", None)
+    synthetic_testmain_shared_helpers = getattr(archive.data, "_synthetic_testmain_shared_helpers", None)
     orchestrion_mode = getattr(go, "orchestrion_mode", "general")
     link_orchestrion = _orchestrion_enabled_for_link(go, synthetic_testmain_manifest)
     stdlib_cache_needed_for_link = _stdlib_cache_needed_for_link(go, synthetic_testmain_manifest, link_orchestrion)
@@ -264,6 +269,10 @@ def emit_link(
     inputs_direct = stamp_inputs + [go.sdk.package_list]
     if synthetic_testmain_manifest:
         inputs_direct.append(synthetic_testmain_manifest)
+    if synthetic_testmain_helpers:
+        inputs_direct.append(synthetic_testmain_helpers)
+    if synthetic_testmain_shared_helpers:
+        inputs_direct.append(synthetic_testmain_shared_helpers)
     if go.coverage_enabled and go.coverdata:
         inputs_direct.append(go.coverdata.data.file)
     orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if link_orchestrion else None
@@ -298,8 +307,10 @@ def emit_link(
         # Orchestrion needs the go binary to run `go env GOMOD`
         inputs_direct.append(go.sdk.go)
 
-        # The toolexec path may resolve woven dependencies during linking too,
-        # so keep the SDK source tree available in sandboxed executions.
+        # The toolexec path may resolve and compile woven dependencies during
+        # linking, so keep the SDK source tree and assembly headers available
+        # in sandboxed executions.
+        inputs_transitive.append(go.sdk.headers)
         inputs_transitive.append(go.sdk.srcs)
         if getattr(go, "orchestrion_module_proxy_files", None):
             inputs_transitive.append(go.orchestrion_module_proxy_files)

@@ -42,6 +42,11 @@ def _declare_synthetic_testmain_manifest(go, source, pre_ext):
         return None
     return go.declare_file(go, name = source.name, ext = pre_ext + ".a.orchestrion.pack")
 
+def _declare_synthetic_testmain_helpers(go, source, pre_ext):
+    if not go.orchestrion or not source.name.endswith("~testmain"):
+        return None
+    return go.declare_directory(go, name = source.name, ext = pre_ext + ".a.orchestrion.helpers")
+
 def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_deps = None, is_external_pkg = False):
     """See go/toolchains.rst#archive for full documentation."""
 
@@ -60,6 +65,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
         pre_ext += _recompile_suffix
     out_lib = go.declare_file(go, name = source.name, ext = pre_ext + ".a")
     out_synthetic_testmain_manifest = _declare_synthetic_testmain_manifest(go, source, pre_ext)
+    out_synthetic_testmain_helpers = _declare_synthetic_testmain_helpers(go, source, pre_ext)
 
     # store export information for compiling dependent packages separately
     out_export = go.declare_file(go, name = source.name, ext = pre_ext + ".x")
@@ -132,6 +138,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
             out_lib = out_lib,
             out_export = out_export,
             out_synthetic_testmain_manifest = out_synthetic_testmain_manifest,
+            out_synthetic_testmain_helpers = out_synthetic_testmain_helpers,
             out_facts = out_facts,
             out_diagnostics = out_diagnostics,
             out_nogo_validation = out_nogo_validation,
@@ -164,6 +171,7 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
             out_lib = out_lib,
             out_export = out_export,
             out_synthetic_testmain_manifest = out_synthetic_testmain_manifest,
+            out_synthetic_testmain_helpers = out_synthetic_testmain_helpers,
             out_facts = out_facts,
             out_diagnostics = out_diagnostics,
             out_nogo_validation = out_nogo_validation,
@@ -208,10 +216,12 @@ def emit_archive(go, source = None, _recompile_suffix = "", recompile_internal_d
         # Information needed by dependents
         file = out_lib,
         export_file = out_export,
-        # Synthetic Bazel testmain archives carry a sidecar manifest that pins
-        # the Datadog helper packagefiles selected during compile. Final GoLink
-        # must reuse that same helper family instead of regenerating a new one.
+        # Synthetic Bazel testmain archives carry a sidecar manifest and a
+        # declared tree with compile-time Datadog helper archives. Final GoLink
+        # reuses both so it can run in a different sandbox or remote worker.
         _synthetic_testmain_manifest = out_synthetic_testmain_manifest,
+        _synthetic_testmain_helpers = out_synthetic_testmain_helpers,
+        _synthetic_testmain_shared_helpers = getattr(go.stdlib, "_synthetic_testmain_helpers", None) if out_synthetic_testmain_manifest else None,
         facts_file = out_facts,
         runfiles = source.runfiles,
         _validation_output = out_nogo_validation,

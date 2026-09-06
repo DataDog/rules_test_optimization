@@ -175,12 +175,19 @@ else
     //tests/core/cross:proto_test \
     //tests/legacy/info:info \
     //tests/legacy/providers:source_test
-  # custom_test creates WORKSPACE-style nested Bazel workspaces through
-  # go/tools/bazel_testing. Bazel 8 requires WORKSPACE mode to be enabled
-  # explicitly in those recursive invocations.
-  bazel_test \
-    --test_env="GO_BAZEL_TEST_BAZELFLAGS=${nested_workspace_flags}" \
-    //tests/core/nogo/custom:custom_test
+  if [[ "${RULES_GO_UPSTREAM}" == "v0_63_0" ]]; then
+    # rules_go v0.63 migrated bazel_testing fixtures to Bzlmod. Its generated
+    # MODULE.bazel owns rules_cc and the empty Orchestrion repository, so the
+    # WORKSPACE compatibility overrides below would break repository mapping.
+    bazel_test //tests/core/nogo/custom:custom_test
+  else
+    # Older variants create WORKSPACE-style nested Bazel workspaces through
+    # go/tools/bazel_testing. Bazel 8 requires WORKSPACE mode to be enabled
+    # explicitly in those recursive invocations.
+    bazel_test \
+      --test_env="GO_BAZEL_TEST_BAZELFLAGS=${nested_workspace_flags}" \
+      //tests/core/nogo/custom:custom_test
+  fi
 fi
 bazel_test //tests/core/c_linkmodes:c-archive_test
 if [[ "${host_os}" == "Darwin" && "${host_arch}" == "arm64" ]]; then

@@ -106,18 +106,18 @@ func normalizeGoCompilerCommandEnv(env []string) []string {
 		if value == "" {
 			continue
 		}
-		args, err := splitGoCommandArgs(value)
-		if err != nil || len(args) == 0 {
-			continue
-		}
-		toolPath := args[0]
-		if goCompilerPathIsAlreadyValid(toolPath) {
-			continue
-		}
-		args[0] = absolutePathFromBase(toolPath, moduleProxyResolutionBaseDir)
-		env = setEnv(env, name, quoteCommandArgs(args))
+		env = setEnv(env, name, normalizeGoCompilerCommand(value, moduleProxyResolutionBaseDir))
 	}
 	return env
+}
+
+func normalizeGoCompilerCommand(value, baseDir string) string {
+	args, err := splitGoCommandArgs(value)
+	if err != nil || len(args) == 0 || goCompilerPathIsAlreadyValid(args[0]) {
+		return value
+	}
+	args[0] = absolutePathFromBase(args[0], baseDir)
+	return quoteCommandArgs(args)
 }
 
 // goCompilerPathIsAlreadyValid mirrors Go's CC/CXX/FC validation: absolute

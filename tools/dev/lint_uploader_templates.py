@@ -5,23 +5,25 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Lint standalone uploader runtime template files."""
+"""Parse every generated uploader runtime and launcher template.
+
+Central linting keeps legacy and Python rollout entrypoints in the same CI gate.
+"""
 
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
-
-import re
 
 _TOKEN_RE = re.compile(r"__DDTPL_[A-Z0-9_]+__")
 
 
 def _repo_root() -> Path:
-    """Internal helper for repo root behavior."""
+    """Find the checkout root so linting works from any current directory."""
     here = Path(__file__).resolve().parent
     for candidate in [here] + list(here.parents):
         if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
@@ -30,22 +32,17 @@ def _repo_root() -> Path:
 
 
 def _normalize_bash_template_for_lint(template: str) -> str:
-    # Runtime templates carry __DDTPL_*__ tokens; replace them with deterministic
-    # literals so shellcheck parses render-equivalent syntax.
-    """Internal helper for normalize bash template for lint behavior."""
-    normalized = _TOKEN_RE.sub("0", template)
-    return normalized
+    """Replace generated tokens with shellcheck-safe scalar values."""
+    return _TOKEN_RE.sub("0", template)
 
 
 def _normalize_powershell_template_for_lint(template: str) -> str:
-    # Keep parser checks deterministic by replacing token placeholders with
-    # scalar literals.
-    """Internal helper for normalize powershell template for lint behavior."""
+    """Replace generated tokens with PowerShell-parser-safe scalar values."""
     return _TOKEN_RE.sub("0", template)
 
 
 def _lint_batch_template(template: str) -> None:
-    """Internal helper for lint batch template behavior."""
+    """Check the small batch wrapper contract not covered by a parser."""
     if "__DDTPL_PS_NAME__" not in template:
         raise RuntimeError("batch template missing __DDTPL_PS_NAME__ placeholder")
     normalized = _TOKEN_RE.sub("dd_upload_payloads.ps1", template).lower()
@@ -58,20 +55,26 @@ def _lint_batch_template(template: str) -> None:
 
 
 def _run(cmd: list[str], cwd: Path) -> None:
-    """Internal helper for run behavior."""
+    """Run one required linter and turn tool failures into useful diagnostics."""
     try:
-        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+        completed = subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
     except FileNotFoundError as exc:
         raise RuntimeError(f"required command not found: {cmd[0]}") from exc
-    if proc.returncode != 0:
-        stderr = proc.stderr.strip()
-        stdout = proc.stdout.strip()
+    if completed.returncode != 0:
+        stderr = completed.stderr.strip()
+        stdout = completed.stdout.strip()
         detail = stderr or stdout or "unknown error"
         raise RuntimeError(f"{' '.join(cmd)} failed: {detail}")
 
 
 def main() -> int:
-    """Run CLI entrypoint logic and return process exit code."""
+    """Lint all rollout templates and return a process-compatible status."""
     parser = argparse.ArgumentParser(description="Lint uploader runtime template files")
     parser.add_argument(
         "--skip-shellcheck",
@@ -86,26 +89,27 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = _repo_root()
-    bash_tpl = repo / "tools/core/uploader_bash_runtime.sh.tpl"
-    ps_tpl = repo / "tools/core/uploader_powershell_runtime.ps1.tpl"
-    batch_tpl = repo / "tools/core/uploader_batch_runtime.bat.tpl"
-    bash_template = _normalize_bash_template_for_lint(bash_tpl.read_text(encoding="utf-8"))
-    ps_template = _normalize_powershell_template_for_lint(ps_tpl.read_text(encoding="utf-8"))
-    batch_template = batch_tpl.read_text(encoding="utf-8")
+    bash_templates = (
+        repo / "tools/core/uploader_bash_runtime.sh.tpl",
+        repo / "tools/core/uploader_python_launcher.sh.tpl",
+    )
+    powershell_templates = (
+        repo / "tools/core/uploader_powershell_runtime.ps1.tpl",
+        repo / "tools/core/uploader_python_launcher.ps1.tpl",
+    )
+    batch_template_path = repo / "tools/core/uploader_batch_runtime.bat.tpl"
+    batch_template = batch_template_path.read_text(encoding="utf-8")
 
-    with tempfile.TemporaryDirectory(prefix="uploader_template_lint.") as tmp:
-        tmp_dir = Path(tmp)
-        bash_file = tmp_dir / "uploader_template.sh"
-        ps_file = tmp_dir / "uploader_template.ps1"
-        ps_parse_file = tmp_dir / "parse_template.ps1"
-        bash_file.write_text(bash_template, encoding="utf-8")
-        ps_file.write_text(ps_template, encoding="utf-8")
-        ps_parse_file.write_text(
+    with tempfile.TemporaryDirectory(prefix="uploader_template_lint.") as temporary:
+        temporary_root = Path(temporary)
+        powershell_parser_path = temporary_root / "parse_template.ps1"
+        powershell_parser_path.write_text(
             (
                 "param([string]$TemplatePath)\n"
                 "$tokens = $null\n"
                 "$errors = $null\n"
-                "[System.Management.Automation.Language.Parser]::ParseFile($TemplatePath, [ref]$tokens, [ref]$errors) | Out-Null\n"
+                "[System.Management.Automation.Language.Parser]::ParseFile("
+                "$TemplatePath, [ref]$tokens, [ref]$errors) | Out-Null\n"
                 "if ($errors -and $errors.Count -gt 0) {\n"
                 "  $errors | ForEach-Object { Write-Error $_ }\n"
                 "  exit 1\n"
@@ -115,21 +119,37 @@ def main() -> int:
         )
 
         if not args.skip_shellcheck:
-            _run(["shellcheck", "--severity=error", str(bash_file)], repo)
+            for index, template_path in enumerate(bash_templates):
+                bash_file = temporary_root / f"uploader_template_{index}.sh"
+                bash_file.write_text(
+                    _normalize_bash_template_for_lint(
+                        template_path.read_text(encoding="utf-8")
+                    ),
+                    encoding="utf-8",
+                )
+                _run(["shellcheck", "--severity=error", str(bash_file)], repo)
 
         if not args.skip_powershell_parse:
-            _run(
-                [
-                    "pwsh",
-                    "-NoProfile",
-                    "-NonInteractive",
-                    "-File",
-                    str(ps_parse_file),
-                    "-TemplatePath",
-                    str(ps_file),
-                ],
-                repo,
-            )
+            for index, template_path in enumerate(powershell_templates):
+                ps_file = temporary_root / f"uploader_template_{index}.ps1"
+                ps_file.write_text(
+                    _normalize_powershell_template_for_lint(
+                        template_path.read_text(encoding="utf-8")
+                    ),
+                    encoding="utf-8",
+                )
+                _run(
+                    [
+                        "pwsh",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-File",
+                        str(powershell_parser_path),
+                        "-TemplatePath",
+                        str(ps_file),
+                    ],
+                    repo,
+                )
     _lint_batch_template(batch_template)
 
     print("uploader template lint: ok")

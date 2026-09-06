@@ -38,12 +38,10 @@ Add these lines to the named config used by test, doctor, and uploader:
 
 ```text
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 ```
 
-The config is the only user-facing switch. Removing
-`--config=test-optimization` disables metadata fetching and selects the local
-empty Orchestrion aliases; no second Test Optimization flag is required.
+The optimized target transition enables Orchestrion. The config remains the
+only user-facing metadata switch; no global Orchestrion flag is required.
 
 Use a commit that is reachable from `origin/main`. Do not publish branch-only
 commits in consumer snippets because squash merges can make them disappear.
@@ -76,7 +74,7 @@ use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.9.0",
+    version = "v1.12.0",
     dd_trace_go_pin_files = [
         "@//:go.mod",
         "@//:go.sum",
@@ -90,14 +88,15 @@ use_repo(orchestrion, "rules_go_orchestrion_tool")
 Guided bootstrap writes this SDK declaration from `--runtime-version`.
 Orchestrion uses the Bazel-managed SDK on cache misses, while a compatible
 bootstrap cache hit can be restored before the SDK repository is materialized.
+For Orchestrion `v1.12.0`, use Go `1.25.0` or newer.
 Do not add SDK or Orchestrion settings to individual service or test targets.
 Export the root `go.mod` and `go.sum` labels from their BUILD package. The
 pin-file mode uses this Bazel-managed SDK with `-mod=readonly` to derive direct
 and transitive supported tracer versions without editing the module.
 
-For newer support lines such as `v0_62_0`, use the base strip prefix printed by
+For newer support lines such as `v0_63_0`, use the base strip prefix printed by
 the bootstrap or onboarding pins summary, for example
-`third_party/rgo/v0_62_0/base`. Repositories that
+`third_party/rgo/v0_63_0/base`. Repositories that
 already own a private `rules_go` patch stack should generate a public consumer
 patch profile and rebase or merge it locally inside that repository instead of
 using a second complete tree. `dd_trace_go_pin_files`,

@@ -36,14 +36,14 @@ Options:
   --doctor-report-json PATH
                            Write the doctor machine-readable report to PATH.
   --uploader-report-json PATH
-                           Write the dry-run uploader machine-readable report to PATH.
+                           Write the uploader machine-readable report to PATH.
   --report-dir PATH        Write doctor/uploader reports under PATH.
   --upload-target LABEL    Uploader target. Defaults to //:dd_upload_payloads.
   --support-bundle PATH    Write a redacted support diagnostics zip to PATH.
   --support-bundle-collector PATH
                            Collector script path. Defaults to create_support_bundle.py beside this wrapper.
   --test-flag FLAG         Extra flag passed to every bazel test invocation.
-  --upload                 Run the real upload after dry-run enrichment validation.
+  --upload                 Upload every available fresh valid payload after validation attempts.
   --no-upload              Skip the real upload. This is the default.
   --keep-tmp               Keep generated BEP and artifact-staging files.
   -h, --help               Show this help.
@@ -186,9 +186,15 @@ if [[ -n "$REPORT_DIR" ]]; then
     DOCTOR_REPORT_JSON="$REPORT_DIR/doctor-report.json"
   fi
   if [[ -z "$UPLOADER_REPORT_JSON" ]]; then
-    UPLOADER_REPORT_JSON="$REPORT_DIR/uploader-dry-run-report.json"
+    if [[ "$DO_UPLOAD" -eq 1 ]]; then
+      UPLOADER_REPORT_JSON="$REPORT_DIR/uploader-upload-report.json"
+    else
+      UPLOADER_REPORT_JSON="$REPORT_DIR/uploader-dry-run-report.json"
+    fi
   fi
-  UPLOAD_REPORT_JSON="$REPORT_DIR/uploader-upload-report.json"
+fi
+if [[ "$DO_UPLOAD" -eq 1 ]]; then
+  UPLOAD_REPORT_JSON="$UPLOADER_REPORT_JSON"
 fi
 command_manifest_json="$tmp_root/support-command-manifest.json"
 
@@ -394,35 +400,24 @@ else
   fi
 fi
 
-if [[ "$doctor_status" -eq 0 ]]; then
-  dry_run_runtime_args=("${runtime_args[@]}")
-  if [[ -n "$UPLOADER_REPORT_JSON" ]]; then
-    dry_run_runtime_args+=("--report-json=$UPLOADER_REPORT_JSON")
-  fi
-  if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${dry_run_runtime_args[@]}" --dry-run --validate-enrichment; then
-    dry_run_status=0
-  else
-    dry_run_status=$?
-    if [[ "$final_status" -eq 0 ]]; then
-      final_status="$dry_run_status"
-    fi
-  fi
-else
-  dry_run_status=0
-fi
-
-if [[ "$doctor_status" -eq 0 && "$dry_run_status" -eq 0 && "$DO_UPLOAD" -eq 1 ]]; then
-  upload_runtime_args=("${runtime_args[@]}")
+uploader_runtime_args=("${runtime_args[@]}")
+if [[ "$DO_UPLOAD" -eq 1 ]]; then
   if [[ -n "$UPLOAD_REPORT_JSON" ]]; then
-    upload_runtime_args+=("--report-json=$UPLOAD_REPORT_JSON")
+    uploader_runtime_args+=("--report-json=$UPLOAD_REPORT_JSON")
   fi
-  if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${upload_runtime_args[@]}"; then
-    :
-  else
-    upload_status=$?
-    if [[ "$final_status" -eq 0 ]]; then
-      final_status="$upload_status"
-    fi
+  uploader_runtime_args+=(--validate-enrichment)
+else
+  if [[ -n "$UPLOADER_REPORT_JSON" ]]; then
+    uploader_runtime_args+=("--report-json=$UPLOADER_REPORT_JSON")
+  fi
+  uploader_runtime_args+=(--dry-run --validate-enrichment)
+fi
+if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${uploader_runtime_args[@]}"; then
+  :
+else
+  uploader_status=$?
+  if [[ "$final_status" -eq 0 ]]; then
+    final_status="$uploader_status"
   fi
 fi
 

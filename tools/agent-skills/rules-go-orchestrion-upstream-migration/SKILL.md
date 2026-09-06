@@ -142,14 +142,12 @@ alias contract from the vendored base tree:
 
 ```bazelrc
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 ```
 
-`--config=test-optimization` is the only user-facing switch. Omitting it must
-leave metadata bootstrap disabled for public Go extension repositories, and
-for low-level repositories explicitly configured with `enabled_by_env = True`,
-while selecting local empty Orchestrion aliases. Do not add a consumer-local
-duplicate bool flag or collapse the real and empty repository rules.
+`--config=test-optimization` is the only user-facing metadata switch. Optimized
+targets enable Orchestrion through their transition. Omitting the config must
+leave metadata bootstrap disabled for public Go extension repositories and for
+low-level repositories explicitly configured with `enabled_by_env = True`.
 
 ## Stop Conditions
 

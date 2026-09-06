@@ -234,6 +234,7 @@ function Render-UploaderTemplate {
     "__DDTPL_SCHEMA_VALIDATOR_PATH__" = ""
     "__DDTPL_BEP_ARTIFACT_STAGE_HELPER_RLOC__" = "tools/core/bep_artifact_stage_helper.py"
     "__DDTPL_DOCTOR_RUNTIME_RLOC__" = "tools/core/test_optimization_doctor.py"
+    "__DDTPL_RUNTIME_SELECTION__" = "false"
     "__DDTPL_RULES_VERSION__" = "integration-test"
   }
   foreach ($entry in $replacements.GetEnumerator()) {
@@ -1173,7 +1174,7 @@ filegroup(
     throw "multi-context uploader dry-run failed with exit code $dryRunExitCode`n$(Get-Content -LiteralPath $dryRunTranscript -Raw -ErrorAction SilentlyContinue)"
   }
   $dryRunOutput = Get-Content -LiteralPath $dryRunTranscript -Raw -Encoding UTF8
-  if (-not $dryRunOutput.Contains("dry-run validated enriched test payload")) {
+  if ($dryRunOutput -notmatch "dry-run validated [1-9][0-9]* test payloads") {
     throw "multi-context uploader dry-run did not validate enriched test payloads"
   }
   if (-not $dryRunOutput.Contains("dry-run done")) {

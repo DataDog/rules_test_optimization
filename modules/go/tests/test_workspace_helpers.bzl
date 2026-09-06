@@ -121,8 +121,8 @@ def _go_workspace_specs_default_to_config_gated_test(ctx):
 def _orchestrion_call_spec_test(ctx):
     env = unittest.begin(ctx)
     call = build_orchestrion_repo_call_for_tests(
-        dd_trace_go_version = "v2.9.0",
-        version = "v1.9.0",
+        dd_trace_go_version = "v2.9.1",
+        version = "v1.12.0",
         go_sdk_root = "@go_sdk//:ROOT",
         go_sdk_version = "1.25.0",
         log_timing = True,
@@ -131,11 +131,11 @@ def _orchestrion_call_spec_test(ctx):
         env,
         {
             "name": "rules_go_orchestrion_tool",
-            "dd_trace_go_version": "v2.9.0",
+            "dd_trace_go_version": "v2.9.1",
             "dd_trace_go_versions": {},
             "dd_trace_go_pin_files": [],
             "enabled_by_env": True,
-            "version": "v1.9.0",
+            "version": "v1.12.0",
             "go_sdk_root": "@go_sdk//:ROOT",
             "go_sdk_version": "1.25.0",
             "log_timing": True,
@@ -152,7 +152,7 @@ def _orchestrion_pin_file_call_spec_test(ctx):
             "@//:go.mod",
             "@//:go.sum",
         ],
-        version = "v1.9.0",
+        version = "v1.12.0",
         go_sdk_root = "@go_sdk//:ROOT",
         go_sdk_version = "1.25.0",
     )

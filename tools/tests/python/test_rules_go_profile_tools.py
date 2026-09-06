@@ -397,8 +397,8 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                 workspace=workspace,
                 rules_go_root=root / "rules_go",
                 go_version="1.25.0",
-                orchestrion_version="v1.9.0",
-                dd_trace_go_version="v2.9.0",
+                orchestrion_version="v1.12.0",
+                dd_trace_go_version="v2.9.1",
             )
 
             workspace_text = (workspace / "WORKSPACE").read_text(encoding="utf-8")
@@ -423,6 +423,58 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                     ["version"],
                     private_safe_patterns=["DENYLIST_SENTINEL"],
                 )
+
+    def test_stdlib_cache_snapshot_accepts_manifested_data_entries(self) -> None:
+        """The determinism verifier accepts only sorted manifested data entries."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            _write(root / "11" / "fmt-d", "woven fmt")
+            _write(root / "aa" / "log-d", "woven log")
+            _write(root / "bb" / "runtime-d", "woven runtime")
+            _write(root / "cc" / "runtime-internal-d", "woven runtime internal")
+            _write(
+                root / ".orchestrion_stdlib_cache_manifest",
+                "fmt=11/fmt-d\n"
+                "log=aa/log-d\n"
+                "runtime=bb/runtime-d\n"
+                "runtime/internal/sys=cc/runtime-internal-d\n",
+            )
+
+            snapshot = self.mod.canonical_tree_inventory(root)
+            self.mod.assert_orchestrion_stdlib_cache(snapshot, Path("profile.patch"))
+            self.assertEqual(
+                snapshot.manifest,
+                "fmt=11/fmt-d\n"
+                "log=aa/log-d\n"
+                "runtime=bb/runtime-d\n"
+                "runtime/internal/sys=cc/runtime-internal-d\n",
+            )
+
+    def test_stdlib_cache_snapshot_rejects_unmanifested_entries(self) -> None:
+        """Action indexes and other unmanifested files fail verification."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            _write(root / "11" / "fmt-d", "woven fmt")
+            _write(root / "11" / "fmt-a", "timestamped index")
+            _write(
+                root / ".orchestrion_stdlib_cache_manifest",
+                "fmt=11/fmt-d\n",
+            )
+
+            snapshot = self.mod.canonical_tree_inventory(root)
+            with self.assertRaisesRegex(ValueError, "unmanifested entries"):
+                self.mod.assert_orchestrion_stdlib_cache(snapshot, Path("profile.patch"))
+
+    def test_plain_stdlib_cache_snapshot_must_be_empty(self) -> None:
+        """Plain mode may declare the cache TreeArtifact but cannot publish files."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            empty = self.mod.canonical_tree_inventory(root)
+            self.mod.assert_plain_stdlib_cache(empty, Path("profile.patch"))
+            _write(root / "trim.txt", "nondeterministic metadata")
+            nonempty = self.mod.canonical_tree_inventory(root)
+            with self.assertRaisesRegex(ValueError, "is not empty"):
+                self.mod.assert_plain_stdlib_cache(nonempty, Path("profile.patch"))
 
 
 if __name__ == "__main__":

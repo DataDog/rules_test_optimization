@@ -224,7 +224,7 @@ their repository placement and local wrapper policy under owner review while
 still using the same Orchestrion-enabled `rules_go` variants.
 
 If no tracer setting is present, the default is still
-`v2.9.0`. Bootstrap keeps the local Go module
+`v2.9.1`. Bootstrap keeps the local Go module
 on the same effective versions, and the Bazel build now fails fast if the
 workspace setting and the local Go module pins drift apart.
 
@@ -307,17 +307,15 @@ in one place.
 Implementation:
 - [topt_go_orchestrion.bzl](../modules/go/topt_go_orchestrion.bzl)
 
-In the enabled path, the wrapper rule applies a function transition that sets
-only:
+In the enabled path, the wrapper rule applies a function transition that sets:
 
 ```bzl
-"@rules_go//go/private/orchestrion:mode": "general" or "test_optimization"
+"@rules_go//go/private/orchestrion:enabled": True,
+"@rules_go//go/private/orchestrion:mode": "general" or "test_optimization",
 ```
 
-The transition deliberately preserves the existing
-`@rules_go//go/private/orchestrion:enabled` setting. The user-facing
-`--config=test-optimization` config enables that setting during analysis;
-omitting the config leaves it at the `rules_go` default of `False`.
+Enablement therefore follows the optimized target edge instead of a global
+build setting. Ordinary tests in a mixed invocation remain untransitioned.
 
 The wrapper then symlinks the executable produced by the raw target and returns
 the same runfiles.
@@ -378,7 +376,7 @@ flowchart LR
     D --> F[go link]
     C --> G[importcfg rewriting]
     C --> H[stdlib cache/export handling]
-    C --> I[synthetic testmain manifest]
+    C --> I[synthetic testmain manifest + helper tree]
     I --> F
 ```
 
@@ -408,13 +406,14 @@ Responsibilities:
 
 - declare the outputs needed by Orchestrion-aware compile and link steps
 - pass the Orchestrion binary into builders
-- pass the synthetic `testmain` manifest sidecar through analysis and execution
+- pass the synthetic `testmain` manifest and declared helper archive tree
+  through analysis and execution
 
 #### Why This Exists
 
 Starlark is where Bazel decides which files and arguments are real. If the
-manifest sidecar or Orchestrion tool are not declared here, the builders cannot
-use them later.
+manifest, its helper archive tree, or the Orchestrion tool are not declared
+here, a later sandbox or remote worker cannot use them.
 
 ### Builder layer
 
@@ -550,10 +549,11 @@ or wrong stdlib selection can poison everything downstream.
 package is special because it is the point where Datadog CI Visibility hooks
 around `testing` become visible in the final test binary.
 
-For synthetic `testmain`, compilepkg generates a sidecar manifest:
+For synthetic `testmain`, compilepkg generates two declared outputs:
 
 - logical manifest name inside the workdir: `orchestrion.pack`
 - declared Bazel sidecar output: `<archive>.a.orchestrion.pack`
+- declared Bazel helper archive tree: `<archive>.a.orchestrion.helpers`
 
 Implementation details:
 
@@ -562,8 +562,10 @@ Implementation details:
 - [compilepkg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/compilepkg.go)
 
 The sidecar records the compile-time `packagefile` directives for the Datadog
-helper packages that synthetic `testmain` was rooted against. That is the
-contract between compile and final link.
+helper packages that synthetic `testmain` was rooted against. Archives created
+outside the execroot are copied into the declared helper tree, and the sidecar
+is rewritten to point there. This makes the compile-to-link contract portable
+across Bazel sandboxes and remote workers.
 
 #### Why This Exists
 
@@ -678,9 +680,10 @@ When linking the Bazel synthetic test binary, the path is more constrained.
 For synthetic test links it:
 
 1. Reads the synthetic `testmain` sidecar manifest
-2. Applies those `packagefile` directives into the link importcfg
-3. Reuses the compile-time Datadog helper root
-4. Completes the broader Datadog closure from that same root when link itself is
+2. Receives the manifest's helper archive tree as a declared Bazel input
+3. Applies those `packagefile` directives into the link importcfg
+4. Reuses the compile-time Datadog helper root
+5. Completes the broader Datadog closure from that same root when link itself is
    still Orchestrion-enabled
 
 In `test_optimization` mode, customer package compiles remain plain and the
@@ -811,7 +814,7 @@ sequenceDiagram
     RG->>RG: compile customer packages
     RG->>Orch: compile woven stdlib as needed
     RG->>Orch: prepare synthetic testmain helper packagefiles
-    RG->>RG: persist synthetic helper manifest sidecar
+    RG->>RG: publish helper archives + manifest as declared outputs
     RG->>RG: link final binary using same helper family
     RG->>Bin: produce instrumented test executable
     Bin->>Bin: emit tracer / CI Visibility runtime
@@ -885,7 +888,8 @@ non-idempotent. Bootstrap is that one place.
 
 ### 3. Synthetic `testmain` compile and final link must share helper state
 
-The sidecar manifest and helper-root reuse are structural, not optional.
+The sidecar manifest, declared helper archive tree, and helper-root reuse are
+structural, not optional.
 
 #### Why This Exists
 

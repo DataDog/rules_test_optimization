@@ -71,7 +71,7 @@ def select_module_group_name(
     return ""
 
 def selected_payload_runfiles(files, include_flaky_tests = False):
-    """Return selected payload files and canonical cache/http symlinks."""
+    """Return selected payload files and canonical cache/http runfiles aliases."""
     selected_files = []
     settings_file = None
     known_tests_file = None
@@ -93,12 +93,13 @@ def selected_payload_runfiles(files, include_flaky_tests = False):
             flaky_tests_file = file
 
     if settings_file == None:
-        return struct(files = selected_files, symlinks = {})
+        return struct(files = selected_files, root_symlinks = {}, symlinks = {})
 
     cache_http_dir = "/".join(settings_file.short_path.split("/")[:-1])
     if not cache_http_dir:
-        return struct(files = selected_files, symlinks = {})
+        return struct(files = selected_files, root_symlinks = {}, symlinks = {})
 
+    root_symlinks = {}
     symlinks = {}
 
     def maybe_add(filename, file):
@@ -106,10 +107,17 @@ def selected_payload_runfiles(files, include_flaky_tests = False):
             return
         canonical_path = cache_http_dir + "/" + filename
         if file.short_path != canonical_path:
-            symlinks[canonical_path] = file
+            if canonical_path.startswith("../"):
+                root_symlinks[canonical_path[3:]] = file
+            else:
+                symlinks[canonical_path] = file
 
     maybe_add("known_tests.json", known_tests_file)
     maybe_add("test_management.json", test_management_file)
     if include_flaky_tests:
         maybe_add("flaky_tests.json", flaky_tests_file)
-    return struct(files = selected_files, symlinks = symlinks)
+    return struct(
+        files = selected_files,
+        root_symlinks = root_symlinks,
+        symlinks = symlinks,
+    )

@@ -16,8 +16,8 @@ them in the workspace root package.
 load("//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
-_DOCTOR_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file"]
-_UPLOADER_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file"]
+_DOCTOR_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file", "runtime_selection"]
+_UPLOADER_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file", "runtime_selection"]
 
 def _copy_kwargs(kwargs, label):
     """Return a defensive copy of optional keyword arguments."""
@@ -57,7 +57,8 @@ def _build_test_optimization_target_specs(
         context_data,
         doctor_kwargs,
         uploader_kwargs,
-        expected_targets_file = None):
+        expected_targets_file = None,
+        runtime_selection = False):
     """Build normalized doctor/uploader attrs without materializing rules.
 
     Args:
@@ -86,7 +87,16 @@ def _build_test_optimization_target_specs(
             ) % doctor_name,
         )
 
-    normalized_context_data = context_data
+    if runtime_selection:
+        if context_data != None:
+            fail("dd_test_optimization_targets: runtime_selection cannot be combined with context_data")
+        if expected_targets:
+            fail("dd_test_optimization_targets: runtime_selection cannot be combined with expected_targets")
+        if expected_targets_file != None:
+            fail("dd_test_optimization_targets: runtime_selection cannot be combined with expected_targets_file")
+        normalized_context_data = []
+    else:
+        normalized_context_data = context_data
     if normalized_context_data == None:
         normalized_context_data = ["@%s//:test_optimization_context" % sync_repo_name]
 
@@ -100,6 +110,7 @@ def _build_test_optimization_target_specs(
         "name": doctor_name,
         "data": normalized_context_data,
         "expected_targets": expected_targets,
+        "runtime_selection": runtime_selection,
     })
     if expected_targets_file != None:
         doctor_attrs["expected_targets_file"] = expected_targets_file
@@ -109,6 +120,7 @@ def _build_test_optimization_target_specs(
         "name": uploader_name,
         "data": normalized_context_data,
         "expected_targets": expected_targets,
+        "runtime_selection": runtime_selection,
     })
     if expected_targets_file != None:
         uploader_attrs["expected_targets_file"] = expected_targets_file
@@ -128,6 +140,7 @@ def dd_test_optimization_targets(
         expected_targets = [],
         expected_targets_file = None,
         context_data = None,
+        runtime_selection = False,
         doctor_kwargs = None,
         uploader_kwargs = None):
     """Create the standard doctor and uploader targets for one workspace.
@@ -150,6 +163,7 @@ def dd_test_optimization_targets(
         context_data = context_data,
         doctor_kwargs = doctor_kwargs,
         uploader_kwargs = uploader_kwargs,
+        runtime_selection = runtime_selection,
     )
     dd_test_optimization_doctor(**specs.doctor_attrs)
     dd_payload_uploader(**specs.uploader_attrs)

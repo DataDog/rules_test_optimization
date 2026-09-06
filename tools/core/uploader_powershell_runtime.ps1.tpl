@@ -382,6 +382,125 @@ function Log-StartTimeStats([string]$FilePath) {
     }
 }
 
+$script:RuntimeSelectionRequired = [System.Convert]::ToBoolean("__DDTPL_RUNTIME_SELECTION__")
+$script:RuntimeExpectedTargets = New-Object System.Collections.Generic.List[string]
+$script:RuntimeContextEntries = [ordered]@{}
+$script:RuntimeTelemetryFacts = New-Object System.Collections.Generic.List[string]
+
+function Assert-RuntimeExpectedTarget([string]$Label) {
+    if (
+        [string]::IsNullOrWhiteSpace($Label) -or
+        $Label -notmatch '^//[^:\s]*:[^:\s]+$' -or
+        $Label.Contains('...') -or
+        $Label.Contains('*') -or
+        $Label.Contains('\')
+    ) {
+        Log "error: --expected-target must be a fully expanded local //pkg:target label, got '$Label'"
+        exit 2
+    }
+}
+
+function Assert-RuntimeContextPair([string]$RepoKey, [string]$ContextPath, [string]$TelemetryPath) {
+    try {
+        $context = Get-Content -LiteralPath $ContextPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        $telemetry = Get-Content -LiteralPath $TelemetryPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Log "error: runtime context/telemetry must contain valid JSON for repository '$RepoKey'"
+        exit 2
+    }
+    $contextRepo = [string]$context.PSObject.Properties['topt.sync.repository_name'].Value
+    $serviceName = [string]$context.PSObject.Properties['service.name'].Value
+    $runtimeName = [string]$context.PSObject.Properties['runtime.name'].Value
+    if (
+        $contextRepo -cne $RepoKey -or
+        [string]::IsNullOrWhiteSpace($serviceName) -or
+        [string]::IsNullOrWhiteSpace($runtimeName) -or
+        [int]$telemetry.schema_version -ne 1 -or
+        [string]$telemetry.service_name -cne $serviceName -or
+        [string]$telemetry.runtime_name -cne $runtimeName -or
+        $null -eq $telemetry.counts -or
+        $null -eq $telemetry.distributions
+    ) {
+        Log "error: runtime context/telemetry identity or schema mismatch for repository '$RepoKey'"
+        exit 2
+    }
+}
+
+function Initialize-RuntimeSelectionArguments {
+    $seenTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    $seenPaths = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    for ($index = 0; $index -lt $args.Count; $index++) {
+        $argument = [string]$args[$index]
+        $value = $null
+        $isTarget = $false
+        if ($argument -eq '--expected-target') {
+            if ($index + 1 -ge $args.Count) { Log 'error: --expected-target requires a local label'; exit 2 }
+            $index++
+            $value = [string]$args[$index]
+            $isTarget = $true
+        } elseif ($argument.StartsWith('--expected-target=')) {
+            $value = $argument.Substring('--expected-target='.Length)
+            $isTarget = $true
+        } elseif ($argument -eq '--context-entry') {
+            if ($index + 1 -ge $args.Count) { Log 'error: --context-entry requires <repo>=<context.json>'; exit 2 }
+            $index++
+            $value = [string]$args[$index]
+        } elseif ($argument.StartsWith('--context-entry=')) {
+            $value = $argument.Substring('--context-entry='.Length)
+        } else {
+            continue
+        }
+
+        if ($isTarget) {
+            Assert-RuntimeExpectedTarget $value
+            if (-not $seenTargets.Add($value)) { Log "error: duplicate --expected-target '$value'"; exit 2 }
+            $script:RuntimeExpectedTargets.Add($value) | Out-Null
+            continue
+        }
+
+        $separator = $value.IndexOf('=')
+        if ($separator -le 0 -or $separator + 1 -ge $value.Length) {
+            Log 'error: --context-entry must use <apparent-repo-name>=<context-json-path>'
+            exit 2
+        }
+        $repoKey = $value.Substring(0, $separator)
+        $rawPath = $value.Substring($separator + 1)
+        if ($repoKey -notmatch '^[A-Za-z0-9._+-]+$') {
+            Log 'error: --context-entry must use <apparent-repo-name>=<context-json-path>'
+            exit 2
+        }
+        $resolved = Resolve-RuntimeFilePath $rawPath
+        if (-not $resolved -or -not (Test-Path -LiteralPath $resolved -PathType Leaf) -or [System.IO.Path]::GetFileName($resolved) -cne 'context.json') {
+            Log "error: context entry for '$repoKey' must reference an existing regular context.json file"
+            exit 2
+        }
+        $resolved = [System.IO.Path]::GetFullPath($resolved)
+        $telemetry = Join-Path (Split-Path -Parent $resolved) 'telemetry_facts.json'
+        if (-not (Test-Path -LiteralPath $telemetry -PathType Leaf)) {
+            Log "error: context entry for '$repoKey' is missing sibling telemetry_facts.json"
+            exit 2
+        }
+        if ($script:RuntimeContextEntries.Contains($repoKey)) { Log "error: duplicate --context-entry repository '$repoKey'"; exit 2 }
+        if (-not $seenPaths.Add($resolved)) { Log "error: duplicate --context-entry path for repository '$repoKey'"; exit 2 }
+        Assert-RuntimeContextPair $repoKey $resolved $telemetry
+        $script:RuntimeContextEntries[$repoKey] = $resolved
+        $script:RuntimeTelemetryFacts.Add([System.IO.Path]::GetFullPath($telemetry)) | Out-Null
+    }
+
+    if ($script:RuntimeSelectionRequired) {
+        if ($script:RuntimeExpectedTargets.Count -eq 0) { Log 'error: runtime selection requires at least one --expected-target'; exit 2 }
+        if ($script:RuntimeContextEntries.Count -eq 0) { Log 'error: runtime selection requires at least one --context-entry'; exit 2 }
+    }
+
+    $sortedEntries = [ordered]@{}
+    foreach ($repoKey in @($script:RuntimeContextEntries.Keys | Sort-Object -CaseSensitive)) {
+        $sortedEntries[$repoKey] = $script:RuntimeContextEntries[$repoKey]
+    }
+    $script:RuntimeContextEntries = $sortedEntries
+}
+
+Initialize-RuntimeSelectionArguments @args
+
 # Resolve context.json path (used by upload functions for payload enrichment).
 # Runtime override wins first so callers can reuse an already-fetched context
 # file without reintroducing sync repo dependencies at uploader run time.
@@ -392,7 +511,7 @@ $ContextJsonPath = "__DDTPL_CONTEXT_JSON_PATH__"
 $TelemetryFactsManifestRloc = "__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__"
 $TelemetryFactsManifestPath = "__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"
 $ContextJsonOverride = $env:DD_TEST_OPTIMIZATION_CONTEXT_JSON
-Dbg "context.json resolution inputs: override='$ContextJsonOverride' path='$ContextJsonPath' rloc='$ContextJsonRloc' manifest_path='$ContextManifestPath' manifest_rloc='$ContextManifestRloc'"
+Dbg "resolving configured context.json and manifest inputs"
 $script:ContextJson = $null
 $script:PrimaryContextJson = $null
 $script:ContextManifest = $null
@@ -449,11 +568,15 @@ function Load-ContextManifestEntries {
         $script:BundledContextEntries[$repoKey] = $resolved
     }
 }
-if ($ContextJsonOverride) {
+if ($script:RuntimeContextEntries.Count -gt 0) {
+    $script:BundledContextEntries = $script:RuntimeContextEntries
+    $script:PrimaryContextJson = @($script:BundledContextEntries.Values)[0]
+    Dbg "runtime contexts selected for repos: $([string]::Join(', ', @($script:BundledContextEntries.Keys)))"
+} elseif ($ContextJsonOverride) {
     $script:PrimaryContextJson = Resolve-ArtifactPath $ContextJsonOverride
     if ($script:PrimaryContextJson) {
         $contextJsonFromOverride = $true
-        Dbg "context.json resolved via runtime override: '$script:PrimaryContextJson'"
+        Dbg "context.json resolved via runtime override"
     } else {
         Log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
     }
@@ -461,20 +584,20 @@ if ($ContextJsonOverride) {
 if (-not $script:PrimaryContextJson) {
     $script:ContextManifest = Resolve-ArtifactPath $ContextManifestPath
     if ($script:ContextManifest) {
-        Dbg "context manifest resolved via direct path: '$script:ContextManifest'"
+        Dbg "context manifest resolved via direct path"
     } elseif ($ContextManifestRloc) {
         $script:ContextManifest = Resolve-Runfile $ContextManifestRloc
         if ($script:ContextManifest) {
-            Dbg "context manifest resolved via runfiles: '$script:ContextManifest'"
+            Dbg "context manifest resolved via runfiles"
         }
     }
     Load-ContextManifestEntries -ManifestPath $script:ContextManifest
     if ($script:BundledContextEntries.Count -gt 0) {
         $script:PrimaryContextJson = @($script:BundledContextEntries.Values)[0]
         if ($script:BundledContextEntries.Count -eq 1) {
-            Dbg "context.json resolved from single bundled context: '$script:PrimaryContextJson'"
+            Dbg "context.json resolved from single bundled context"
         } else {
-            Dbg "primary context.json resolved from bundled manifest: '$script:PrimaryContextJson' (repos=$([string]::Join(', ', @($script:BundledContextEntries.Keys))))"
+            Dbg "primary context.json resolved from bundled manifest (repos=$([string]::Join(', ', @($script:BundledContextEntries.Keys))))"
         }
     }
 }
@@ -482,14 +605,14 @@ if (-not $script:PrimaryContextJson) {
     $script:PrimaryContextJson = Resolve-ArtifactPath $ContextJsonPath
     if ($script:PrimaryContextJson) {
         # Direct artifact path is preferred when launcher preserves it.
-        Dbg "context.json resolved via direct path: '$script:PrimaryContextJson'"
+        Dbg "context.json resolved via direct path"
     } elseif ($ContextJsonRloc) {
         # Runfiles fallback supports manifest-only and bzlmod path variants.
         $script:PrimaryContextJson = Resolve-Runfile $ContextJsonRloc
         if (-not $script:PrimaryContextJson) {
             Log "warning: context.json not found in runfiles; payloads will not be enriched"
         } else {
-            Dbg "context.json resolved via runfiles: '$script:PrimaryContextJson'"
+            Dbg "context.json resolved via runfiles"
         }
     } else {
         Dbg "context.json not configured in data files; enrichment disabled"
@@ -644,6 +767,9 @@ $KeepPayloads = if ($env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS) { Normalize-Bool $e
 $FilterPrefix = if ($env:DD_TEST_OPTIMIZATION_FILTER_PREFIX) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_FILTER_PREFIX } else { Normalize-Bool "__DDTPL_FILTER_PREFIX__" }
 $Debug = if ($env:DD_TEST_OPTIMIZATION_DEBUG) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_DEBUG } else { Normalize-Bool "__DDTPL_DEBUG__" }
 $GzipPayloads = if ($env:DD_TEST_OPTIMIZATION_GZIP) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_GZIP } else { Normalize-Bool "__DDTPL_GZIP_PAYLOADS__" }
+$script:TestPayloadSplitTargetBytes = 4500000
+$script:TestPayloadMaxBytes = 5000000
+$script:UploadResponseLogChars = 2000
 
 # Now that $Debug is set, update the script-level debug mode for Dbg function
 $script:DebugMode = $Debug
@@ -658,6 +784,7 @@ $script:ReportReasonCode = "running"
 $script:ReportReason = "Uploader is still running."
 $script:ReportNextSteps = [System.Collections.Generic.List[string]]::new()
 $script:ReportUploadAttempted = $false
+$script:ReportUploadFailed = $false
 $script:ReportPayloadsDiscoveredTests = 0
 $script:ReportPayloadsDiscoveredCoverage = 0
 $script:ReportPayloadsDiscoveredTelemetry = 0
@@ -706,9 +833,12 @@ $script:FreshnessEligibleLabels = [System.Collections.Generic.HashSet[string]]::
 $script:FreshnessEligibleOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessCachedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkippedOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessSkippedTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$script:FreshnessTestResultLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessRemoteOnlyOutputs = New-Object System.Collections.Generic.List[object]
 $script:FreshnessMissingOutputLabels = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:FreshnessSkipWasWritten = $false
+$script:RemoteOnlyOutputsValidated = $false
 $script:ExpectedTargetsConfigured = $false
 $script:ExpectedTargets = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
 $script:HandledFreshOutputs = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
@@ -725,12 +855,14 @@ $DefaultExpectedEnrichedTags = @(
 )
 
 function Show-Usage {
-    Write-Host "Usage: dd_upload_payloads [--dry-run [--validate-enrichment] [--expected-enriched-tag=TAG ...]]"
+    Write-Host "Usage: dd_upload_payloads [--dry-run] [--validate-enrichment] [--expected-enriched-tag=TAG ...]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  --dry-run                    Enrich and validate payloads without uploading or deleting files."
-    Write-Host "  --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment."
+    Write-Host "  --validate-enrichment        Require key context and Bazel tags after enrichment, before upload."
     Write-Host "  --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags."
+    Write-Host "  --expected-target LABEL       Select one exact local target; repeatable."
+    Write-Host "  --context-entry REPO=PATH     Select one keyed context.json and telemetry sibling; repeatable."
     Write-Host "  --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable."
     Write-Host "  --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto."
     Write-Host "  --freshness-mode MODE        Cache-safety mode: auto, required, optional, or disabled. Default: auto."
@@ -769,6 +901,17 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     }
     if ($arg.StartsWith("--expected-enriched-tag=")) {
         $ExpectedEnrichedTags.Add($arg.Substring("--expected-enriched-tag=".Length)) | Out-Null
+        continue
+    }
+    if ($arg -eq "--expected-target" -or $arg -eq "--context-entry") {
+        if ($i + 1 -ge $args.Count) {
+            Log "error: $arg requires a value"
+            exit 2
+        }
+        $i++
+        continue
+    }
+    if ($arg.StartsWith("--expected-target=") -or $arg.StartsWith("--context-entry=")) {
         continue
     }
     if ($arg -eq "--bep-json") {
@@ -939,10 +1082,6 @@ for ($i = 0; $i -lt $args.Count; $i++) {
     exit 2
 }
 
-if ($ValidateEnrichment -and -not $DryRun) {
-    Log "error: --validate-enrichment requires --dry-run"
-    exit 2
-}
 if ($FreshnessDisabledExplicit) {
     $FreshnessMode = "disabled"
     $ExecutionLogMode = "disabled"
@@ -1132,7 +1271,7 @@ function Set-ClassifiedUploaderResult([int]$ExitCode) {
             @("Use the BEP from the exact matching bazel test invocation and verify each expected target is fresh or exclusively cached.")
         return
     }
-    if ($ExitCode -ne 0 -and -not $script:DryRun -and $script:ReportUploadAttempted -and $script:UploadFailures -gt 0) {
+    if ($ExitCode -ne 0 -and -not $script:DryRun -and $script:ReportUploadFailed) {
         Set-ReportResult "upload_failed_http" `
             "One or more payload uploads failed." `
             @("Check HTTP status diagnostics and Datadog credentials/site configuration.")
@@ -1210,6 +1349,7 @@ function Write-UploaderReport([string]$Status, [int]$ExitCode) {
             remote_only_outputs = Get-ReportCollectionCount $script:FreshnessRemoteOnlyOutputs
             skipped_outputs = Get-ReportCollectionCount $script:FreshnessSkippedOutputs
             missing_output_labels = Get-ReportCollectionCount $script:FreshnessMissingOutputLabels
+            skipped_targets = Get-ReportCollectionCount $script:FreshnessSkippedTargets
         }
         artifacts = [ordered]@{
             source = [string]$script:ArtifactSource
@@ -1391,8 +1531,14 @@ function Stage-BepArtifacts {
     foreach ($bepJson in @($script:BepJsonFiles)) {
         $resolvedBepJson = Resolve-RuntimeFilePath $bepJson
         if ([string]::IsNullOrWhiteSpace($resolvedBepJson) -or -not (Test-Path -LiteralPath $resolvedBepJson -PathType Leaf)) {
-            Log "error: BEP JSON not found for artifact staging: $bepJson"
-            exit 2
+            Log "error: BEP JSON not found for artifact staging: $bepJson; continuing with other BEP files"
+            # BEP freshness normally accounts for this failure later. When it
+            # is disabled or another freshness source owns filtering, staging
+            # is the only phase that observes the missing requested input.
+            if ($script:FreshnessMode -eq "disabled" -or $script:FreshnessSource -eq "execution_log") {
+                $script:UploadFailures++
+            }
+            continue
         }
         $resolvedBepJsonFiles.Add($resolvedBepJson) | Out-Null
     }
@@ -1860,7 +2006,7 @@ if ($Agentless -and -not $script:DryRun) {
 }
 Dbg "headers prepared (agentless=$Agentless; test headers can be derived from metadata)"
 
-Dbg "primary context.json: $(if ([string]::IsNullOrEmpty($script:PrimaryContextJson)) { '<none>' } else { $script:PrimaryContextJson })"
+Dbg "primary context.json $(if ([string]::IsNullOrEmpty($script:PrimaryContextJson)) { 'unavailable' } else { 'available' })"
 
 # Optional check: verify fetch-time API key fingerprint matches uploader API key.
 $ContextFingerprint = $null
@@ -2851,6 +2997,30 @@ function Get-BepFileReferenceCandidates($FileObject) {
   return $values
 }
 
+function Set-ExpectedTargetsWithRuntime($ConfiguredTargets, [bool]$HasConfiguredSource) {
+  $configured = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  foreach ($label in @($ConfiguredTargets)) {
+    if (-not [string]::IsNullOrWhiteSpace([string]$label)) { $configured.Add([string]$label) | Out-Null }
+  }
+  if ($script:RuntimeExpectedTargets.Count -gt 0) {
+    $runtime = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+    foreach ($label in $script:RuntimeExpectedTargets) { $runtime.Add($label) | Out-Null }
+    if (
+      $configured.Count -gt 0 -and
+      ($configured.Count -ne $runtime.Count -or @($configured | Where-Object { -not $runtime.Contains($_) }).Count -gt 0)
+    ) {
+      Log "error: configured and runtime expected targets contain different target sets"
+      exit 2
+    }
+    $configured = $runtime
+  }
+  $script:ExpectedTargets.Clear()
+  foreach ($label in @($configured | Sort-Object -CaseSensitive)) {
+    $script:ExpectedTargets.Add($label) | Out-Null
+  }
+  $script:ExpectedTargetsConfigured = $HasConfiguredSource -or $script:RuntimeExpectedTargets.Count -gt 0
+}
+
 function Initialize-ExpectedTargets {
   $script:ExpectedTargets.Clear()
   $script:ExpectedTargetsConfigured = $false
@@ -2872,8 +3042,7 @@ function Initialize-ExpectedTargets {
     -not [string]::IsNullOrWhiteSpace($script:ExpectedTargetsFileRloc)
   )
   if (-not $dynamicConfigured) {
-    foreach ($label in $staticTargets) { $script:ExpectedTargets.Add($label) | Out-Null }
-    $script:ExpectedTargetsConfigured = $staticTargets.Count -gt 0
+    Set-ExpectedTargetsWithRuntime $staticTargets ($staticTargets.Count -gt 0)
     return
   }
 
@@ -2930,8 +3099,21 @@ function Initialize-ExpectedTargets {
       exit 2
     }
   }
-  foreach ($label in $dynamicTargets) { $script:ExpectedTargets.Add($label) | Out-Null }
-  $script:ExpectedTargetsConfigured = $true
+  Set-ExpectedTargetsWithRuntime $dynamicTargets $true
+}
+
+function Assert-BepFreshnessUnambiguous {
+  $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
+  if ($conflictingOutputs.Count -gt 0) {
+    Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  }
+
+  $conflictingTargets = @($script:FreshnessSkippedTargets | Where-Object { $script:FreshnessTestResultLabels.Contains($_) })
+  if ($conflictingTargets.Count -gt 0) {
+    Log "error: BEP freshness is ambiguous: the same target is reported as both platform-skipped and executed: $($conflictingTargets[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  }
 }
 
 function Initialize-BepEligibility {
@@ -2939,6 +3121,8 @@ function Initialize-BepEligibility {
   $script:FreshnessEligibleOutputs.Clear()
   $script:FreshnessCachedOutputs.Clear()
   $script:FreshnessSkippedOutputs.Clear()
+  $script:FreshnessSkippedTargets.Clear()
+  $script:FreshnessTestResultLabels.Clear()
   $script:FreshnessRemoteOnlyOutputs.Clear()
   $script:FreshnessMissingOutputLabels.Clear()
 
@@ -2948,18 +3132,41 @@ function Initialize-BepEligibility {
 	      if (Use-OptionalBepUnavailable "BEP JSON not found: $bepJson") {
 	        return
 	      }
-	      Log "error: BEP JSON not found: $bepJson"
-	      exit 2
+	      Log "error: BEP JSON not found: $bepJson; continuing with other BEP files"
+	      $script:UploadFailures++
+	      continue
 	    }
+    $eligibleLabelsBefore = @($script:FreshnessEligibleLabels)
+    $eligibleOutputsBefore = @($script:FreshnessEligibleOutputs)
+    $cachedOutputsBefore = @($script:FreshnessCachedOutputs)
+    $skippedTargetsBefore = @($script:FreshnessSkippedTargets)
+    $testResultLabelsBefore = @($script:FreshnessTestResultLabels)
+    $remoteOutputsBefore = @($script:FreshnessRemoteOnlyOutputs.ToArray())
+    $missingLabelsBefore = @($script:FreshnessMissingOutputLabels)
     try {
       foreach ($event in @(Get-JsonStreamObjects $resolvedBep)) {
         $eventId = Get-MapValue $event 'id'
+        $targetCompletedId = Get-MapValue $eventId 'targetCompleted'
+        if ($null -eq $targetCompletedId) { $targetCompletedId = Get-MapValue $eventId 'target_completed' }
+        $aborted = Get-MapValue $event 'aborted'
+        if ($null -ne $targetCompletedId -and [string](Get-MapValue $aborted 'reason') -ceq 'SKIPPED') {
+          $skippedLabel = [string](Get-MapValue $targetCompletedId 'label')
+          if (
+            -not [string]::IsNullOrWhiteSpace($skippedLabel) -and
+            (-not $script:ExpectedTargetsConfigured -or $script:ExpectedTargets.Contains($skippedLabel))
+          ) {
+            $script:FreshnessSkippedTargets.Add($skippedLabel) | Out-Null
+          }
+          continue
+        }
         $testResultId = Get-MapValue $eventId 'testResult'
         if ($null -eq $testResultId) { $testResultId = Get-MapValue $eventId 'test_result' }
         if ($null -eq $testResultId) { continue }
         $label = [string](Get-MapValue $testResultId 'label')
         if ([string]::IsNullOrWhiteSpace($label)) { continue }
         if ($script:ExpectedTargetsConfigured -and -not $script:ExpectedTargets.Contains($label)) { continue }
+        # A TestResult proves execution even when a cache hit omits test.outputs.
+        $script:FreshnessTestResultLabels.Add($label) | Out-Null
         $result = Get-MapValue $event 'testResult'
         if ($null -eq $result) { $result = Get-MapValue $event 'test_result' }
         if ($null -eq $result) { continue }
@@ -3039,23 +3246,34 @@ function Initialize-BepEligibility {
 	        }
       }
 	    } catch {
+	      $script:FreshnessEligibleLabels.Clear()
+	      foreach ($entry in $eligibleLabelsBefore) { $script:FreshnessEligibleLabels.Add([string]$entry) | Out-Null }
+	      $script:FreshnessEligibleOutputs.Clear()
+	      foreach ($entry in $eligibleOutputsBefore) { $script:FreshnessEligibleOutputs.Add([string]$entry) | Out-Null }
+	      $script:FreshnessCachedOutputs.Clear()
+	      foreach ($entry in $cachedOutputsBefore) { $script:FreshnessCachedOutputs.Add([string]$entry) | Out-Null }
+	      $script:FreshnessSkippedTargets.Clear()
+	      foreach ($entry in $skippedTargetsBefore) { $script:FreshnessSkippedTargets.Add([string]$entry) | Out-Null }
+	      $script:FreshnessTestResultLabels.Clear()
+	      foreach ($entry in $testResultLabelsBefore) { $script:FreshnessTestResultLabels.Add([string]$entry) | Out-Null }
+	      $script:FreshnessRemoteOnlyOutputs.Clear()
+	      foreach ($entry in $remoteOutputsBefore) { $script:FreshnessRemoteOnlyOutputs.Add($entry) | Out-Null }
+	      $script:FreshnessMissingOutputLabels.Clear()
+	      foreach ($entry in $missingLabelsBefore) { $script:FreshnessMissingOutputLabels.Add([string]$entry) | Out-Null }
 	      if (Use-OptionalBepUnavailable "failed to parse BEP JSON: $resolvedBep ($($_.Exception.Message))") {
 	        return
 	      }
-	      Log "error: failed to parse BEP JSON: $resolvedBep ($($_.Exception.Message))"
-	      exit 2
+	      Log "error: failed to parse BEP JSON: $resolvedBep ($($_.Exception.Message)); continuing with other BEP files"
+	      $script:UploadFailures++
+	      continue
 	    }
   }
 
-  $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
-  if ($conflictingOutputs.Count -gt 0) {
-    Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
-    exit 2
-  }
+  Assert-BepFreshnessUnambiguous
 
 	  $script:FreshnessSelectedSource = "bep"
 	  $script:FreshnessEligibilityEnabled = $true
-	  Log "freshness filtering enabled: source=bep files=$($script:BepJsonFiles.Count) eligible_outputs=$($script:FreshnessEligibleOutputs.Count) remote_only_outputs=$($script:FreshnessRemoteOnlyOutputs.Count)"
+	  Log "freshness filtering enabled: source=bep files=$($script:BepJsonFiles.Count) eligible_outputs=$($script:FreshnessEligibleOutputs.Count) remote_only_outputs=$($script:FreshnessRemoteOnlyOutputs.Count) skipped_targets=$($script:FreshnessSkippedTargets.Count)"
 	  if ($script:FreshnessMode -eq "optional" -and $script:RemoteArtifacts -ne "required" -and $script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
 	    $first = $script:FreshnessRemoteOnlyOutputs[0]
 	    $firstArtifact = Format-ArtifactReferenceForLog $first.Artifact
@@ -3214,27 +3432,29 @@ function Merge-StagedBepFreshness {
     }
   }
 
-  $conflictingOutputs = @($script:FreshnessEligibleOutputs | Where-Object { $script:FreshnessCachedOutputs.Contains($_) })
-  if ($conflictingOutputs.Count -gt 0) {
-    Log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $($conflictingOutputs[0]). Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
-    exit 2
-  }
+  Assert-BepFreshnessUnambiguous
 }
 
 function Assert-ExpectedTargetCoverage {
   if (-not $script:ExpectedTargetsConfigured -or $script:FreshnessSelectedSource -ne "bep") { return }
+  $missingCount = 0
   foreach ($label in $script:ExpectedTargets) {
     $hasFresh = @($script:FreshnessEligibleOutputs | Where-Object { $_.StartsWith("$label`t", [System.StringComparison]::Ordinal) }).Count -gt 0
     $hasCached = @($script:FreshnessCachedOutputs | Where-Object { $_.StartsWith("$label`t", [System.StringComparison]::Ordinal) }).Count -gt 0
     if ($hasFresh -or $hasCached) { continue }
     $hasRemote = @($script:FreshnessRemoteOnlyOutputs | Where-Object { $_.Label -eq $label }).Count -gt 0
     if ($hasRemote) { continue }
+    if ($script:FreshnessSkippedTargets.Contains($label)) { continue }
     if ($script:FreshnessMissingOutputLabels.Contains($label)) {
-      Log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference)"
+      Log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference); continuing with other fresh outputs"
     } else {
-      Log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target)"
+      Log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target); continuing with other fresh outputs"
     }
-    exit 2
+    $missingCount++
+  }
+  if ($missingCount -gt 0) {
+    Log "warning: $missingCount expected target(s) produced no current uploadable output; available fresh payloads will still be processed"
+    $script:UploadFailures += $missingCount
   }
 }
 
@@ -3245,13 +3465,16 @@ function Write-ExecutionSkipOnce([string]$OutputsDir, [string]$Reason) {
 }
 
 function Assert-NoRequiredRemoteOnlyBepOutputs {
+  if ($script:RemoteOnlyOutputsValidated) { return }
+  $script:RemoteOnlyOutputsValidated = $true
   if ($script:FreshnessSelectedSource -ne "bep") { return }
   if ($script:FreshnessRemoteOnlyOutputs.Count -gt 0) {
     $first = $script:FreshnessRemoteOnlyOutputs[0]
     $firstArtifact = Format-ArtifactReferenceForLog $first.Artifact
     if ($script:FreshnessMode -eq "required" -or $script:RemoteArtifacts -eq "required") {
-      Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $firstArtifact. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-      exit 2
+      Log "error: BEP references remote-only test outputs for $($first.Label), but local test.outputs was not found: $firstArtifact. Those outputs will be skipped while other fresh payloads are processed. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+      $script:UploadFailures += $script:FreshnessRemoteOnlyOutputs.Count
+      return
     }
     if ($script:RemoteArtifacts -eq "download") {
       Log "warning: BEP references remote-only test outputs for $($first.Label): $firstArtifact; unmaterialized outputs will be skipped."
@@ -3288,6 +3511,10 @@ function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
     Write-FreshnessSkipOnce $OutputsDir "missing bazel.target metadata"
     return $false
   }
+  if ($script:FreshnessSkippedTargets.Contains($targetLabel)) {
+    Write-FreshnessSkipOnce $OutputsDir "Bazel skipped platform-incompatible target $targetLabel"
+    return $false
+  }
   $outputKey = Get-TestOutputDirKey $OutputsDir
   if ([string]::IsNullOrWhiteSpace($outputKey)) {
     if ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
@@ -3304,8 +3531,13 @@ function Test-OutputDirFreshnessEligible([string]$OutputsDir) {
     Write-FreshnessSkipOnce $OutputsDir "BEP reported cached result for target $targetLabel output $outputKey"
   } elseif ($script:FreshnessSelectedSource -eq "bep" -and $script:FreshnessMode -eq "required") {
     if ($script:FreshnessMissingOutputLabels.Contains($targetLabel)) {
-      Log "error: BEP required freshness cannot authorize $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-      exit 2
+      Write-FreshnessSkipOnce $OutputsDir "fresh BEP TestResult for $targetLabel did not contain a mappable test.outputs reference"
+      if ($script:FreshnessSkipWasWritten) {
+        Log "warning: BEP required freshness skipped $OutputsDir because the fresh TestResult for $targetLabel did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+        if (-not $script:ExpectedTargetsConfigured) {
+          $script:UploadFailures++
+        }
+      }
     } else {
       Write-FreshnessSkipOnce $OutputsDir "no fresh BEP TestResult matched target $targetLabel output $outputKey"
     }
@@ -3395,7 +3627,7 @@ function Get-ContextInfo([string]$ContextPath) {
       $info.JsonText = Get-Content -LiteralPath $ContextPath -Raw -Encoding UTF8
       $info.Object = $info.JsonText | ConvertFrom-Json -ErrorAction Stop
     } catch {
-      Log "warning: failed to parse context.json for payload enrichment: $ContextPath"
+      Log "warning: failed to parse context.json for payload enrichment"
     }
   }
 
@@ -3438,7 +3670,7 @@ function Resolve-ContextJsonForPayload([string]$PayloadFile) {
   }
 
   $matchedContext = [string]$script:BundledContextEntries[$repoKey]
-  Dbg "selected bundled context '$matchedContext' for payload '$PayloadFile' via repo '$repoKey'"
+  Dbg "selected bundled context for payload via repo '$repoKey'"
   return $matchedContext
 }
 
@@ -3481,7 +3713,7 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
   $selectedContextPath = Resolve-ContextJsonForPayload $infile
   $selectedContextInfo = Get-ContextInfo $selectedContextPath
   $selectedContextObj = if ($selectedContextInfo) { $selectedContextInfo.Object } else { $null }
-  Dbg "Merge-With-Context: infile='$infile' selected_ctx='$(if ([string]::IsNullOrEmpty($selectedContextPath)) { '<none>' } else { $selectedContextPath })' primary='$(if ([string]::IsNullOrEmpty($script:PrimaryContextJson)) { '<none>' } else { $script:PrimaryContextJson })'"
+  Dbg "Merge-With-Context: context_selected=$(-not [string]::IsNullOrEmpty($selectedContextPath))"
 
   if (-not $payload.metadata) { $payload | Add-Member -NotePropertyName metadata -NotePropertyValue @{} -Force }
   $meta = Ensure-Hashtable $payload.metadata
@@ -3750,6 +3982,10 @@ function Remove-PayloadFile([string]$FilePath) {
                     $item.IsReadOnly = $false
                 }
             } catch {}
+            $isWindowsPlatform = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+            if (-not $isWindowsPlatform) {
+                & chmod u+w -- (Split-Path -Parent $FilePath) 2>$null
+            }
             Remove-Item -LiteralPath $FilePath -Force -ErrorAction SilentlyContinue
         }
     } else {
@@ -3757,8 +3993,8 @@ function Remove-PayloadFile([string]$FilePath) {
     }
 }
 
-# Track upload failures globally
-$script:UploadFailures = 0
+# Track per-payload upload report counters. UploadFailures is initialized
+# before BEP preparation so partial-input failures remain part of the result.
 $script:ReportTestsProcessed = 0
 $script:ReportTestsFailed = 0
 $script:ReportTestsSkipped = 0
@@ -3769,9 +4005,30 @@ $script:ReportTelemetryProcessed = 0
 $script:ReportTelemetryFailed = 0
 $script:ReportTelemetrySkipped = 0
 
-function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
+function Format-BoundedUploadResponse([string]$Body) {
+  if ([string]::IsNullOrEmpty($Body)) {
+    return [pscustomobject]@{ Text = '<empty>'; Bytes = 0; Truncated = $false }
+  }
+  $responseBytes = [System.Text.Encoding]::UTF8.GetByteCount($Body)
+  $singleLine = $Body.Replace("`r", ' ').Replace("`n", ' ')
+  $truncated = $singleLine.Length -gt $script:UploadResponseLogChars
+  if ($truncated) {
+    $singleLine = $singleLine.Substring(0, $script:UploadResponseLogChars)
+  }
+  return [pscustomobject]@{ Text = $singleLine; Bytes = $responseBytes; Truncated = $truncated }
+}
+
+function Send-PostJson(
+  [string]$url,
+  [hashtable]$headers,
+  [string]$file,
+  [string]$SourcePath = $file,
+  [int]$PartIndex = 1,
+  [int]$PartCount = 1
+) {
   $maxRetries = 3
   $retryDelay = 2
+  $uncompressedBytes = (Get-Item -LiteralPath $file -ErrorAction Stop).Length
   if (-not (Ensure-HttpClientTypes)) {
     Log "upload failed: System.Net.Http.HttpClient unavailable in this PowerShell runtime"
     return [bool]$false
@@ -3801,12 +4058,19 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
         $content = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $compressed)
         $content.Headers.ContentType = 'application/json'
         $null = $content.Headers.ContentEncoding.Add('gzip')
+        $compressedBytes = $compressed.Length
+        $transmittedBytes = $compressedBytes
+        $encoding = 'gzip'
         Dbg "Send-PostJson: Content-Type=application/json; Content-Encoding=gzip (bytes=$($compressed.Length))"
       } else {
         $content = New-Object System.Net.Http.StringContent([IO.File]::ReadAllText($file, [System.Text.Encoding]::UTF8))
         $content.Headers.ContentType = 'application/json'
+        $compressedBytes = 'none'
+        $transmittedBytes = $uncompressedBytes
+        $encoding = 'identity'
         Dbg "Send-PostJson: Content-Type=application/json"
       }
+      $script:ReportUploadAttempted = $true
       $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
       if ($resp.IsSuccessStatusCode) {
         if ($script:DebugMode) {
@@ -3818,15 +4082,20 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         Dbg "Send-PostJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
         if ($attempt -eq $maxRetries) {
-          # Emit user-facing failure only after retry budget is exhausted.
-          Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
+          $script:ReportUploadFailed = $true
+          $bounded = Format-BoundedUploadResponse $body
+          Log "upload failed: source='$SourcePath' part=$PartIndex/$PartCount http=$([int]$resp.StatusCode) encoding=$encoding uncompressed_bytes=$uncompressedBytes compressed_bytes=$compressedBytes transmitted_bytes=$transmittedBytes response_bytes=$($bounded.Bytes) response_truncated=$($bounded.Truncated.ToString().ToLowerInvariant()) response_body='$($bounded.Text)'"
           return [bool]$false
         }
       }
     } catch {
       Dbg "Send-PostJson: Exception on attempt $attempt - $_"
       if ($attempt -eq $maxRetries) {
-        Log "upload failed: $_"
+        $script:ReportUploadFailed = $true
+        $encoding = if ($script:GzipPayloads) { 'gzip' } else { 'identity' }
+        $compressedBytes = if ($script:GzipPayloads -and $null -ne $compressed) { $compressed.Length } else { 'none' }
+        $transmittedBytes = if ($script:GzipPayloads -and $null -ne $compressed) { $compressed.Length } else { $uncompressedBytes }
+        Log "upload failed: source='$SourcePath' part=$PartIndex/$PartCount http=000 encoding=$encoding uncompressed_bytes=$uncompressedBytes compressed_bytes=$compressedBytes transmitted_bytes=$transmittedBytes response_bytes=0 response_truncated=false response_body='<empty>' exception='$_'"
         return [bool]$false
       }
     } finally {
@@ -3837,6 +4106,124 @@ function Send-PostJson([string]$url, [hashtable]$headers, [string]$file) {
     Start-Sleep -Seconds $retryDelay
   }
   return [bool]$false
+}
+
+$script:PreparedTestPayloads = [System.Collections.Generic.List[string]]::new()
+$script:PreparedTestTempFiles = [System.Collections.Generic.List[string]]::new()
+
+function Clear-PreparedTestPayloads {
+  foreach ($path in @($script:PreparedTestTempFiles.ToArray())) {
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+  }
+  $script:PreparedTestPayloads.Clear()
+  $script:PreparedTestTempFiles.Clear()
+}
+
+function Write-TestPayloadPart($Payload, [object[]]$Events) {
+  $path = Join-Path $script:TmpPayloadDir ("test_payload_part_" + [System.Guid]::NewGuid().ToString("N") + ".json")
+  $Payload.events = @($Events)
+  Write-Utf8NoBomFile -Path $path -Content (($Payload | ConvertTo-Json -Depth 100 -Compress) + "`n")
+  $script:PreparedTestTempFiles.Add($path) | Out-Null
+  return $path
+}
+
+function Split-TestPayloadEvents($Payload, [object[]]$Events, [string]$SourcePath) {
+  $path = Write-TestPayloadPart $Payload $Events
+  $size = (Get-Item -LiteralPath $path -ErrorAction Stop).Length
+  if ($size -le $script:TestPayloadSplitTargetBytes) {
+    $script:PreparedTestPayloads.Add($path) | Out-Null
+    return [bool]$true
+  }
+  if ($Events.Count -eq 1) {
+    if ($size -le $script:TestPayloadMaxBytes) {
+      Log "warning: single-event test payload exceeds the split target but remains within the intake limit: source='$SourcePath' uncompressed_bytes=$size"
+      $script:PreparedTestPayloads.Add($path) | Out-Null
+      return [bool]$true
+    }
+    Log "error: single_event_too_large: source='$SourcePath' uncompressed_bytes=$size max_bytes=$($script:TestPayloadMaxBytes)"
+    return [bool]$false
+  }
+
+  $midpoint = [int][Math]::Floor($Events.Count / 2)
+  $left = @($Events[0..($midpoint - 1)])
+  $right = @($Events[$midpoint..($Events.Count - 1)])
+  return [bool]((Split-TestPayloadEvents $Payload $left $SourcePath) -and (Split-TestPayloadEvents $Payload $right $SourcePath))
+}
+
+function Prepare-TestPayloadParts([string]$BodyPath, [string]$SourcePath) {
+  $script:PreparedTestPayloads.Clear()
+  $script:PreparedTestTempFiles.Clear()
+  $script:PreparedTestTempFiles.Add($BodyPath) | Out-Null
+  $size = (Get-Item -LiteralPath $BodyPath -ErrorAction Stop).Length
+  if ($size -le $script:TestPayloadSplitTargetBytes) {
+    $script:PreparedTestPayloads.Add($BodyPath) | Out-Null
+    return [bool]$true
+  }
+  try {
+    $payload = Get-Content -LiteralPath $BodyPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    if ($size -le $script:TestPayloadMaxBytes) {
+      Log "warning: oversized test payload is not valid JSON; sending within the intake limit: source='$SourcePath' uncompressed_bytes=$size"
+      $script:PreparedTestPayloads.Add($BodyPath) | Out-Null
+      return [bool]$true
+    }
+    Log "error: oversized test payload is not valid JSON and cannot be split: $SourcePath"
+    return [bool]$false
+  }
+  $events = @(Get-MapValue $payload 'events')
+  if ($events.Count -lt 1) {
+    Log "error: oversized test payload cannot be split because its events array is invalid: $SourcePath"
+    return [bool]$false
+  }
+  if (-not (Split-TestPayloadEvents $payload $events $SourcePath)) {
+    return [bool]$false
+  }
+  Log "split test payload: source='$SourcePath' uncompressed_bytes=$size parts=$($script:PreparedTestPayloads.Count) target_bytes=$($script:TestPayloadSplitTargetBytes)"
+  return [bool]$true
+}
+
+function Save-FailedTestPayloadParts([string]$SourcePath, [string[]]$FailedParts) {
+  if ($KeepPayloads -or $null -eq $FailedParts -or $FailedParts.Count -eq 0) { return }
+  $sourceDir = Split-Path -Parent $SourcePath
+  try {
+    $sourceDirItem = Get-Item -LiteralPath $sourceDir -ErrorAction Stop
+    if ($sourceDirItem.PSObject.Properties['IsReadOnly'] -and $sourceDirItem.IsReadOnly) {
+      $sourceDirItem.IsReadOnly = $false
+    }
+  } catch {}
+  $isWindowsPlatform = [System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT
+  if (-not $isWindowsPlatform) {
+    & chmod u+w -- $sourceDir 2>$null
+  }
+  $retryPath = Join-Path $sourceDir ((Split-Path -Leaf $SourcePath) + ".retry." + [System.Guid]::NewGuid().ToString("N"))
+  $backupPath = Join-Path $sourceDir ((Split-Path -Leaf $SourcePath) + ".backup." + [System.Guid]::NewGuid().ToString("N"))
+  try {
+    $retryPayload = Get-Content -LiteralPath $FailedParts[0] -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+    if ($FailedParts.Count -gt 1) {
+      $failedEvents = [System.Collections.Generic.List[object]]::new()
+      foreach ($partPath in $FailedParts) {
+        $partPayload = Get-Content -LiteralPath $partPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+        foreach ($event in @(Get-MapValue $partPayload 'events')) {
+          $failedEvents.Add($event) | Out-Null
+        }
+      }
+      $retryPayload.events = @($failedEvents.ToArray())
+    }
+    Write-Utf8NoBomFile -Path $retryPath -Content (($retryPayload | ConvertTo-Json -Depth 100 -Compress) + "`n")
+    try {
+      $sourceItem = Get-Item -LiteralPath $SourcePath -Force -ErrorAction Stop
+      if ($sourceItem.PSObject.Properties['IsReadOnly'] -and $sourceItem.IsReadOnly) {
+        $sourceItem.IsReadOnly = $false
+      }
+    } catch {}
+    [System.IO.File]::Replace($retryPath, $SourcePath, $backupPath)
+    Log "retained $($FailedParts.Count) failed split payload part(s) for retry: $SourcePath"
+  } catch {
+    Log "warning: failed to retain rejected split payload parts; retaining the original payload '$SourcePath': $_"
+  } finally {
+    Remove-Item -LiteralPath $retryPath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $backupPath -Force -ErrorAction SilentlyContinue
+  }
 }
 
 function Get-TelemetryHeaders([string]$FilePath) {
@@ -3931,6 +4318,13 @@ function Resolve-TelemetryFactsSources {
     if ($script:ContextJsonFromOverride -and $script:PrimaryContextJson) {
         $sibling = Join-Path (Split-Path -Parent $script:PrimaryContextJson) "telemetry_facts.json"
         $canonical = Resolve-CanonicalExistingFile $sibling
+        if ($canonical -and $seen.Add($canonical)) {
+            $sources += ,$canonical
+        }
+    }
+
+    foreach ($runtimeFacts in $script:RuntimeTelemetryFacts) {
+        $canonical = Resolve-CanonicalExistingFile $runtimeFacts
         if ($canonical -and $seen.Add($canonical)) {
             $sources += ,$canonical
         }
@@ -4434,6 +4828,7 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
       $content = New-Object System.Net.Http.ByteArrayContent -ArgumentList (, $bytes)
       $content.Headers.ContentType = 'application/json'
       Dbg "Send-PostRawJson: Content-Type=application/json"
+      $script:ReportUploadAttempted = $true
       $resp = $client.PostAsync($url, $content).GetAwaiter().GetResult()
       if ($resp.IsSuccessStatusCode) {
         if ($script:DebugMode) {
@@ -4445,6 +4840,7 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
         $body = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
         Dbg "Send-PostRawJson: HTTP $([int]$resp.StatusCode) on attempt $attempt"
         if ($attempt -eq $maxRetries) {
+          $script:ReportUploadFailed = $true
           Log "upload failed: HTTP $([int]$resp.StatusCode) $body"
           return [bool]$false
         }
@@ -4452,6 +4848,7 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
     } catch {
       Dbg "Send-PostRawJson: Exception on attempt $attempt - $_"
       if ($attempt -eq $maxRetries) {
+        $script:ReportUploadFailed = $true
         Log "upload failed: $_"
         return [bool]$false
       }
@@ -4467,26 +4864,45 @@ function Upload-SingleTest([string]$FilePath) {
     $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     Merge-With-Context $FilePath $body
     Validate-Payload $body
-    $hdrs = Get-CommonHeaders $body
-    if (-not $Agentless) { $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }
     Dbg "Upload-SingleTest: posting '$FilePath' (body '$body')"
     if ($script:DebugMode) {
         Write-Host "[dd-uploader][dbg] payload content (enriched) for '$FilePath':"
         Write-Host (Get-Content -LiteralPath $body -Raw)
-        Dbg "request: POST $TestUrl"
-        Dbg-Headers "common" $hdrs
         Log-StartTimeStats $body
     }
-    # Native command / .NET call paths can emit incidental pipeline items.
-    # Consume the stream and treat the final emitted value as the boolean result.
-    $resultStream = @(Send-PostJson $TestUrl $hdrs $body)
-    $result = $false
-    if ($resultStream.Count -gt 0) {
-        $result = [bool]$resultStream[-1]
+    if (-not (Test-EnrichedPayloadTags $body $FilePath)) {
+        Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
+        return [bool]$false
     }
-    # Enriched temp payload is always ephemeral.
-    Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
-    return [bool]$result
+    if (-not (Prepare-TestPayloadParts $body $FilePath)) {
+        Clear-PreparedTestPayloads
+        return [bool]$false
+    }
+    $partCount = $script:PreparedTestPayloads.Count
+    $failed = $false
+    $failedParts = [System.Collections.Generic.List[string]]::new()
+    try {
+        for ($index = 0; $index -lt $partCount; $index++) {
+            $part = $script:PreparedTestPayloads[$index]
+            $hdrs = Get-CommonHeaders $part
+            if (-not $Agentless) { $hdrs['X-Datadog-EVP-Subdomain'] = 'citestcycle-intake' }
+            if ($script:DebugMode) {
+                Dbg "request: POST $TestUrl (part=$($index + 1)/$partCount)"
+                Dbg-Headers "common" $hdrs
+            }
+            $resultStream = @(Send-PostJson $TestUrl $hdrs $part $FilePath ($index + 1) $partCount)
+            if ($resultStream.Count -eq 0 -or -not [bool]$resultStream[-1]) {
+                $failed = $true
+                $failedParts.Add($part) | Out-Null
+            }
+        }
+        if ($failed -and $failedParts.Count -lt $partCount) {
+            Save-FailedTestPayloadParts $FilePath @($failedParts.ToArray())
+        }
+    } finally {
+        Clear-PreparedTestPayloads
+    }
+    return [bool](-not $failed)
 }
 
 function Get-ExpectedEnrichedTags {
@@ -4508,7 +4924,7 @@ function Test-EventHasEnrichedTag($EventObj, [string]$Tag) {
 
 function Test-EnrichedPayloadTags([string]$BodyPath, [string]$SourcePath) {
     if (-not $script:ValidateEnrichment) { return [bool]$true }
-    $payload = Read-JsonObjectFile $BodyPath "dry-run could not parse enriched test payload '$SourcePath'"
+    $payload = Read-JsonObjectFile $BodyPath "could not parse enriched test payload '$SourcePath'"
     if (-not $payload) { return [bool]$false }
     $events = @(Get-MapValue $payload 'events')
     $missing = New-Object System.Collections.Generic.List[string]
@@ -4530,7 +4946,11 @@ function Test-EnrichedPayloadTags([string]$BodyPath, [string]$SourcePath) {
         Log "error: enriched test payload for '$SourcePath' is missing expected tag(s): $($missing -join ', ')"
         return [bool]$false
     }
-    Log "dry-run validated enriched test payload: $SourcePath"
+    if ($script:DryRun) {
+        Dbg "dry-run validated enriched test payload: $SourcePath"
+    } else {
+        Dbg "validated enriched test payload: $SourcePath"
+    }
     return [bool]$true
 }
 
@@ -4554,8 +4974,18 @@ function DryRun-SingleTest([string]$FilePath) {
                 Write-Output $item
             }
         }
-        return [bool]$validated
+        if (-not $validated) {
+            return [bool]$false
+        }
+        if (-not (Prepare-TestPayloadParts $body $FilePath)) {
+            return [bool]$false
+        }
+        if ($script:PreparedTestPayloads.Count -gt 1) {
+            Log "dry-run would split test payload '$FilePath' into $($script:PreparedTestPayloads.Count) parts"
+        }
+        return [bool]$true
     } finally {
+        Clear-PreparedTestPayloads
         Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
     }
 }
@@ -4606,6 +5036,7 @@ function Upload-SingleCoverage([string]$FilePath) {
                 $covContent.Headers.ContentType = $coverageContentType
                 $content.Add($covContent, 'coveragex', $coverageFileName)
                 Dbg "Upload-SingleCoverage: posting '$FilePath' (attempt $attempt/$maxRetries; Content-Type=multipart/form-data; coveragex=$coverageContentType)"
+                $script:ReportUploadAttempted = $true
                 $resp = $client.PostAsync($CovUrl, $content).GetAwaiter().GetResult()
                 if ($resp.IsSuccessStatusCode) {
                     $uploaded = $true
@@ -4617,6 +5048,7 @@ function Upload-SingleCoverage([string]$FilePath) {
                     $respBody = $resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
                     Dbg "Upload-SingleCoverage: HTTP $([int]$resp.StatusCode) on attempt $attempt"
                     if ($attempt -eq $maxRetries) {
+                        $script:ReportUploadFailed = $true
                         # Only emit user-facing error after final retry to avoid
                         # noisy logs for transient first-attempt failures.
                         Log "coverage upload failed: HTTP $([int]$resp.StatusCode) $respBody"
@@ -4625,6 +5057,7 @@ function Upload-SingleCoverage([string]$FilePath) {
             } catch {
                 Dbg "Upload-SingleCoverage: Exception on attempt $attempt - $_"
                 if ($attempt -eq $maxRetries) {
+                    $script:ReportUploadFailed = $true
                     Log "coverage upload failed: $_"
                 }
             } finally {
@@ -4755,7 +5188,6 @@ function Upload-AllTests {
                 }
                 continue
             }
-            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleTest $f.FullName)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {
@@ -4809,7 +5241,6 @@ function Upload-AllCoverage {
                 $script:ReportCoverageProcessed++
                 continue
             }
-            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleCoverage $f.FullName)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {
@@ -4864,7 +5295,6 @@ function Upload-AllTelemetry {
                     $script:ReportTelemetryProcessed++
                     continue
                 }
-                $script:ReportUploadAttempted = $true
                 $uploadedResult = @(Upload-SingleTelemetry $f.FullName $bodyPath)
                 $uploaded = $false
                 if ($uploadedResult.Count -gt 0) {
@@ -4897,7 +5327,6 @@ function Upload-AllTelemetry {
                 $script:ReportTelemetryProcessed++
                 continue
             }
-            $script:ReportUploadAttempted = $true
             $uploadedResult = @(Upload-SingleTelemetry $entry.AnchorPath $entry.BodyPath)
             $uploaded = $false
             if ($uploadedResult.Count -gt 0) {

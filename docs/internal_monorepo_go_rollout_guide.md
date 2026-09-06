@@ -91,17 +91,15 @@ SHA256, and archive prefix generated from the same published commit.
   `--artifact-staging-dir=<temp-dir>`.
 - Pass `DD_GIT_*` only through `--repo_env`, never through `--test_env`.
 - Pass uploader credentials at `bazel run` time, not into test actions.
-- Keep one user-facing `test-optimization` config with both phase-correct
-  switches:
+- Keep one user-facing `test-optimization` metadata config:
 
   ```bazelrc
   common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-  build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
   ```
 
-  Removing `--config=test-optimization` disables both metadata repositories
-  and Orchestrion aliases. The public Go helpers enable metadata gating by
-  default; they do not dynamically control Orchestrion repository declaration.
+  Optimized targets enable Orchestrion through their own transition. Removing
+  the config disables metadata repositories; the public Go helpers enable that
+  metadata gating by default.
 
 ## Bootstrap Flow
 
@@ -115,7 +113,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --rules-go-repo-name "<existing_rules_go_repo_name>" \
   --rules-go-upstream v0_60_0 \
   --rules-go-variant base \
-  --dd-trace-go-version v2.9.0 \
+  --dd-trace-go-version v2.9.1 \
   --write-bazelrc \
   --write-orchestrion-files \
   --write-wrapper-template \
@@ -160,20 +158,20 @@ bazel test --config=test-optimization <build-only-control-target>
 bazel test --config=test-optimization <instrumented-target-1>
 bazel test --config=test-optimization <instrumented-target-2>
 bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor
-bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --dry-run --validate-enrichment
-DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --validate-enrichment
 bazel shutdown
 ```
 
-Do not run the real uploader if the doctor or dry-run enrichment step fails.
-Upload failed-test payloads only when those validation steps pass.
+Run the real uploader after the doctor even when an earlier phase fails. It
+validates enrichment and uploads available fresh valid failed-test payloads in
+one pass while the wrapper preserves the earlier failure as the job result.
 
 The doctor must see JSON payloads, Bazel target metadata, Git metadata, and only
 valid Go payload-selection states. `module`, `module_override`, and
 `full_bundle_disabled` are valid. `full_bundle_no_match` is a rollout blocker
 unless the target was explicitly configured to allow it.
 
-The dry-run enrichment step is the local proof that tags expected in Datadog are
+Upload-time enrichment validation proves that tags expected in Datadog are
 present in the final upload body. Raw payload files on disk are intentionally
 not the final enriched body.
 

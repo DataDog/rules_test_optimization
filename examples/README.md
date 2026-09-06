@@ -48,15 +48,12 @@ repository, use `./bazelw` for local development convenience.
 
   ```bazelrc
   common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-  # Go only:
-  build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
   ```
 
   Removing `--config=test-optimization` disables metadata resolution and the
-  matching Go/Python runtime wiring. Go additionally disables Orchestrion
-  analysis; in WORKSPACE mode, use the apparent `rules_go` repo name configured
-  by the workspace. Python-only consumers omit the Go line. Other companions
-  retain their existing enablement contract in this release.
+  matching Go/Python runtime wiring. Optimized Go targets enable Orchestrion
+  through their own transition. Other companions retain their existing
+  enablement contract in this release.
 
 ## Single-service (classic)
 
@@ -224,11 +221,11 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --service go-service \
   --sync-repo-name test_optimization_data_go \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0
+  --dd-trace-go-version v2.9.1
 ```
 
 `--dd-trace-go-version` is optional. If omitted, bootstrap uses the default
-`v2.9.0`. It accepts a tag,
+`v2.9.1`. It accepts a tag,
 pseudo-version, branch, or commit SHA. Bootstrap resolves that input to exact
 versions and repins the local Go module to match what Bazel will use.
 
@@ -408,7 +405,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --config test-optimization \
@@ -428,7 +425,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -440,9 +437,9 @@ $env:DD_SITE = "datadoghq.com"
 ```
 
 Notes:
-- The wrapper preserves test failures, blocks upload success when doctor
-  or dry-run enrichment fails, and still fails on uploader errors when the
-  earlier steps passed.
+- The wrapper preserves test and validation failures while still uploading every
+  available fresh valid payload when upload is enabled. Uploader errors fail the
+  job when no earlier phase already failed.
 - For first-pass support after tests have run, the doctor
   `--support-bundle=.topt/reports/dd-test-optimization-support.zip` option
   creates a doctor-only bundle without vendoring the wrapper helper directory.
@@ -559,11 +556,11 @@ Bootstrap once after adding the Go module files:
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --go-module-dir src/go-project \
-  --dd-trace-go-version v2.9.0
+  --dd-trace-go-version v2.9.1
 ```
 
 As in the single-service flow, `--dd-trace-go-version` is optional and defaults
-to `v2.9.0`. It may resolve to one shared tracer version or to separate exact
+to `v2.9.1`. It may resolve to one shared tracer version or to separate exact
 versions for the traced Go modules when you pass a branch or commit SHA.
 
 This multi-service path stays on the lower-level/manual API. Guided bootstrap is

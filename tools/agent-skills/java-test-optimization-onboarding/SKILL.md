@@ -123,8 +123,8 @@ Every successful Java onboarding should end with these pieces:
   flags and required BEP freshness/artifact flags. Use
   `DD_TEST_OPTIMIZATION_*` environment variables only for single-invocation
   manual flows where one BEP file is sufficient.
-- CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`,
-  optional `uploader-upload-report.json`, and, when configured,
+- CI wrappers write `doctor-report.json`, one selected uploader report
+  (`uploader-dry-run-report.json` or `uploader-upload-report.json`), and
   `dd-test-optimization-support.zip` under a per-job report directory.
   Prefer the wrapper support bundle for full CI escalation; use the doctor-only
   support bundle for the simplest initial customer request. Keep individual
@@ -132,7 +132,7 @@ Every successful Java onboarding should end with these pieces:
 - `FETCH_SALT` is used only for a separate, explicit
   `bazel sync --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
   as part of normal test, doctor, or uploader commands.
-- Real upload happens only after tests, doctor, and dry-run enrichment pass.
+- Real upload processes available fresh valid payloads after doctor and dry-run attempts, while preserving any earlier failure.
 
 Use the consumer's existing Bazel entrypoint in all commands. Do not switch a
 repository from `bzl` or `bazelw` to raw `bazel` just because examples use the

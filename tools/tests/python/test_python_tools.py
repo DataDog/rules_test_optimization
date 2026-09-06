@@ -5,13 +5,17 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Unit tests for repository Python tooling scripts."""
+"""Exercise repository-owned Python tools through one Bazel test target.
+
+The shared suite gives small developer scripts consistent runfiles and CI coverage.
+"""
 
 from __future__ import annotations
 
 import ast
 import contextlib
 import functools
+import gzip
 import http.server
 import importlib.util
 import io
@@ -104,7 +108,8 @@ def _load_module(name: str, rel_path: str) -> types.ModuleType:
 
 def _require_functional_bash(testcase: unittest.TestCase) -> str:
     """Return a usable Bash executable or skip the caller's test."""
-    bash = shutil.which("bash")
+    system_bash = Path("/bin/bash")
+    bash = str(system_bash) if system_bash.is_file() else shutil.which("bash")
     if bash is None:
         testcase.skipTest("bash is required for Bash runtime execution")
     result = subprocess.run(
@@ -177,6 +182,38 @@ def _serve_handler(handler: type[http.server.BaseHTTPRequestHandler]) -> Iterato
         thread.join(timeout=5)
 
 
+@contextlib.contextmanager
+def _serve_test_uploads(responder):
+    """Record decoded citestcycle requests and return responder-selected statuses."""
+    records: list[dict[str, object]] = []
+
+    class Handler(QuietBaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+            length = int(self.headers.get("Content-Length", "0"))
+            wire_body = self.rfile.read(length)
+            encoding = self.headers.get("Content-Encoding", "").lower()
+            decoded_body = gzip.decompress(wire_body) if "gzip" in encoding else wire_body
+            payload = json.loads(decoded_body.decode("utf-8"))
+            status, response = responder(payload, records)
+            response_body = json.dumps(response, separators=(",", ":")).encode("utf-8")
+            records.append({
+                "decoded_bytes": len(decoded_body),
+                "encoding": encoding,
+                "headers": {key.lower(): value for key, value in self.headers.items()},
+                "payload": payload,
+                "status": status,
+                "wire_bytes": len(wire_body),
+            })
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(response_body)))
+            self.end_headers()
+            self.wfile.write(response_body)
+
+    with _serve_handler(Handler) as base_url:
+        yield base_url, records
+
+
 def _render_uploader_runtime_template(
     rel_path: str,
     *,
@@ -185,6 +222,8 @@ def _render_uploader_runtime_template(
     expected_targets_path: str = "",
     expected_targets_file_path: str = "",
     fail_on_error: bool = False,
+    runtime_selection: bool = False,
+    curl_retry_flags: str = "--retry 3 --retry-delay 2 --retry-connrefused",
 ) -> str:
     """Render uploader runtime template placeholders for direct unit tests."""
     text = _runfile(rel_path).read_text(encoding="utf-8")
@@ -194,7 +233,7 @@ def _render_uploader_runtime_template(
         "context_json_rloc": "",
         "context_manifest_path": "",
         "context_manifest_rloc": "",
-        "curl_retry_flags": "--retry 3 --retry-delay 2 --retry-connrefused",
+        "curl_retry_flags": curl_retry_flags,
         "debug": "false",
         "doctor_runtime_rloc": doctor_runtime_rloc,
         "expected_targets_file_path": expected_targets_file_path,
@@ -209,6 +248,7 @@ def _render_uploader_runtime_template(
         "ps_name": "generated_uploader.ps1",
         "quiescent_sec": "10",
         "rules_version": "test-rules-version",
+        "runtime_selection": "true" if runtime_selection else "false",
         "schema_json_path": "",
         "schema_json_rloc": "",
         "schema_validator_path": "",
@@ -546,6 +586,60 @@ esac
                 normalized_log_text,
             )
 
+    def test_bash_wrapper_uploads_after_partial_validation_failures(self) -> None:
+        """Validate upload still processes fresh payloads after validation failures."""
+        bash = _require_functional_bash(self)
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""#!/usr/bin/env bash
+printf '%s\\n' "$*" >> {str(log_path)!r}
+if [[ "$1" == "test" ]]; then exit 0; fi
+if [[ "$1" == "run" && "$3" == "//:dd_test_optimization_doctor" ]]; then exit 11; fi
+if [[ "$1" == "run" && "$*" == *"--dry-run"* ]]; then exit 12; fi
+if [[ "$1" == "run" && "$3" == "//:dd_upload_payloads" ]]; then exit 0; fi
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            env = os.environ.copy()
+            env["BAZEL"] = str(fake_bazel)
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+            uploader_report = root / "custom-uploader-report.json"
+
+            result = subprocess.run(
+                [
+                    bash,
+                    str(wrapper),
+                    "--upload",
+                    "--uploader-report-json",
+                    str(uploader_report),
+                    "//pkg:target",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(11, result.returncode, result.stderr)
+            upload_commands = [
+                line
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if "//:dd_upload_payloads" in line
+            ]
+            self.assertEqual(1, len(upload_commands), upload_commands)
+            self.assertIn("--validate-enrichment", upload_commands[0])
+            self.assertNotIn("--dry-run", upload_commands[0])
+            self.assertIn(f"--report-json={uploader_report}", upload_commands[0])
+
     def test_bash_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate Bash support bundle path preserves the original test status."""
         if os.name == "nt":
@@ -843,6 +937,67 @@ exit 99
 
         self.assertIn("//:dd_upload_payloads", log_text)
         self.assertIn("--dry-run --validate-enrichment", log_text)
+
+    def test_powershell_wrapper_uploads_after_partial_validation_failures(self) -> None:
+        """Validate PowerShell uploads fresh payloads after validation failures."""
+        pwsh = _require_command(self, "pwsh", "pwsh is required for PowerShell wrapper smoke")
+        wrapper = _runfile("tools/test_optimization/run_test_optimization_ci.ps1")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fake_bazel = root / "bazel.ps1"
+            log_path = root / "bazel.log"
+            fake_bazel.write_text(
+                f"""
+param([Parameter(ValueFromRemainingArguments = $true)][string[]]$BazelArgs)
+$Command = $BazelArgs -join ' '
+Add-Content -LiteralPath {str(log_path)!r} -Value $Command
+if ($BazelArgs[0] -eq 'test') {{ exit 0 }}
+if ($Command -like '*//:dd_test_optimization_doctor*') {{ exit 11 }}
+if ($Command -like '*//:dd_upload_payloads*--dry-run*') {{ exit 12 }}
+if ($Command -like '*//:dd_upload_payloads*') {{ exit 0 }}
+exit 99
+""",
+                encoding="utf-8",
+            )
+            fake_bazel.chmod(0o755)
+            tmpdir = root / "tmp"
+            tmpdir.mkdir()
+            env = os.environ.copy()
+            env["DD_TEST_OPTIMIZATION_TMPDIR"] = str(tmpdir)
+            uploader_report = root / "custom-uploader-report.json"
+            env["DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON"] = str(uploader_report)
+
+            result = subprocess.run(
+                [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-ExecutionPolicy",
+                    "Bypass",
+                    "-File",
+                    str(wrapper),
+                    "-Bazel",
+                    str(fake_bazel),
+                    "-Upload",
+                    "//pkg:target",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=env,
+                check=False,
+            )
+
+            self.assertEqual(11, result.returncode, result.stderr + result.stdout)
+            upload_commands = [
+                line
+                for line in log_path.read_text(encoding="utf-8").splitlines()
+                if "//:dd_upload_payloads" in line
+            ]
+            self.assertEqual(1, len(upload_commands), upload_commands)
+            self.assertIn("--validate-enrichment", upload_commands[0])
+            self.assertNotIn("--dry-run", upload_commands[0])
+            self.assertIn(f"--report-json={uploader_report}", upload_commands[0])
 
     def test_powershell_wrapper_support_bundle_preserves_failed_test_status(self) -> None:
         """Validate PowerShell support bundle path preserves the original test status."""
@@ -1588,6 +1743,83 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 self.mod._resolve_expected_targets(config, config_path)
             self.assertIn("different target sets", stderr.getvalue())
 
+    def test_runtime_expected_targets_are_sorted_and_must_match_configured_inputs(self) -> None:
+        """Validate runtime target selection is exact, deterministic, and fail closed."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config_path = self._write_doctor_config(root, ["//pkg:a_test", "//pkg:b_test"])
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+
+            targets, source = self.mod._resolve_expected_targets(
+                config,
+                config_path,
+                ["//pkg:b_test", "//pkg:a_test"],
+                True,
+            )
+            self.assertEqual(["//pkg:a_test", "//pkg:b_test"], targets)
+            self.assertEqual("runtime_and_configured", source)
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._resolve_expected_targets(
+                    config,
+                    config_path,
+                    ["//pkg:a_test", "//pkg:a_test"],
+                    True,
+                )
+            self.assertIn("duplicate target labels", stderr.getvalue())
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._resolve_expected_targets(config, config_path, [], True)
+            self.assertIn("requires at least one --expected-target", stderr.getvalue())
+
+    def test_runtime_contexts_validate_and_sort_keyed_context_telemetry_pairs(self) -> None:
+        """Validate runtime contexts preserve exact repo, service, and runtime identity."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entries = []
+            for repo_name, service_name in (("repo-b", "service-b"), ("repo-a", "service-a")):
+                repo_dir = root / repo_name
+                repo_dir.mkdir()
+                context_path = repo_dir / "context.json"
+                context_path.write_text(
+                    json.dumps({
+                        "topt.sync.repository_name": repo_name,
+                        "service.name": service_name,
+                        "runtime.name": "go",
+                    }),
+                    encoding="utf-8",
+                )
+                (repo_dir / "telemetry_facts.json").write_text(
+                    json.dumps({
+                        "schema_version": 1,
+                        "service_name": service_name,
+                        "runtime_name": "go",
+                        "counts": [],
+                        "distributions": [],
+                    }),
+                    encoding="utf-8",
+                )
+                entries.append(f"{repo_name}={context_path}")
+
+            contexts = self.mod._load_runtime_contexts(entries)
+            self.assertEqual(["repo-a", "repo-b"], [repo for repo, _ in contexts])
+
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_runtime_contexts([entries[0], entries[0]])
+            self.assertIn("duplicate --context-entry repository", stderr.getvalue())
+
+            context_path = contexts[0][1]
+            context_doc = json.loads(context_path.read_text(encoding="utf-8"))
+            context_doc["topt.sync.repository_name"] = "other-repo"
+            context_path.write_text(json.dumps(context_doc), encoding="utf-8")
+            stderr = io.StringIO()
+            with self.assertRaises(SystemExit), mock.patch("sys.stderr", stderr):
+                self.mod._load_runtime_contexts([f"repo-a={context_path}"])
+            self.assertIn("repository mismatch", stderr.getvalue())
+
     def test_expected_targets_file_rejects_duplicates_and_invalid_labels(self) -> None:
         """Validate generated target input cannot weaken local exactness."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -1705,7 +1937,7 @@ class TestOptimizationDoctorTests(unittest.TestCase):
     @staticmethod
     def _bep_test_result(
         label: str,
-        output: str,
+        output: str | None,
         *,
         cached_locally: bool = False,
         cached_remotely: bool = False,
@@ -1721,12 +1953,16 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 },
             },
             "testResult": {
-                "testActionOutput": [
-                    {
-                        "name": "test.outputs",
-                        "uri": output,
-                    },
-                ],
+                "testActionOutput": (
+                    []
+                    if output is None
+                    else [
+                        {
+                            "name": "test.outputs",
+                            "uri": output,
+                        },
+                    ]
+                ),
                 "status": "PASSED",
             },
         }
@@ -1737,6 +1973,86 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         if cached_remotely:
             result["executionInfo"] = {"cachedRemotely": True}
         return event
+
+    @staticmethod
+    def _bep_skipped_target(
+        label: str,
+        *,
+        snake_case: bool = False,
+        reason: str = "SKIPPED",
+    ) -> dict[str, object]:
+        """Return the target-completed event Bazel emits for a skipped target."""
+        id_key = "target_completed" if snake_case else "targetCompleted"
+        return {
+            "id": {id_key: {"label": label, "configuration": {"id": "config"}}},
+            "aborted": {
+                "reason": reason,
+                "description": f"Target {label} build was skipped.",
+            },
+        }
+
+    def test_bep_freshness_reads_only_platform_skipped_target_events(self) -> None:
+        """Treat Bazel's explicit SKIPPED reason as the platform-skip contract."""
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "skipped.ndjson"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_skipped_target("//pkg:camel"),
+                    self._bep_skipped_target("//pkg:snake", snake_case=True),
+                    self._bep_skipped_target("//pkg:failed", reason="ANALYSIS_FAILURE"),
+                ],
+            )
+
+            freshness = self.mod._parse_bep_freshness([bep])
+
+        self.assertEqual({"//pkg:camel", "//pkg:snake"}, freshness.skipped_targets)
+
+    def test_bep_freshness_rejects_target_reported_as_skipped_and_executed(self) -> None:
+        """Reject overlapping BEPs that disagree about whether a target ran."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bep = root / "ambiguous.ndjson"
+            self._write_bep(
+                bep,
+                [
+                    self._bep_skipped_target("//pkg:target"),
+                    self._bep_test_result(
+                        "//pkg:target",
+                        (root / "bazel-testlogs/pkg/target/test.outputs").as_uri(),
+                    ),
+                ],
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                self.mod._parse_bep_freshness([bep])
+
+        self.assertIn("both platform-skipped and executed", stderr.getvalue())
+
+    def test_bep_freshness_rejects_cached_result_for_skipped_target_without_outputs(self) -> None:
+        """Treat every cached TestResult as execution evidence, even without outputs."""
+        for cache_kind in ("local", "remote"):
+            with self.subTest(cache_kind=cache_kind), tempfile.TemporaryDirectory() as tmp:
+                bep = Path(tmp) / "ambiguous.ndjson"
+                self._write_bep(
+                    bep,
+                    [
+                        self._bep_skipped_target("//pkg:target"),
+                        self._bep_test_result(
+                            "//pkg:target",
+                            None,
+                            cached_locally=cache_kind == "local",
+                            cached_remotely=cache_kind == "remote",
+                        ),
+                    ],
+                )
+
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                    self.mod._parse_bep_freshness([bep])
+
+            self.assertIn("both platform-skipped and executed", stderr.getvalue())
 
     def _remote_outputs_zip_freshness(self, root: Path, *, label: str = "//pkg:remote_only") -> object:
         """Create BEP freshness for one remote stageable outputs.zip carrier."""
@@ -2207,6 +2523,44 @@ $rows | ConvertTo-Json -Compress
             self.assertEqual(["//pkg:target"], report["targets"]["cached"])
             self.assertEqual(0, report["summary"]["validated_output_dirs"])
             self.assertEqual(0, report["summary"]["payloads"]["json"])
+
+    def test_doctor_report_accepts_platform_skipped_expected_target(self) -> None:
+        """A platform-incompatible target is accounted for without a payload."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bep = root / "skipped.ndjson"
+            self._write_bep(
+                bep,
+                [self._bep_skipped_target("//pkg:target")],
+            )
+            config = self._write_doctor_config(root, ["//pkg:target"])
+            report_path = root / "doctor-report.json"
+
+            with mock.patch.dict(
+                os.environ,
+                {"BUILD_WORKSPACE_DIRECTORY": str(root)},
+                clear=False,
+            ):
+                os.environ.pop("TESTLOGS_DIR", None)
+                rc = self.mod.main([
+                    "--config",
+                    str(config),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--report-json",
+                    str(report_path),
+                ])
+
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, rc)
+        self.assertEqual("ok", report["result"]["reason_code"])
+        self.assertEqual(["//pkg:target"], report["bep"]["skipped_targets"])
+        self.assertEqual(["//pkg:target"], report["targets"]["skipped"])
+        self.assertEqual([], report["targets"]["missing"])
+        self.assertEqual(0, report["summary"]["validated_output_dirs"])
 
     def test_doctor_report_json_classifies_remote_only_without_downloader(self) -> None:
         """Validate strict BEP artifact mode reports remote-only artifacts without a downloader."""
@@ -2727,6 +3081,95 @@ $rows | ConvertTo-Json -Compress
                                     "name": "test.outputs",
                                     "uri": source_output.as_uri(),
                                     "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                                },
+                            ],
+                        },
+                    },
+                ],
+            )
+
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root)}, clear=False):
+                os.environ.pop("TESTLOGS_DIR", None)
+                rc = self.mod.main([
+                    "--config",
+                    str(config_path),
+                    "--bep-json",
+                    str(bep),
+                    "--freshness-source=bep",
+                    "--freshness-mode=required",
+                    "--artifact-source=bep",
+                    "--remote-artifacts=download",
+                    "--artifact-staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                ])
+
+            self.assertEqual(0, rc)
+
+    def test_doctor_expected_target_ignores_mixed_ordinary_bep_artifact(self) -> None:
+        """Validate mixed ordinary outputs are not staged for expected-target validation."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            optimized = self._write_doctor_output(
+                root / "optimized-artifact",
+                "module",
+                "//pkg:target.topt",
+            )
+            ordinary = root / "ordinary-artifact" / "test.outputs"
+            ordinary.mkdir(parents=True)
+            (ordinary / "passthrough.txt").write_text("ordinary\n", encoding="utf-8")
+            config_path = self._write_doctor_config(root, ["//pkg:target.topt"])
+            bep = root / "freshness.bep.json"
+            self._write_bep(
+                bep,
+                [
+                    {
+                        "id": {
+                            "testResult": {
+                                "label": "//pkg:target.topt",
+                                "run": 1,
+                                "shard": 1,
+                                "attempt": 1,
+                            },
+                        },
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": optimized.as_uri(),
+                                    "pathPrefix": [
+                                        "bazel-out",
+                                        "k8-fastbuild",
+                                        "testlogs",
+                                        "pkg",
+                                        "target.topt",
+                                    ],
+                                },
+                            ],
+                        },
+                    },
+                    {
+                        "id": {
+                            "testResult": {
+                                "label": "//tools:ordinary",
+                                "run": 1,
+                                "shard": 1,
+                                "attempt": 1,
+                            },
+                        },
+                        "testResult": {
+                            "status": "PASSED",
+                            "testActionOutput": [
+                                {
+                                    "name": "test.outputs",
+                                    "uri": ordinary.as_uri(),
+                                    "pathPrefix": [
+                                        "bazel-out",
+                                        "k8-fastbuild",
+                                        "testlogs",
+                                        "tools",
+                                        "ordinary",
+                                    ],
                                 },
                             ],
                         },
@@ -4530,6 +4973,54 @@ Path(out).mkdir(parents=True)
         self.assertTrue(any(line.startswith("staged\t//pkg:target\tpkg/target/test.outputs\t") for line in stdout_lines))
         self.assertEqual("", result.stderr)
 
+    def test_bep_artifact_stage_helper_skips_invalid_sibling_bep(self) -> None:
+        """Validate one malformed BEP does not prevent staging a valid sibling."""
+        helper = _runfile("tools/core/bep_artifact_stage_helper.py")
+        doctor_runtime = _runfile("tools/core/test_optimization_doctor.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_output = self._write_doctor_output(root / "external-artifacts", "module", "//pkg:target")
+            valid_bep = root / "valid.bep.json"
+            self._write_bep(
+                valid_bep,
+                [{
+                    "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
+                    "testResult": {
+                        "status": "PASSED",
+                        "testActionOutput": [{
+                            "name": "test.outputs",
+                            "uri": source_output.as_uri(),
+                            "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "target"],
+                        }],
+                    },
+                }],
+            )
+            invalid_bep = root / "invalid.bep.json"
+            invalid_bep.write_text("{not-json}\n", encoding="utf-8")
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(helper),
+                    "--doctor-runtime",
+                    str(doctor_runtime),
+                    "--staging-dir",
+                    str(root / ".topt" / "bep-artifacts"),
+                    "--remote-artifacts=download",
+                    "--artifact-source=bep",
+                    str(invalid_bep),
+                    str(valid_bep),
+                ],
+                cwd=root,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("failed to parse BEP JSON", result.stderr)
+        self.assertIn("selected\t//pkg:target\tpkg/target/test.outputs", result.stdout)
+
     def test_bep_artifact_stage_helper_selects_remote_without_downloader_in_download_mode(self) -> None:
         """Validate helper suppresses stale local fallback even when remote staging skips."""
         helper = _runfile("tools/core/bep_artifact_stage_helper.py")
@@ -5986,6 +6477,59 @@ class LintUploaderTemplatesTests(unittest.TestCase):
                 "exit /b %ERRORLEVEL%\n"
             )
 
+    def test_main_lints_legacy_runtimes_and_python_launchers(self) -> None:
+        """Keep both rollout implementations covered by the lint entrypoint."""
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            core = repo / "tools" / "core"
+            core.mkdir(parents=True)
+            for name in (
+                "uploader_bash_runtime.sh.tpl",
+                "uploader_python_launcher.sh.tpl",
+            ):
+                (core / name).write_text(
+                    "#!/usr/bin/env bash\necho __DDTPL_VALUE__\n",
+                    encoding="utf-8",
+                )
+            for name in (
+                "uploader_powershell_runtime.ps1.tpl",
+                "uploader_python_launcher.ps1.tpl",
+            ):
+                (core / name).write_text(
+                    "Write-Output __DDTPL_VALUE__\n",
+                    encoding="utf-8",
+                )
+            (core / "uploader_batch_runtime.bat.tpl").write_text(
+                "@echo off\n"
+                "powershell.exe -File \"%SCRIPT_DIR%__DDTPL_PS_NAME__\" %*\n"
+                "exit /b %ERRORLEVEL%\n",
+                encoding="utf-8",
+            )
+
+            with mock.patch.object(
+                self.mod,
+                "_repo_root",
+                return_value=repo,
+            ), mock.patch.object(self.mod, "_run") as run, mock.patch.object(
+                sys,
+                "argv",
+                ["lint_uploader_templates.py"],
+            ):
+                self.assertEqual(0, self.mod.main())
+
+            shellcheck_calls = [
+                call
+                for call in run.call_args_list
+                if call.args[0][0] == "shellcheck"
+            ]
+            powershell_calls = [
+                call
+                for call in run.call_args_list
+                if call.args[0][0] == "pwsh"
+            ]
+            self.assertEqual(2, len(shellcheck_calls))
+            self.assertEqual(2, len(powershell_calls))
+
 
 class RuntimeTemplateParityTests(unittest.TestCase):
     """Test case group covering RuntimeTemplateParityTests behaviors."""
@@ -6040,6 +6584,23 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         return match.group(1).replace("''", "'")
 
     @staticmethod
+    def _extract_python_fingerprint_alphabet(python_text: str) -> str:
+        """Extract the Python runtime alphabet without importing uploader code."""
+        tree = ast.parse(python_text)
+        for node in tree.body:
+            if not isinstance(node, ast.Assign):
+                continue
+            if any(
+                isinstance(target, ast.Name)
+                and target.id == "FINGERPRINT_ALPHABET"
+                for target in node.targets
+            ):
+                value = ast.literal_eval(node.value)
+                if isinstance(value, str):
+                    return value
+        raise AssertionError("unable to locate Python fingerprint alphabet")
+
+    @staticmethod
     def _write_bep_staging_smoke_fixture(root: Path) -> Path:
         """Create a BEP + outputs.zip fixture for generated uploader smoke tests."""
         source_zip = root / "remote" / "outputs.zip"
@@ -6092,12 +6653,15 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
     @staticmethod
     def _write_mixed_fresh_output_fixture(root: Path) -> tuple[Path, Path]:
-        """Create one payload-producing and one empty fresh expected output."""
+        """Create valid, empty, and locally stale unmappable expected outputs."""
+        unmappable_output = root / "bazel-testlogs" / "pkg" / "a_unmappable" / "test.outputs"
         valid_output = root / "bazel-testlogs" / "pkg" / "valid" / "test.outputs"
         empty_output = root / "bazel-testlogs" / "pkg" / "empty" / "test.outputs"
+        unmappable_output.mkdir(parents=True)
         valid_output.mkdir(parents=True)
         empty_output.mkdir(parents=True)
         for output_dir, label in (
+            (unmappable_output, "//pkg:a_unmappable"),
             (valid_output, "//pkg:valid"),
             (empty_output, "//pkg:empty"),
         ):
@@ -6105,6 +6669,17 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 json.dumps({"bazel.target": label}),
                 encoding="utf-8",
             )
+        unmappable_payload_dir = unmappable_output / "payloads" / "tests"
+        unmappable_payload_dir.mkdir(parents=True)
+        (unmappable_payload_dir / "span_events_stale.json").write_text(
+            json.dumps({
+                "events": [{
+                    "type": "test",
+                    "content": {"resource": "pkg.stale", "meta": {}, "metrics": {}},
+                }],
+            }),
+            encoding="utf-8",
+        )
         payload_dir = valid_output / "payloads" / "tests"
         payload_dir.mkdir(parents=True)
         (payload_dir / "span_events_valid.json").write_text(
@@ -6120,6 +6695,20 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         TestOptimizationDoctorTests._write_bep(
             bep,
             [
+                {
+                    "id": {
+                        "testResult": {
+                            "label": "//pkg:a_unmappable",
+                            "run": 1,
+                            "shard": 1,
+                            "attempt": 1,
+                        },
+                    },
+                    "testResult": {
+                        "status": "PASSED",
+                        "testActionOutput": [{"name": "test.log", "uri": "file:///tmp/test.log"}],
+                    },
+                },
                 TestOptimizationDoctorTests._bep_test_result(
                     "//pkg:empty",
                     empty_output.as_uri(),
@@ -6134,7 +6723,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         expected_targets.write_text(
             json.dumps({
                 "schema_version": 1,
-                "targets": ["//pkg:empty", "//pkg:valid"],
+                "targets": ["//pkg:a_unmappable", "//pkg:empty", "//pkg:missing", "//pkg:valid"],
             }),
             encoding="utf-8",
         )
@@ -6195,6 +6784,380 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         env.pop("RUNFILES_MANIFEST_FILE", None)
         return env
 
+    def _run_local_test_upload(
+        self,
+        runtime: str,
+        payload: dict[str, object],
+        responder,
+        *,
+        extra_args: tuple[str, ...] = (),
+        debug: bool = False,
+        gzip_enabled: bool,
+        keep_payloads: bool = True,
+        read_only_parent: bool = False,
+        read_only_source: bool = False,
+    ) -> tuple[
+        subprocess.CompletedProcess[str],
+        list[dict[str, object]],
+        Optional[dict[str, object]],
+    ]:
+        """Run one generated uploader against a recording local test intake."""
+        bash = _require_functional_bash(self)
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated uploader parity")
+        _require_command(self, "jq", "jq is required for oversized Bash payload splitting")
+
+        root = Path(tempfile.mkdtemp())
+        payload_dir = root / "bazel-testlogs" / "pkg" / "test" / "test.outputs" / "payloads" / "tests"
+        source = payload_dir / "span_events_generated.json"
+        try:
+            payload_dir.mkdir(parents=True)
+            source.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            if read_only_source:
+                source.chmod(0o444)
+            if read_only_parent:
+                payload_dir.chmod(0o555)
+            runfiles_dir = root / "empty.runfiles"
+            runfiles_dir.mkdir()
+
+            if runtime == "Bash":
+                generated = root / "generated_uploader.sh"
+                generated.write_text(
+                    _render_uploader_runtime_template(
+                        "tools/core/uploader_bash_runtime.sh.tpl",
+                        fail_on_error=True,
+                        curl_retry_flags="--retry 1 --retry-delay 0 --retry-connrefused",
+                    ),
+                    encoding="utf-8",
+                )
+                generated.chmod(0o755)
+                command = [bash, str(generated), "--allow-cached-payload-uploads", *extra_args]
+            elif runtime == "PowerShell":
+                generated = root / "generated_uploader.ps1"
+                generated.write_text(
+                    _render_uploader_runtime_template(
+                        "tools/core/uploader_powershell_runtime.ps1.tpl",
+                        fail_on_error=True,
+                    ),
+                    encoding="utf-8",
+                )
+                command = [
+                    pwsh,
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-File",
+                    str(generated),
+                    "--allow-cached-payload-uploads",
+                    *extra_args,
+                ]
+            else:
+                raise AssertionError(f"unknown uploader runtime: {runtime}")
+
+            env = os.environ.copy()
+            env.update({
+                "BUILD_WORKSPACE_DIRECTORY": str(root),
+                "DD_TEST_OPTIMIZATION_DEBUG": "1" if debug else "0",
+                "DD_TEST_OPTIMIZATION_GZIP": "1" if gzip_enabled else "0",
+                "DD_TEST_OPTIMIZATION_KEEP_PAYLOADS": "1" if keep_payloads else "0",
+                "DD_TEST_OPTIMIZATION_MAX_WAIT_SEC": "0",
+                "DD_TEST_OPTIMIZATION_QUIESCENT_SEC": "0",
+                "RUNFILES_DIR": str(runfiles_dir),
+                "TESTLOGS_DIR": str(root / "bazel-testlogs"),
+            })
+            env.pop("DD_API_KEY", None)
+            env.pop("RUNFILES_MANIFEST_FILE", None)
+
+            with _serve_test_uploads(responder) as (base_url, records):
+                env["DD_TEST_OPTIMIZATION_AGENT_URL"] = base_url
+                result = subprocess.run(
+                    command,
+                    cwd=root,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    timeout=45,
+                    check=False,
+                )
+                retained_payload = None
+                if source.is_file():
+                    retained_payload = json.loads(source.read_text(encoding="utf-8"))
+                return result, list(records), retained_payload
+        finally:
+            if read_only_parent and payload_dir.exists():
+                payload_dir.chmod(0o755)
+            if read_only_source and source.exists():
+                source.chmod(0o600)
+            _cleanup_tempdir_with_windows_retry(root)
+
+    @staticmethod
+    def _large_test_payload(*, event_count: int, blob_bytes: int) -> dict[str, object]:
+        """Build an oversized payload without checking a large fixture into the repo."""
+        return {
+            "custom_envelope": {"preserved": True},
+            "events": [
+                {
+                    "content": {
+                        "meta": {"blob": "x" * blob_bytes, "event.id": f"event-{index}"},
+                        "metrics": {},
+                        "resource": f"pkg.test.{index}",
+                    },
+                    "type": "test",
+                }
+                for index in range(event_count)
+            ],
+            "metadata": {"*": {"language": "python", "library_version": "test"}},
+            "version": 1,
+        }
+
+    def test_generated_uploaders_log_failed_test_upload_details(self) -> None:
+        """Expose bounded response bodies and wire sizes without debug mode."""
+        payload = self._large_test_payload(event_count=1, blob_bytes=64)
+
+        def reject(_payload, _records):
+            return 413, {"error": "payload too large"}
+
+        for runtime in ("Bash", "PowerShell"):
+            for gzip_enabled in (False, True):
+                with self.subTest(runtime=runtime, gzip=gzip_enabled):
+                    result, records, retained_payload = self._run_local_test_upload(
+                        runtime,
+                        payload,
+                        reject,
+                        gzip_enabled=gzip_enabled,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertNotEqual(0, result.returncode, output)
+                    self.assertIsNotNone(retained_payload)
+                    self.assertGreaterEqual(len(records), 1)
+                    self.assertIn("http=413", output)
+                    self.assertIn("uncompressed_bytes=", output)
+                    self.assertIn("transmitted_bytes=", output)
+                    self.assertIn("response_body='{\"error\":\"payload too large\"}'", output)
+                    self.assertIn(
+                        "encoding=gzip" if gzip_enabled else "encoding=identity",
+                        output,
+                    )
+                    self.assertIn(
+                        "compressed_bytes=" if gzip_enabled else "compressed_bytes=none",
+                        output,
+                    )
+
+    def test_generated_uploaders_split_large_test_payloads_and_retry_parts(self) -> None:
+        """Split before transport while preserving order, envelope, gzip, and retry isolation."""
+        payload = self._large_test_payload(event_count=4, blob_bytes=1_300_000)
+
+        def retry_second_part(candidate, records):
+            event_ids = [event["content"]["meta"]["event.id"] for event in candidate["events"]]
+            prior_attempts = sum(
+                1
+                for record in records
+                if [event["content"]["meta"]["event.id"] for event in record["payload"]["events"]]
+                == event_ids
+            )
+            if event_ids == ["event-2", "event-3"] and prior_attempts == 0:
+                return 503, {"error": "retry this part"}
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            for gzip_enabled in (False, True):
+                with self.subTest(runtime=runtime, gzip=gzip_enabled):
+                    result, records, retained_payload = self._run_local_test_upload(
+                        runtime,
+                        payload,
+                        retry_second_part,
+                        gzip_enabled=gzip_enabled,
+                        keep_payloads=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(0, result.returncode, output)
+                    self.assertIsNone(retained_payload)
+                    self.assertIn("parts=2", output)
+                    successful = [record for record in records if record["status"] == 200]
+                    self.assertEqual(2, len(successful), records)
+                    event_ids = [
+                        event["content"]["meta"]["event.id"]
+                        for record in successful
+                        for event in record["payload"]["events"]
+                    ]
+                    self.assertEqual([f"event-{index}" for index in range(4)], event_ids)
+                    for record in records:
+                        self.assertLessEqual(record["decoded_bytes"], 4_500_000)
+                        self.assertEqual({"preserved": True}, record["payload"]["custom_envelope"])
+                        self.assertEqual(1, record["payload"]["version"])
+                        self.assertEqual("gzip" if gzip_enabled else "", record["encoding"])
+                    first_part_attempts = [
+                        record
+                        for record in records
+                        if record["payload"]["events"][0]["content"]["meta"]["event.id"] == "event-0"
+                    ]
+                    self.assertEqual(1, len(first_part_attempts), records)
+
+    def test_generated_uploaders_dry_run_validates_split_without_uploading(self) -> None:
+        """Use the real split preparation during dry-run without sending data."""
+        payload = self._large_test_payload(event_count=4, blob_bytes=1_300_000)
+
+        def accept(_payload, _records):
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            with self.subTest(runtime=runtime):
+                result, records, retained_payload = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    extra_args=("--dry-run",),
+                    gzip_enabled=True,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(0, result.returncode, output)
+                self.assertIsNotNone(retained_payload)
+                self.assertEqual([], records)
+                self.assertIn("dry-run would split test payload", output)
+                self.assertIn("into 2 parts", output)
+
+    def test_generated_uploaders_validate_enrichment_during_upload(self) -> None:
+        """Validate the enriched outbound body without a separate dry-run pass."""
+        payload = self._large_test_payload(event_count=1, blob_bytes=64)
+
+        def accept(_payload, _records):
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            with self.subTest(runtime=runtime, result="valid-default-logging"):
+                result, records, retained_payload = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    extra_args=("--validate-enrichment", "--expected-enriched-tag=event.id"),
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                    read_only_parent=True,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(0, result.returncode, output)
+                self.assertIsNone(retained_payload)
+                self.assertEqual(1, len(records), records)
+                self.assertNotIn("validated enriched test payload", output)
+
+            with self.subTest(runtime=runtime, result="valid-debug-logging"):
+                result, records, retained_payload = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    extra_args=("--validate-enrichment", "--expected-enriched-tag=event.id"),
+                    debug=True,
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                    read_only_parent=True,
+                )
+                output = result.stdout + result.stderr
+                self.assertEqual(0, result.returncode, output)
+                self.assertIsNone(retained_payload)
+                self.assertEqual(1, len(records), records)
+                self.assertIn("validated enriched test payload", output)
+                self.assertNotIn("dry-run validated enriched test payload", output)
+
+            with self.subTest(runtime=runtime, result="missing-tag"):
+                result, records, retained_payload = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    extra_args=("--validate-enrichment", "--expected-enriched-tag=missing.tag"),
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                )
+                output = result.stdout + result.stderr
+                self.assertNotEqual(0, result.returncode, output)
+                self.assertIsNotNone(retained_payload)
+                self.assertEqual([], records)
+                self.assertIn("missing expected tag(s): missing.tag", output)
+
+    def test_generated_uploaders_retry_only_failed_split_parts(self) -> None:
+        """Persist and retry only rejected parts after reporting aggregate failure."""
+        payload = self._large_test_payload(event_count=4, blob_bytes=1_300_000)
+
+        def reject_second_part(candidate, _records):
+            first_id = candidate["events"][0]["content"]["meta"]["event.id"]
+            if first_id == "event-2":
+                return 503, {"error": "persistent part failure"}
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            with self.subTest(runtime=runtime):
+                result, records, retained_payload = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    reject_second_part,
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                    read_only_parent=True,
+                    read_only_source=True,
+                )
+                output = result.stdout + result.stderr
+                self.assertNotEqual(0, result.returncode, output)
+                self.assertIsNotNone(retained_payload)
+                first_part = [
+                    record
+                    for record in records
+                    if record["payload"]["events"][0]["content"]["meta"]["event.id"] == "event-0"
+                ]
+                failed_part = [
+                    record
+                    for record in records
+                    if record["payload"]["events"][0]["content"]["meta"]["event.id"] == "event-2"
+                ]
+                self.assertEqual(1, len(first_part), records)
+                self.assertEqual(200, first_part[0]["status"])
+                self.assertGreaterEqual(len(failed_part), 2, records)
+                self.assertTrue(all(record["status"] == 503 for record in failed_part))
+                self.assertIn("part=2/2", output)
+                self.assertIn("persistent part failure", output)
+                self.assertIn("retained 1 failed split payload part(s) for retry", output)
+                assert retained_payload is not None
+                retained_ids = [
+                    event["content"]["meta"]["event.id"]
+                    for event in retained_payload["events"]
+                ]
+                self.assertEqual(["event-2", "event-3"], retained_ids)
+
+                retry_result, retry_records, retry_payload = self._run_local_test_upload(
+                    runtime,
+                    retained_payload,
+                    lambda _candidate, _records: (200, {}),
+                    gzip_enabled=True,
+                    keep_payloads=False,
+                )
+                retry_output = retry_result.stdout + retry_result.stderr
+                self.assertEqual(0, retry_result.returncode, retry_output)
+                self.assertIsNone(retry_payload)
+                retried_ids = [
+                    event["content"]["meta"]["event.id"]
+                    for record in retry_records
+                    for event in record["payload"]["events"]
+                ]
+                self.assertEqual(["event-2", "event-3"], retried_ids)
+
+    def test_generated_uploaders_reject_unsplittable_single_event(self) -> None:
+        """Reject one event above the hard intake limit without making a request."""
+        payload = self._large_test_payload(event_count=1, blob_bytes=5_100_000)
+
+        def accept(_payload, _records):
+            return 200, {}
+
+        for runtime in ("Bash", "PowerShell"):
+            with self.subTest(runtime=runtime):
+                result, records, retained_payload = self._run_local_test_upload(
+                    runtime,
+                    payload,
+                    accept,
+                    gzip_enabled=False,
+                )
+                output = result.stdout + result.stderr
+                self.assertNotEqual(0, result.returncode, output)
+                self.assertIsNotNone(retained_payload)
+                self.assertEqual([], records)
+                self.assertIn("single_event_too_large", output)
+
     def _assert_uploader_report_success(self, report_path: Path, bep_path: Path, staging_dir: Path) -> None:
         """Validate a successful generated uploader machine-readable report."""
         report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -6227,8 +7190,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertEqual(0, report["payloads"]["telemetry"]["processed"])
         self.assertEqual(0, report["upload_failures"])
 
-    def test_generated_uploaders_reject_any_fresh_expected_output_without_payloads(self) -> None:
-        """Validate one valid output cannot hide another empty expected output."""
+    def test_generated_uploaders_process_valid_payloads_before_reporting_partial_outputs(self) -> None:
+        """Validate missing or empty outputs do not hide another valid expected output."""
         _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
         bash = _require_functional_bash(self)
         if os.name == "nt":
@@ -6285,6 +7248,13 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             ]
             for name, command in invocations:
                 with self.subTest(runtime=name):
+                    expected_targets.write_text(
+                        json.dumps({
+                            "schema_version": 1,
+                            "targets": ["//pkg:a_unmappable", "//pkg:empty", "//pkg:missing", "//pkg:valid"],
+                        }),
+                        encoding="utf-8",
+                    )
                     report = root / f"{name.lower()}-report.json"
                     result = subprocess.run(
                         [
@@ -6307,14 +7277,188 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     )
                     output = result.stdout + result.stderr
                     self.assertNotEqual(0, result.returncode, output)
+                    self.assertIn(
+                        "no TestResult matched this target); continuing with other fresh outputs",
+                        output,
+                    )
+                    self.assertIn("BEP required freshness skipped", output)
                     self.assertIn("fresh expected test output produced no uploadable payloads", output)
                     self.assertIn("//pkg:empty", output)
                     report_doc = json.loads(report.read_text(encoding="utf-8"))
                     self.assertEqual("fail", report_doc["status"])
                     self.assertEqual("upload_failed_unknown", report_doc["result"]["reason_code"])
+                    self.assertEqual(1, report_doc["payloads"]["tests"]["processed"])
 
-    def test_generated_uploaders_accept_empty_expected_target_set(self) -> None:
-        """Validate an invocation without optimized targets ignores unrelated BEP rows."""
+                    expected_targets.write_text(
+                        json.dumps({
+                            "schema_version": 1,
+                            "targets": ["//pkg:a_unmappable", "//pkg:missing", "//pkg:valid"],
+                        }),
+                        encoding="utf-8",
+                    )
+                    partial_report = root / f"{name.lower()}-missing-report.json"
+                    partial_result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json",
+                            str(bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--report-json",
+                            str(partial_report),
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    partial_output = partial_result.stdout + partial_result.stderr
+                    self.assertNotEqual(0, partial_result.returncode, partial_output)
+                    self.assertIn("continuing with other fresh outputs", partial_output)
+                    self.assertIn("BEP required freshness skipped", partial_output)
+                    partial_report_doc = json.loads(partial_report.read_text(encoding="utf-8"))
+                    self.assertEqual("fail", partial_report_doc["status"])
+                    self.assertEqual(1, partial_report_doc["payloads"]["tests"]["processed"])
+
+    def test_generated_uploaders_process_valid_bep_siblings_before_reporting_missing_or_invalid_bep(self) -> None:
+        """Validate bad BEP inputs fail the result only after valid siblings are processed."""
+        _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
+        bash = _require_functional_bash(self)
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell execution")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            valid_bep, expected_targets = self._write_mixed_fresh_output_fixture(root)
+            expected_targets.write_text(
+                json.dumps({"schema_version": 1, "targets": ["//pkg:valid"]}),
+                encoding="utf-8",
+            )
+            missing_bep = root / "missing.bep.json"
+            invalid_bep = root / "invalid.bep.json"
+            invalid_bep.write_text("{not-json}\n", encoding="utf-8")
+            execution_log = root / "execution-log.json"
+            execution_log.write_text(
+                json.dumps({
+                    "mnemonic": "TestRunner",
+                    "runner": "processwrapper-sandbox",
+                    "cacheHit": False,
+                    "targetLabel": "//pkg:valid",
+                    "listedOutputs": [
+                        "bazel-out/k8-fastbuild/testlogs/pkg/valid/test.outputs",
+                    ],
+                }),
+                encoding="utf-8",
+            )
+            runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
+            env = self._generated_uploader_smoke_env(root, runfiles_dir)
+
+            generated_bash = root / "generated_uploader.sh"
+            generated_bash.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_bash_runtime.sh.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                    expected_targets_file_path=str(expected_targets),
+                    fail_on_error=True,
+                ),
+                encoding="utf-8",
+            )
+            generated_bash.chmod(0o755)
+            generated_powershell = root / "generated_uploader.ps1"
+            generated_powershell.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_powershell_runtime.ps1.tpl",
+                    doctor_runtime_rloc=_NON_SIBLING_DOCTOR_RUNTIME_RLOC,
+                    expected_targets_file_path=str(expected_targets),
+                    fail_on_error=True,
+                ),
+                encoding="utf-8",
+            )
+
+            for name, command in (
+                ("Bash", [bash, str(generated_bash)]),
+                ("PowerShell", [pwsh, "-NoLogo", "-NoProfile", "-File", str(generated_powershell)]),
+            ):
+                with self.subTest(runtime=name):
+                    report = root / f"{name.lower()}-bad-bep-report.json"
+                    result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json", str(missing_bep),
+                            "--bep-json", str(invalid_bep),
+                            "--bep-json", str(valid_bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--artifact-source=bep",
+                            "--report-json", str(report),
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(1, result.returncode, output)
+                    self.assertIn("BEP JSON not found", output)
+                    self.assertIn("failed to parse BEP JSON", output)
+                    report_doc = json.loads(report.read_text(encoding="utf-8"))
+                    self.assertEqual(1, report_doc["payloads"]["tests"]["processed"])
+                    self.assertGreaterEqual(report_doc["upload_failures"], 2)
+
+                    for scenario, expected_processed, freshness_args in (
+                        ("disabled", 2, ["--allow-cached-payload-uploads"]),
+                        (
+                            "execution-log",
+                            1,
+                            [
+                                "--execution-log-json", str(execution_log),
+                                "--freshness-source=execution_log",
+                                "--freshness-mode=required",
+                            ],
+                        ),
+                    ):
+                        with self.subTest(runtime=name, freshness=scenario):
+                            partial_report = root / f"{name.lower()}-{scenario}-missing-bep-report.json"
+                            partial_result = subprocess.run(
+                                [
+                                    *command,
+                                    "--bep-json", str(missing_bep),
+                                    "--bep-json", str(valid_bep),
+                                    "--artifact-source=bep",
+                                    "--report-json", str(partial_report),
+                                    "--dry-run",
+                                    *freshness_args,
+                                ],
+                                cwd=root,
+                                env=env,
+                                stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE,
+                                text=True,
+                                timeout=30,
+                                check=False,
+                            )
+                            partial_output = partial_result.stdout + partial_result.stderr
+                            self.assertEqual(1, partial_result.returncode, partial_output)
+                            partial_report_doc = json.loads(
+                                partial_report.read_text(encoding="utf-8")
+                            )
+                            self.assertEqual(
+                                expected_processed,
+                                partial_report_doc["payloads"]["tests"]["processed"],
+                            )
+                            self.assertEqual(1, partial_report_doc["upload_failures"])
+
+    def test_generated_uploaders_accept_empty_or_platform_skipped_targets(self) -> None:
+        """Validate expected targets that legitimately produce no payload."""
         _require_command(self, "jq", "jq is required for Bash BEP freshness parsing")
         bash = _require_functional_bash(self)
         if os.name == "nt":
@@ -6325,14 +7469,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             root = Path(tmp)
             (root / "bazel-testlogs").mkdir()
             bep = self._write_bep_staging_smoke_fixture(root)
+            unrelated_bep = bep.read_text(encoding="utf-8")
             expected_targets = root / "expected_targets.json"
-            expected_targets.write_text(
-                json.dumps({
-                    "schema_version": 1,
-                    "targets": [],
-                }),
-                encoding="utf-8",
-            )
             runfiles_dir = self._write_non_sibling_runtime_runfiles(root)
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
 
@@ -6373,6 +7511,14 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                 ),
             ]:
                 with self.subTest(runtime=name):
+                    expected_targets.write_text(
+                        json.dumps({
+                            "schema_version": 1,
+                            "targets": [],
+                        }),
+                        encoding="utf-8",
+                    )
+                    bep.write_text(unrelated_bep, encoding="utf-8")
                     report = root / f"{name.lower()}-empty-report.json"
                     result = subprocess.run(
                         [
@@ -6400,6 +7546,211 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                     self.assertEqual(0, report_doc["bep"]["eligible_outputs"])
                     self.assertEqual(0, report_doc["payloads"]["tests"]["processed"])
 
+                    expected_targets.write_text(
+                        json.dumps({
+                            "schema_version": 1,
+                            "targets": ["//pkg:skipped"],
+                        }),
+                        encoding="utf-8",
+                    )
+                    TestOptimizationDoctorTests._write_bep(
+                        bep,
+                        [TestOptimizationDoctorTests._bep_skipped_target("//pkg:skipped")],
+                    )
+                    skipped_report = root / f"{name.lower()}-skipped-report.json"
+                    skipped_result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json",
+                            str(bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--report-json",
+                            str(skipped_report),
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    skipped_output = skipped_result.stdout + skipped_result.stderr
+                    self.assertEqual(0, skipped_result.returncode, skipped_output)
+                    skipped_report_doc = json.loads(skipped_report.read_text(encoding="utf-8"))
+                    self.assertEqual("ok", skipped_report_doc["status"])
+                    self.assertEqual(1, skipped_report_doc["bep"]["skipped_targets"])
+                    self.assertEqual(0, skipped_report_doc["upload_failures"])
+
+                    TestOptimizationDoctorTests._write_bep(
+                        bep,
+                        [
+                            TestOptimizationDoctorTests._bep_skipped_target("//pkg:skipped"),
+                            TestOptimizationDoctorTests._bep_test_result(
+                                "//pkg:skipped",
+                                None,
+                                cached_locally=True,
+                            ),
+                        ],
+                    )
+                    conflict_result = subprocess.run(
+                        [
+                            *command,
+                            "--bep-json",
+                            str(bep),
+                            "--freshness-source=bep",
+                            "--freshness-mode=required",
+                            "--artifact-source=local",
+                            "--dry-run",
+                        ],
+                        cwd=root,
+                        env=env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    conflict_output = conflict_result.stdout + conflict_result.stderr
+                    self.assertEqual(2, conflict_result.returncode, conflict_output)
+                    self.assertIn(
+                        "both platform-skipped and executed",
+                        conflict_output,
+                    )
+
+    def test_generated_uploaders_validate_runtime_selection_before_discovery(self) -> None:
+        """Validate Bash and PowerShell accept only complete keyed runtime selections."""
+        bash = _require_functional_bash(self)
+        if os.name == "nt":
+            self.skipTest("generated PowerShell uploader execution smoke is covered on non-Windows")
+        pwsh = _require_command(self, "pwsh", "pwsh is required for generated PowerShell execution")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            context_args = []
+            context_paths = []
+            for repo_name, service_name in (("repo-b", "service-b"), ("repo-a", "service-a")):
+                repo_dir = root / repo_name
+                repo_dir.mkdir()
+                context_path = repo_dir / "context.json"
+                context_path.write_text(
+                    json.dumps({
+                        "topt.sync.repository_name": repo_name,
+                        "service.name": service_name,
+                        "runtime.name": "go",
+                    }),
+                    encoding="utf-8",
+                )
+                (repo_dir / "telemetry_facts.json").write_text(
+                    json.dumps({
+                        "schema_version": 1,
+                        "service_name": service_name,
+                        "runtime_name": "go",
+                        "counts": [],
+                        "distributions": [],
+                    }),
+                    encoding="utf-8",
+                )
+                context_args.extend(["--context-entry", f"{repo_name}={context_path}"])
+                context_paths.append(context_path)
+
+            bash_script = root / "generated_uploader.sh"
+            bash_script.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_bash_runtime.sh.tpl",
+                    runtime_selection=True,
+                ),
+                encoding="utf-8",
+            )
+            bash_script.chmod(0o755)
+            powershell_script = root / "generated_uploader.ps1"
+            powershell_script.write_text(
+                _render_uploader_runtime_template(
+                    "tools/core/uploader_powershell_runtime.ps1.tpl",
+                    runtime_selection=True,
+                ),
+                encoding="utf-8",
+            )
+
+            for runtime, command in (
+                ("Bash", [bash, str(bash_script)]),
+                ("PowerShell", [pwsh, "-NoLogo", "-NoProfile", "-File", str(powershell_script)]),
+            ):
+                with self.subTest(runtime=runtime, case="missing"):
+                    result = subprocess.run(
+                        [*command, "--help"],
+                        cwd=root,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                    self.assertIn("requires at least one --expected-target", result.stdout + result.stderr)
+
+                with self.subTest(runtime=runtime, case="valid-multi-service"):
+                    debug_env = os.environ.copy()
+                    debug_env["DD_TEST_OPTIMIZATION_DEBUG"] = "1"
+                    result = subprocess.run(
+                        [*command, "--expected-target", "//pkg:test.topt", *context_args, "--help"],
+                        cwd=root,
+                        env=debug_env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(0, result.returncode, output)
+                    for context_path in context_paths:
+                        self.assertNotIn(str(context_path), output)
+
+                with self.subTest(runtime=runtime, case="duplicate-path-redacted"):
+                    duplicate_args = [
+                        "--context-entry",
+                        f"repo-b={context_paths[0]}",
+                        "--context-entry",
+                        f"repo-c={context_paths[0]}",
+                    ]
+                    result = subprocess.run(
+                        [*command, "--expected-target", "//pkg:test.topt", *duplicate_args, "--help"],
+                        cwd=root,
+                        env=debug_env,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    output = result.stdout + result.stderr
+                    self.assertEqual(2, result.returncode, output)
+                    self.assertIn("duplicate --context-entry path for repository 'repo-c'", output)
+                    self.assertNotIn(str(context_paths[0]), output)
+
+                with self.subTest(runtime=runtime, case="identity-mismatch"):
+                    result = subprocess.run(
+                        [
+                            *command,
+                            "--expected-target",
+                            "//pkg:test.topt",
+                            "--context-entry",
+                            f"wrong-repo={context_paths[0]}",
+                            "--help",
+                        ],
+                        cwd=root,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                    self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                    self.assertIn("identity or schema mismatch", result.stdout + result.stderr)
+
     def _assert_uploader_report_failure(self, report_path: Path, bep_path: Path) -> None:
         """Validate a failed generated uploader machine-readable report."""
         report = json.loads(report_path.read_text(encoding="utf-8"))
@@ -6410,8 +7761,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertEqual("fail", report["result"]["status"])
         self.assertEqual("payload_enrichment_failed", report["result"]["reason_code"])
         self.assertFalse(report["upload"]["attempted"])
-        self.assertTrue(report["upload"]["dry_run"])
-        self.assertTrue(report["config"]["dry_run"])
+        self.assertFalse(report["upload"]["dry_run"])
+        self.assertFalse(report["config"]["dry_run"])
         self.assertTrue(report["config"]["validate_enrichment"])
         self.assertEqual([str(bep_path)], report["bep"]["files"])
         self.assertEqual(1, report["payloads"]["test_outputs_dirs"])
@@ -6426,10 +7777,14 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
             encoding="utf-8"
         )
+        python_text = _runfile("tools/core/uploader_py/credentials.py").read_text(
+            encoding="utf-8"
+        )
 
         expected = self._extract_starlark_fingerprint_alphabet(sync_text)
         self.assertEqual(expected, self._extract_bash_fingerprint_alphabet(bash_text))
         self.assertEqual(expected, self._extract_powershell_fingerprint_alphabet(powershell_text))
+        self.assertEqual(expected, self._extract_python_fingerprint_alphabet(python_text))
 
     def test_runtime_unknown_char_bucketing_matches_sync(self) -> None:
         """Validate runtime unknown char bucketing matches sync behavior."""
@@ -6437,8 +7792,12 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
             encoding="utf-8"
         )
+        python_text = _runfile("tools/core/uploader_py/credentials.py").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("idx=$((alpha_len + (i % 7)))", bash_text)
         self.assertIn("$idx = $alphabet.Length + ($i % 7)", powershell_text)
+        self.assertIn("alphabet_length + (index % 7)", python_text)
 
     def test_bash_jq_avoids_reserved_label_variable(self) -> None:
         """Validate jq programs remain compatible with versions reserving `label`."""
@@ -6458,6 +7817,38 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertNotIn("msys", bash_text)
         self.assertNotIn("cygwin", bash_text)
         self.assertNotIn("exec powershell.exe", bash_text)
+
+    def test_partial_retry_uses_windows_powershell_51_compatible_apis(self) -> None:
+        """Keep partial retry persistence compatible with Windows PowerShell 5.1."""
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        retry_block = self._extract_text_block(
+            powershell_text,
+            "function Save-FailedTestPayloadParts",
+            "function Get-TelemetryHeaders",
+        )
+
+        self.assertIn("[System.Environment]::OSVersion.Platform", retry_block)
+        self.assertIn("[System.PlatformID]::Win32NT", retry_block)
+        self.assertNotIn("$IsWindows", retry_block)
+        self.assertIn("[System.IO.File]::Replace($retryPath, $SourcePath, $backupPath)", retry_block)
+        self.assertNotIn("[System.IO.File]::Move(", retry_block)
+
+    def test_payload_cleanup_uses_windows_powershell_51_compatible_platform_detection(self) -> None:
+        """Keep successful-upload cleanup compatible with Windows PowerShell 5.1."""
+        powershell_text = _runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text(
+            encoding="utf-8"
+        )
+        cleanup_block = self._extract_text_block(
+            powershell_text,
+            "function Remove-PayloadFile",
+            "# Track per-payload upload report counters.",
+        )
+
+        self.assertIn("[System.Environment]::OSVersion.Platform", cleanup_block)
+        self.assertIn("[System.PlatformID]::Win32NT", cleanup_block)
+        self.assertNotIn("$IsWindows", cleanup_block)
 
     def test_bash_runtime_guards_context_enrichment_failures(self) -> None:
         """Validate bash runtime falls back when jq context enrichment fails."""
@@ -6527,6 +7918,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             "DD_TEST_OPTIMIZATION_BEP_JSON",
             "FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE",
             "FRESHNESS_MISSING_OUTPUT_LABELS_FILE",
+            "FRESHNESS_SKIPPED_TARGETS_FILE",
             "prepare_bep_eligibility",
             "test_output_dir_is_freshness_eligible",
         ]:
@@ -6541,6 +7933,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             "DD_TEST_OPTIMIZATION_BEP_JSON",
             "FreshnessRemoteOnlyOutputs",
             "FreshnessMissingOutputLabels",
+            "FreshnessSkippedTargets",
             "Initialize-BepEligibility",
             "Test-OutputDirFreshnessEligible",
         ]:
@@ -6559,6 +7952,8 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn('EndsWith("/outputs.zip"', powershell_text)
         self.assertIn("reported as both fresh and cached", bash_text)
         self.assertIn("reported as both fresh and cached", powershell_text)
+        self.assertIn("both platform-skipped and executed", bash_text)
+        self.assertIn("both platform-skipped and executed", powershell_text)
         self.assertIn("FreshnessRemoteOnlyOutputs.ToArray()", powershell_text)
         self.assertNotIn("@($script:FreshnessRemoteOnlyOutputs)", powershell_text)
         self.assertLess(bash_text.index("--bep-json"), bash_text.index("--execution-log-json"))
@@ -6829,7 +8224,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
 
         for runtime, result in (("Bash", bash_result), ("PowerShell", powershell_result)):
             output = result.stdout + result.stderr
-            self.assertEqual(2, result.returncode, f"{runtime} output:\n{output}")
+            self.assertEqual(1, result.returncode, f"{runtime} output:\n{output}")
             self.assertIn("BEP references remote-only test outputs", output)
             self.assertIn("local test.outputs was not found", output)
 
@@ -6851,7 +8246,16 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertIn("_doctor_runtime", rule_text)
         self.assertIn("bep_artifact_stage_helper.py", rule_text)
         self.assertIn("test_optimization_doctor.py", rule_text)
-        self.assertIn("files = depset([bash_file, ps_file, bat_file])", rule_text)
+        self.assertIn("files = depset([", rule_text)
+        for output_name in (
+            "bash_file",
+            "ps_file",
+            "bat_file",
+            "python_bash_file",
+            "python_ps_file",
+            "python_bat_file",
+        ):
+            self.assertIn(output_name, rule_text)
         self.assertIn("--artifact-source=local|bep|auto", rule_text)
         self.assertIn("DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE", rule_text)
         self.assertIn("--remote-artifacts=disabled|download|required", rule_text)
@@ -7080,7 +8484,7 @@ echo blocked
 
     def test_generated_bash_uploader_writes_failure_report(self) -> None:
         """Validate generated Bash uploader writes a report for controlled upload failures."""
-        _require_command(self, "jq", "jq is required for Bash dry-run enrichment validation")
+        _require_command(self, "jq", "jq is required for Bash enrichment validation")
         bash = _require_functional_bash(self)
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -7100,6 +8504,8 @@ echo blocked
             generated_bash.chmod(0o755)
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
             env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
+            env["DD_API_KEY"] = "test-api-key"
+            env["DD_TEST_OPTIMIZATION_AGENTLESS_URL"] = "http://127.0.0.1:9"
             report = root / "uploader-report.json"
             env["DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON"] = str(report)
             result = subprocess.run(
@@ -7114,7 +8520,6 @@ echo blocked
                     "--remote-artifacts=download",
                     "--artifact-staging-dir",
                     str(root / ".topt" / "bep-artifacts"),
-                    "--dry-run",
                     "--validate-enrichment",
                     "--expected-enriched-tag=missing.required.tag",
                 ],
@@ -7260,6 +8665,8 @@ echo blocked
             )
             env = self._generated_uploader_smoke_env(root, runfiles_dir)
             env["DD_TEST_OPTIMIZATION_BEP_JSON"] = str(bep)
+            env["DD_API_KEY"] = "test-api-key"
+            env["DD_TEST_OPTIMIZATION_AGENTLESS_URL"] = "http://127.0.0.1:9"
             report = root / "uploader-report.json"
             env["DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON"] = str(report)
             result = subprocess.run(
@@ -7277,7 +8684,6 @@ echo blocked
                     "--remote-artifacts=download",
                     "--artifact-staging-dir",
                     str(root / ".topt" / "bep-artifacts"),
-                    "--dry-run",
                     "--validate-enrichment",
                     "--expected-enriched-tag=missing.required.tag",
                 ],
@@ -7471,6 +8877,14 @@ echo blocked
         self.assertIn("Go test payloads can encode CI Visibility test data as span events", powershell_text)
         self.assertIn("events still receive context and Bazel tags before this CODEOWNERS pass", powershell_text)
         self.assertNotIn('[string]$eventType -eq "span"', powershell_text)
+
+    def test_bash_uploader_batches_codeowners_payload_updates(self) -> None:
+        """Validate CODEOWNERS enrichment rewrites each payload only once."""
+        bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
+
+        self.assertIn('jq --rawfile assignments "$assignments"', bash_text)
+        self.assertIn("One atomic replacement avoids rewriting the full payload per event", bash_text)
+        self.assertNotIn('jq --arg owners "$owners_json" --argjson idx "$idx"', bash_text)
 
     def test_uploader_skips_empty_test_payload_placeholders(self) -> None:
         """Validate empty JSON placeholders are not uploaded as test payloads."""

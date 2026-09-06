@@ -122,6 +122,10 @@ This product includes software developed at Datadog
     `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base, rules_go v0_62_0:
     `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+  - WORKSPACE base, rules_go v0_63_0:
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_63_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+  - Bzlmod base, rules_go v0_63_0:
+    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_63_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
   - Disabled alias gate for a fresh output root:
     `WINDOWS_DISABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Enabled alias and payload gate with valid Orchestrion pins:
