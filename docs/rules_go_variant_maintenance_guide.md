@@ -18,10 +18,11 @@ Orchestrion-enabled `rules_go` support lines and public consumer patch profiles.
 The public base tree for one supported upstream. For example, the current
 default upstream uses `third_party/rgo/v0_60_0/base`, and the additional
 support lines use `third_party/rgo/v0_61_1/base` and
-`third_party/rgo/v0_62_0/base`. Each tree contains clean upstream `rules_go`
-plus the generic Orchestrion support maintained by this repository. Bugs in
-our integration are fixed in the affected materialized tree, then the matching
-patch series is regenerated from that tree.
+`third_party/rgo/v0_62_0/base`, and `third_party/rgo/v0_63_0/base`. Each tree
+contains clean upstream `rules_go` plus the generic Orchestrion support
+maintained by this repository. Bugs in our integration are fixed in the
+affected materialized tree, then the matching patch series is regenerated from
+that tree.
 
 ### `third_party/rules_go_orchestrion/`
 

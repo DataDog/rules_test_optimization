@@ -168,7 +168,7 @@ When multiple upstream `rules_go` versions are supported, `rules_go_upstream`
 selects the upstream support line. Omitting `rules_go_upstream` preserves the
 repository default. The default `rules_go_upstream` is currently `v0_60_0`,
 which preserves the existing `third_party/rgo/v0_60_0/base` path.
-The registry also supports `v0_61_1` and `v0_62_0`.
+The registry also supports `v0_61_1`, `v0_62_0`, and `v0_63_0`.
 
 Maintainers track each supported upstream version with both patch series under
 `third_party/rules_go_orchestrion/patches/<upstream>/` and materialized base

@@ -1,0 +1,334 @@
+load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
+load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
+
+def _bootstrap_cache_key_stability_test(ctx):
+    env = unittest.begin(ctx)
+
+    go_identity = struct(
+        version = "go version go1.24.0 darwin/arm64",
+        goos = "darwin",
+        goarch = "arm64",
+    )
+    ordered_versions = {
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0",
+    }
+    reordered_versions = {
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0",
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
+    }
+
+    ordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", ordered_versions, go_identity)
+    reordered_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", reordered_versions, go_identity)
+    changed_versions = dict(ordered_versions)
+    changed_versions["github.com/DataDog/dd-trace-go/v2"] = "v2.8.0"
+    changed_key = orchestrion_extension_test_helpers.bootstrap_cache_key("v1.6.0", changed_versions, go_identity)
+
+    asserts.equals(env, ordered_key, reordered_key)
+    asserts.false(env, ordered_key == changed_key, "a selected module version change must invalidate the bootstrap cache")
+
+    return unittest.end(env)
+
+bootstrap_cache_key_stability_test = unittest.make(_bootstrap_cache_key_stability_test)
+
+def _bootstrap_cache_paths_contract_test(ctx):
+    env = unittest.begin(ctx)
+
+    fake_ctx = struct(os = struct(name = "linux"))
+    paths = orchestrion_extension_test_helpers.bootstrap_cache_paths(fake_ctx, "/tmp/cache-root", "cache-key", "orchestrion_bin")
+    asserts.equals(env, "/tmp/cache-root", paths.cache_root)
+    asserts.equals(env, "/tmp/cache-root/bootstrap/cache-key/orchestrion_bin", paths.binary_path)
+    asserts.equals(env, "/tmp/cache-root/bootstrap/cache-key/orchestrion_version.txt", paths.tool_version_file_path)
+    asserts.equals(env, "/tmp/cache-root/bootstrap/cache-key/module_proxy/root.marker", paths.module_proxy_root_marker)
+
+    required = orchestrion_extension_test_helpers.bootstrap_cache_required_entries(paths)
+    asserts.true(env, paths.resolved_modules_file_path in required.files, "resolved module manifest must be required")
+    asserts.true(env, paths.seed_go_sum_file_path in required.files, "seed go.sum must be required")
+    asserts.true(env, paths.module_proxy_root_marker in required.files, "module proxy marker must be required")
+
+    return unittest.end(env)
+
+bootstrap_cache_paths_contract_test = unittest.make(_bootstrap_cache_paths_contract_test)
+
+def _bootstrap_manifest_content_test(ctx):
+    env = unittest.begin(ctx)
+
+    paths = struct(key = "cache-key")
+    versions = {
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
+    }
+    identity = struct(
+        version = "go version go1.25.0 linux/amd64",
+        goos = "linux",
+        goarch = "amd64",
+    )
+    manifest = json.decode(orchestrion_extension_test_helpers.bootstrap_manifest_content(
+        paths,
+        "v1.6.0",
+        versions,
+        identity,
+        "orchestrion_bin",
+        "0123456789abcdef",
+    ))
+
+    asserts.equals(env, "cache-key", manifest["cache_key"])
+    asserts.equals(env, identity.version, manifest["go_identity"]["version"])
+    asserts.equals(env, versions, manifest["dd_trace_go_versions"])
+    asserts.equals(env, "0123456789abcdef", manifest["binary_sha256"])
+
+    return unittest.end(env)
+
+bootstrap_manifest_content_test = unittest.make(_bootstrap_manifest_content_test)
+
+def _module_proxy_seed_go_mod_test(ctx):
+    env = unittest.begin(ctx)
+
+    go_mod = orchestrion_extension_test_helpers.module_proxy_seed_go_mod(
+        "v1.6.0",
+        {
+            "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
+            "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
+            "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.7.0",
+        },
+    )
+
+    asserts.true(env, "go 1.21" in go_mod, "seed go.mod must keep the compatibility Go version")
+    asserts.true(env, "github.com/DataDog/orchestrion v1.6.0" in go_mod, "seed go.mod must use the configured orchestrion version")
+    asserts.false(env, "github.com/DataDog/orchestrion v1.5.0" in go_mod, "seed go.mod must not use the old hardcoded orchestrion version")
+
+    return unittest.end(env)
+
+module_proxy_seed_go_mod_test = unittest.make(_module_proxy_seed_go_mod_test)
+
+def _module_proxy_resolved_modules_json_test(ctx):
+    env = unittest.begin(ctx)
+
+    manifest = orchestrion_extension_test_helpers.module_proxy_resolved_modules_json({
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.7.0",
+        "github.com/DataDog/orchestrion": "v1.6.0",
+        "github.com/DataDog/dd-trace-go/v2": "v2.7.0",
+    })
+    http_index = manifest.find('"github.com/DataDog/dd-trace-go/contrib/net/http/v2"')
+    root_index = manifest.find('"github.com/DataDog/dd-trace-go/v2"')
+    orchestrion_index = manifest.find('"github.com/DataDog/orchestrion"')
+
+    asserts.true(env, http_index < root_index and root_index < orchestrion_index, "resolved module manifest must be sorted by module path")
+
+    return unittest.end(env)
+
+module_proxy_resolved_modules_json_test = unittest.make(_module_proxy_resolved_modules_json_test)
+
+def _module_proxy_exact_dd_trace_go_queries_test(ctx):
+    env = unittest.begin(ctx)
+
+    queries = orchestrion_extension_test_helpers.module_proxy_exact_dd_trace_go_queries({
+        "github.com/DataDog/dd-trace-go/v2": "v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.3.0",
+    })
+
+    asserts.equals(env, [
+        "github.com/DataDog/dd-trace-go/v2@v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.3.0",
+    ], queries)
+
+    return unittest.end(env)
+
+module_proxy_exact_dd_trace_go_queries_test = unittest.make(_module_proxy_exact_dd_trace_go_queries_test)
+
+def _parse_certutil_sha256_test(ctx):
+    env = unittest.begin(ctx)
+
+    output = """SHA256 hash of C:\\Users\\runneradmin\\orchestrion.exe:
+58 91 b5 b5 22 d5 df 08 6d 0f f0 b1 10 fb d9 d2
+1b b4 fc 71 63 af 34 d0 82 86 a2 e8 46 f6 be 03
+CertUtil: -hashfile command completed successfully.
+"""
+
+    digest = orchestrion_extension_test_helpers.parse_certutil_sha256(output)
+    asserts.equals(env, "5891b5b522d5df086d0ff0b110fbd9d21bb4fc7163af34d08286a2e846f6be03", digest)
+
+    return unittest.end(env)
+
+parse_certutil_sha256_test = unittest.make(_parse_certutil_sha256_test)
+
+def _powershell_single_quoted_literal_test(ctx):
+    env = unittest.begin(ctx)
+
+    path = "C:/Users/O'Reilly Runner/orchestrion.exe"
+    quoted = orchestrion_extension_test_helpers.powershell_single_quoted_literal(path)
+
+    asserts.equals(env, "'C:/Users/O''Reilly Runner/orchestrion.exe'", quoted)
+
+    return unittest.end(env)
+
+powershell_single_quoted_literal_test = unittest.make(_powershell_single_quoted_literal_test)
+
+def _host_platform_normalization_test(ctx):
+    env = unittest.begin(ctx)
+
+    asserts.equals(env, "darwin", orchestrion_extension_test_helpers.normalize_host_goos("mac os x"))
+    asserts.equals(env, "windows", orchestrion_extension_test_helpers.normalize_host_goos("windows_nt"))
+    asserts.equals(env, "linux", orchestrion_extension_test_helpers.normalize_host_goos("linux"))
+    asserts.equals(env, "arm64", orchestrion_extension_test_helpers.normalize_host_goarch("aarch64"))
+    asserts.equals(env, "amd64", orchestrion_extension_test_helpers.normalize_host_goarch("x86_64"))
+    asserts.equals(env, "riscv64", orchestrion_extension_test_helpers.normalize_host_goarch("riscv64"))
+
+    return unittest.end(env)
+
+host_platform_normalization_test = unittest.make(_host_platform_normalization_test)
+
+def _git_env_test(ctx):
+    env = unittest.begin(ctx)
+
+    linux_env = orchestrion_extension_test_helpers.git_env(struct(os = struct(name = "linux")))
+    asserts.equals(env, "/dev/null", linux_env["GIT_CONFIG_GLOBAL"])
+    asserts.equals(env, "1", linux_env["GIT_CONFIG_NOSYSTEM"])
+    asserts.equals(env, "0", linux_env["GIT_TERMINAL_PROMPT"])
+
+    windows_env = orchestrion_extension_test_helpers.git_env(struct(os = struct(name = "windows_nt")))
+    asserts.equals(env, "NUL", windows_env["GIT_CONFIG_GLOBAL"])
+    asserts.equals(env, "1", windows_env["GIT_CONFIG_NOSYSTEM"])
+    asserts.equals(env, "0", windows_env["GIT_TERMINAL_PROMPT"])
+
+    return unittest.end(env)
+
+git_env_test = unittest.make(_git_env_test)
+
+def _go_module_fetch_env_test(ctx):
+    env = unittest.begin(ctx)
+
+    default_env = orchestrion_extension_test_helpers.go_module_fetch_env(
+        struct(os = struct(environ = {})),
+    )
+    asserts.equals(env, "https://proxy.golang.org,direct", default_env["GOPROXY"])
+    asserts.equals(env, "", default_env["GONOSUMDB"])
+    asserts.equals(env, "", default_env["GOPRIVATE"])
+    asserts.equals(env, "", default_env["GONOPROXY"])
+    asserts.equals(env, "sum.golang.org https://sum.golang.org", default_env["GOSUMDB"])
+
+    configured_env = orchestrion_extension_test_helpers.go_module_fetch_env(
+        struct(
+            os = struct(
+                environ = {
+                    "GONOSUMDB": "github.com/DataDog",
+                    "GOPROXY": "https://proxy.example.test,direct",
+                },
+            ),
+        ),
+    )
+    asserts.equals(env, "https://proxy.example.test,direct", configured_env["GOPROXY"])
+    asserts.equals(env, "github.com/DataDog", configured_env["GONOSUMDB"])
+    asserts.equals(env, "", configured_env["GOPRIVATE"])
+    asserts.equals(env, "", configured_env["GONOPROXY"])
+    asserts.equals(env, "sum.golang.org https://sum.golang.org", configured_env["GOSUMDB"])
+
+    return unittest.end(env)
+
+go_module_fetch_env_test = unittest.make(_go_module_fetch_env_test)
+
+def _fallback_go_tool_identity_test(ctx):
+    env = unittest.begin(ctx)
+
+    fallback = orchestrion_extension_test_helpers.fallback_go_tool_identity(
+        struct(
+            os = struct(
+                name = "mac os x",
+                arch = "aarch64",
+            ),
+        ),
+    )
+    asserts.equals(env, "unknown-go-version", fallback.version)
+    asserts.equals(env, "darwin", fallback.goos)
+    asserts.equals(env, "arm64", fallback.goarch)
+
+    return unittest.end(env)
+
+fallback_go_tool_identity_test = unittest.make(_fallback_go_tool_identity_test)
+
+def _declared_go_tool_identity_test(ctx):
+    env = unittest.begin(ctx)
+    fake_ctx = struct(
+        os = struct(
+            name = "mac os x",
+            arch = "aarch64",
+        ),
+    )
+
+    identity = orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, "1.25.0")
+    asserts.equals(env, "go version go1.25.0 darwin/arm64", identity.version)
+    asserts.equals(env, "darwin", identity.goos)
+    asserts.equals(env, "arm64", identity.goarch)
+    asserts.equals(env, identity.version, orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, "go1.25.0").version)
+    asserts.equals(env, None, orchestrion_extension_test_helpers.declared_go_tool_identity(fake_ctx, ""))
+
+    return unittest.end(env)
+
+declared_go_tool_identity_test = unittest.make(_declared_go_tool_identity_test)
+
+def _declared_dd_trace_go_versions_test(ctx):
+    env = unittest.begin(ctx)
+    canonical = orchestrion_extension_test_helpers.declared_dd_trace_go_versions("v2.9.0", {})
+    asserts.equals(env, "v2.9.0", canonical["github.com/DataDog/dd-trace-go/v2"])
+    asserts.equals(env, None, orchestrion_extension_test_helpers.declared_dd_trace_go_versions("main", {}))
+    asserts.equals(
+        env,
+        None,
+        orchestrion_extension_test_helpers.declared_dd_trace_go_versions(
+            "",
+            {},
+            ["//:go.mod", "//:go.sum"],
+        ),
+    )
+
+    return unittest.end(env)
+
+declared_dd_trace_go_versions_test = unittest.make(_declared_dd_trace_go_versions_test)
+
+def _resolver_cycle_guard_patch_test(ctx):
+    env = unittest.begin(ctx)
+    source_lines = [
+        "func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {",
+        "\tif pkg.PkgPath == \"\" || pkg.PkgPath == \"unsafe\" || r[pkg.PkgPath].ExportFile != \"\" {",
+        "\t}",
+        "\tfor _, dep := range pkg.Imports {",
+        "\t\terrs = errors.Join(errs, r.mergeFrom(dep))",
+        "\t}",
+        "}",
+    ]
+
+    for line_ending in ["\n", "\r\n"]:
+        patched = orchestrion_extension_test_helpers.patch_resolver_cycle_guard(line_ending.join(source_lines) + line_ending)
+        asserts.true(env, ("return r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))" + line_ending + "}") in patched)
+        asserts.true(env, "if _, ok := visited[pkg]; ok" in patched)
+        asserts.true(env, "r.mergeFromVisited(dep, visited)" in patched)
+        asserts.false(env, "r.mergeFrom(dep)" in patched)
+
+    return unittest.end(env)
+
+resolver_cycle_guard_patch_test = unittest.make(_resolver_cycle_guard_patch_test)
+
+def orchestrion_extension_test_suite():
+    unittest.suite(
+        "orchestrion_extension_tests",
+        bootstrap_cache_key_stability_test,
+        bootstrap_manifest_content_test,
+        bootstrap_cache_paths_contract_test,
+        declared_dd_trace_go_versions_test,
+        declared_go_tool_identity_test,
+        fallback_go_tool_identity_test,
+        git_env_test,
+        go_module_fetch_env_test,
+        host_platform_normalization_test,
+        module_proxy_exact_dd_trace_go_queries_test,
+        module_proxy_resolved_modules_json_test,
+        module_proxy_seed_go_mod_test,
+        parse_certutil_sha256_test,
+        powershell_single_quoted_literal_test,
+        resolver_cycle_guard_patch_test,
+    )

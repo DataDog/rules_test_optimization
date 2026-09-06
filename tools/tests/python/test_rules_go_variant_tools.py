@@ -433,6 +433,11 @@ class RulesGoForkRegistryTests(unittest.TestCase):
             '"base": "third_party/rgo/v0_62_0/base"',
             content,
         )
+        self.assertIn('"v0_63_0"', content)
+        self.assertIn(
+            '"base": "third_party/rgo/v0_63_0/base"',
+            content,
+        )
         self.assertNotIn('        "complete":', content)
         self.assertIn('rules_go_variant \\"complete\\" is no longer supported', content)
         self.assertNotIn("rules_go_orchestrion_complete", content)
@@ -452,6 +457,11 @@ class RulesGoForkRegistryTests(unittest.TestCase):
         self.assertIn('"v0_62_0"', content)
         self.assertIn(
             '"base": "third_party/rgo/v0_62_0/base"',
+            content,
+        )
+        self.assertIn('"v0_63_0"', content)
+        self.assertIn(
+            '"base": "third_party/rgo/v0_63_0/base"',
             content,
         )
         self.assertNotIn('"complete":', content)
@@ -500,6 +510,10 @@ class RulesGoReleaseArchiveContentsTests(unittest.TestCase):
             required,
         )
         self.assertIn(
+            "third_party/rules_go_orchestrion/patches/v0_63_0/base/0001-full-delta.patch",
+            required,
+        )
+        self.assertIn(
             "third_party/rgo/v0_60_0/base/MODULE.bazel",
             required,
         )
@@ -525,6 +539,14 @@ class RulesGoReleaseArchiveContentsTests(unittest.TestCase):
         )
         self.assertIn(
             "third_party/rgo/v0_62_0/base.METADATA.json",
+            required,
+        )
+        self.assertIn(
+            "third_party/rgo/v0_63_0/base/MODULE.bazel",
+            required,
+        )
+        self.assertIn(
+            "third_party/rgo/v0_63_0/base.METADATA.json",
             required,
         )
         self.assertIn("tools/go/rules_go_forks.bzl", required)
