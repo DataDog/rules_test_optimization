@@ -1,6 +1,6 @@
 module github.com/bazelbuild/rules_go/go/tools/releaser
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/bazelbuild/buildtools v0.0.0-20231103205921-433ea8554e82
@@ -12,5 +12,5 @@ require (
 
 require (
 	github.com/google/go-querystring v1.0.0 // indirect
-	golang.org/x/crypto v0.0.0-20190308221718-c2843e01d9a2 // indirect
+	golang.org/x/crypto v0.56.0 // indirect
 )
