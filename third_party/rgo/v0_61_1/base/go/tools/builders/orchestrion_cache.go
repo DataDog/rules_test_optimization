@@ -1,7 +1,9 @@
 package main
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -31,6 +33,7 @@ const (
 
 	cacheManifestFileName = "manifest.json"
 	cacheReadyFileName    = "ready"
+	cacheLockOwnerPrefix  = "owner-"
 
 	cacheLockPollInterval = 200 * time.Millisecond
 	cacheLockTimeout      = 60 * time.Second
@@ -71,7 +74,7 @@ func acquireCacheLock(lockDir string, timeout, staleAfter time.Duration) (func()
 func acquireCacheLockWithTimings(lockDir string, timeout, staleAfter, pollInterval time.Duration) (func(), error) {
 	retryAfterStaleRemoval := true
 	for {
-		release, err := tryAcquireCacheLock(lockDir)
+		release, err := tryAcquireCacheLock(lockDir, staleAfter)
 		if err == nil {
 			return release, nil
 		}
@@ -82,7 +85,7 @@ func acquireCacheLockWithTimings(lockDir string, timeout, staleAfter, pollInterv
 		deadline := time.Now().Add(timeout)
 		for time.Now().Before(deadline) {
 			time.Sleep(pollInterval)
-			release, err = tryAcquireCacheLock(lockDir)
+			release, err = tryAcquireCacheLock(lockDir, staleAfter)
 			if err == nil {
 				return release, nil
 			}
@@ -97,25 +100,97 @@ func acquireCacheLockWithTimings(lockDir string, timeout, staleAfter, pollInterv
 		}
 		if stale && retryAfterStaleRemoval {
 			retryAfterStaleRemoval = false
-			if err := os.RemoveAll(lockDir); err != nil && !os.IsNotExist(err) {
+			if err := removeStaleCacheLock(lockDir); err != nil && !os.IsNotExist(err) {
 				return nil, fmt.Errorf("remove stale cache lock %s: %w", lockDir, err)
 			}
+			continue
+		}
+		if !stale {
 			continue
 		}
 		return nil, fmt.Errorf("timeout acquiring cache lock %s", lockDir)
 	}
 }
 
-func tryAcquireCacheLock(lockDir string) (func(), error) {
+func tryAcquireCacheLock(lockDir string, staleAfter time.Duration) (func(), error) {
 	if err := os.MkdirAll(filepath.Dir(lockDir), 0o755); err != nil {
 		return nil, err
 	}
 	if err := os.Mkdir(lockDir, 0o755); err != nil {
 		return nil, err
 	}
+	token, err := cacheLockToken()
+	if err != nil {
+		_ = os.Remove(lockDir)
+		return nil, err
+	}
+	ownerPath := filepath.Join(lockDir, cacheLockOwnerPrefix+token)
+	if err := os.WriteFile(ownerPath, []byte(token+"\n"), 0o600); err != nil {
+		_ = os.Remove(lockDir)
+		return nil, err
+	}
+	stopHeartbeat := make(chan struct{})
+	heartbeatDone := make(chan struct{})
+	go maintainCacheLockHeartbeat(lockDir, ownerPath, staleAfter, stopHeartbeat, heartbeatDone)
+	released := false
 	return func() {
-		_ = os.RemoveAll(lockDir)
+		if released {
+			return
+		}
+		released = true
+		close(stopHeartbeat)
+		<-heartbeatDone
+		if err := os.Remove(ownerPath); err != nil {
+			return
+		}
+		_ = os.Remove(lockDir)
 	}, nil
+}
+
+func cacheLockToken() (string, error) {
+	var data [16]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(data[:]), nil
+}
+
+func maintainCacheLockHeartbeat(lockDir, ownerPath string, staleAfter time.Duration, stop <-chan struct{}, done chan<- struct{}) {
+	defer close(done)
+	interval := staleAfter / 4
+	if interval < time.Millisecond {
+		interval = time.Millisecond
+	}
+	if interval > time.Minute {
+		interval = time.Minute
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case now := <-ticker.C:
+			if err := os.Chtimes(ownerPath, now, now); err != nil {
+				return
+			}
+			if err := os.Chtimes(lockDir, now, now); err != nil {
+				return
+			}
+		}
+	}
+}
+
+func removeStaleCacheLock(lockDir string) error {
+	token, err := cacheLockToken()
+	if err != nil {
+		return err
+	}
+	staleDir := lockDir + ".stale-" + token
+	if err := os.Rename(lockDir, staleDir); err != nil {
+		return err
+	}
+	return os.RemoveAll(staleDir)
 }
 
 func cacheLockIsStale(lockDir string, staleAfter time.Duration) (bool, error) {
@@ -217,6 +292,15 @@ func digestFileOrMissing(path string) (string, error) {
 		return "", err
 	}
 	return shortDigest(data), nil
+}
+
+func fullDigestFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:]), nil
 }
 
 // goSDKCacheIdentity returns a stable cache identity for the selected Go SDK

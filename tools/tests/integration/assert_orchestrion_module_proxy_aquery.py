@@ -48,6 +48,7 @@ class Action:
     mnemonic: str
     arguments: list[str] = field(default_factory=list)
     environment: dict[str, str] = field(default_factory=dict)
+    execution_info: dict[str, str] = field(default_factory=dict)
     input_dep_set_ids: list[int] = field(default_factory=list)
 
 
@@ -109,6 +110,14 @@ def parse_args() -> argparse.Namespace:
             "When requiring test_optimization linker flags, require each of -s "
             "and -w to appear this many times on each synthetic testmain GoLink "
             "action."
+        ),
+    )
+    parser.add_argument(
+        "--require-test-runner-only-no-remote-exec",
+        action="store_true",
+        help=(
+            "Require no-remote-exec on the TestRunner while keeping Go build "
+            "actions eligible for remote execution."
         ),
     )
     return parser.parse_args()
@@ -208,6 +217,7 @@ def _parse_action(lines: list[str]) -> Action:
     mnemonic = None
     arguments: list[str] = []
     environment: dict[str, str] = {}
+    execution_info: dict[str, str] = {}
     input_dep_set_ids: list[int] = []
 
     idx = 1
@@ -232,6 +242,19 @@ def _parse_action(lines: list[str]) -> Action:
                 idx += 1
             if key is not None:
                 environment[key] = value
+        elif line == "execution_info {":
+            key = None
+            value = ""
+            idx += 1
+            while idx < len(lines) - 1 and lines[idx] != "}":
+                nested = lines[idx]
+                if nested.startswith("key:"):
+                    key = _strip_quoted(_parse_scalar(nested, "key:"))
+                elif nested.startswith("value:"):
+                    value = _strip_quoted(_parse_scalar(nested, "value:"))
+                idx += 1
+            if key is not None:
+                execution_info[key] = value
         idx += 1
 
     if mnemonic is None:
@@ -240,6 +263,7 @@ def _parse_action(lines: list[str]) -> Action:
         mnemonic=mnemonic,
         arguments=arguments,
         environment=environment,
+        execution_info=execution_info,
         input_dep_set_ids=input_dep_set_ids,
     )
 
@@ -382,6 +406,72 @@ def _is_synthetic_testmain_link_action(action: Action) -> bool:
     return main.endswith("~testmain.a") and package_path in ("", "testmain")
 
 
+def _is_synthetic_testmain_compile_action(action: Action) -> bool:
+    """Return whether a GoCompilePkg action builds a generated testmain."""
+
+    if action.mnemonic not in {"GoCompilePkg", "GoCompilePkgExternal"}:
+        return False
+    output = (_argument_value(action.arguments, "-lo") or "").replace("\\", "/")
+    return output.endswith("~testmain.a")
+
+
+def _assert_shared_synthetic_testmain_helper_action(
+    action: Action,
+    inputs: list[str],
+) -> None:
+    """Assert the shared helper bundle is a hermetic, standalone Bazel action."""
+
+    _require(
+        _argument_value(action.arguments, "-orchestrion_mode") == "test_optimization",
+        "shared synthetic testmain helper action is not in test_optimization mode",
+    )
+    _require(
+        "-orchestrion" not in action.arguments,
+        "shared synthetic testmain helper action should compile the helper graph without toolexec",
+    )
+    _require(
+        "no-remote-exec" not in action.execution_info,
+        "shared synthetic testmain helper action inherited the test target's no-remote-exec tag",
+    )
+    _require(
+        _argument_value(action.arguments, "-stdlib_cache") is not None,
+        "shared synthetic testmain helper action is missing -stdlib_cache",
+    )
+    _require(
+        _contains_path_fragment(inputs, "stdlib_/gocache"),
+        "shared synthetic testmain helper action is missing the woven stdlib cache input",
+    )
+    _require(
+        _contains_path_suffix(inputs, "module_proxy/root.marker"),
+        "shared synthetic testmain helper action is missing module_proxy/root.marker",
+    )
+    _require(
+        _contains_module_proxy_payload(inputs),
+        "shared synthetic testmain helper action is missing module proxy payload files",
+    )
+    if action.environment.get("CGO_ENABLED") == "1":
+        c_compiler = action.environment.get("CC", "")
+        _require(
+            c_compiler,
+            "non-pure shared synthetic testmain helper action is missing CC",
+        )
+        # Auto-configured toolchains may use a host compiler such as
+        # /usr/bin/gcc, which cannot be a Bazel artifact. Hermetic toolchains
+        # use an execroot-relative compiler that must be declared as an input.
+        if not Path(c_compiler).is_absolute():
+            _require(
+                _contains_path_suffix(inputs, c_compiler),
+                "non-pure shared synthetic testmain helper action does not "
+                f"declare its C compiler input: {c_compiler}",
+            )
+    for name in (
+        "RULES_GO_ORCHESTRION_MODULE_PROXY_ROOT",
+        "RULES_GO_ORCHESTRION_TOOL_VERSION_FILE",
+        "RULES_GO_ORCHESTRION_VERSION_FILE",
+    ):
+        _require(name in action.environment, f"shared synthetic testmain helper action is missing {name}")
+
+
 def _assert_reduced_synthetic_testmain_link_inputs(
     action: Action,
     inputs: list[str],
@@ -412,6 +502,15 @@ def _assert_reduced_synthetic_testmain_link_inputs(
         _contains_path_suffix(inputs, main + ".orchestrion.pack"),
         f"synthetic testmain GoLink is missing synthetic packagefile manifest {main}.orchestrion.pack",
     )
+    _require(
+        _contains_path_suffix(inputs, main + ".orchestrion.helpers"),
+        f"synthetic testmain GoLink is missing declared helper archive tree {main}.orchestrion.helpers",
+    )
+    if expected_orchestrion_mode == "test_optimization":
+        _require(
+            _contains_path_fragment(inputs, "stdlib_/synthetic_testmain_helpers"),
+            "synthetic testmain GoLink is missing the shared helper bundle input",
+        )
     for suffix in ("orchestrion.tool.go", "orchestrion.yml"):
         _require(
             not _contains_path_suffix(inputs, suffix),
@@ -462,6 +561,36 @@ def _assert_test_optimization_linker_flags(action: Action, expected_count: int |
                 f"optimization flag {flag} exactly {expected_count} time(s); got {count}"
             ),
         )
+
+
+def _assert_test_runner_only_no_remote_exec(actions: list[Action]) -> None:
+    """Keep the runtime local without constraining deterministic Go builds."""
+
+    test_actions = [action for action in actions if action.mnemonic == "TestRunner"]
+    _require(test_actions, "aquery did not contain a TestRunner action")
+    _require(
+        any("no-remote-exec" in action.execution_info for action in test_actions),
+        "no TestRunner has the requested no-remote-exec policy",
+    )
+
+    build_mnemonics = {
+        "GoCompilePkg",
+        "GoCompilePkgExternal",
+        "GoLink",
+        "GoStdlib",
+        "GoSyntheticTestmainHelpers",
+    }
+    constrained_build_actions = [
+        action.mnemonic
+        for action in actions
+        if action.mnemonic in build_mnemonics
+        and "no-remote-exec" in action.execution_info
+    ]
+    _require(
+        not constrained_build_actions,
+        "no-remote-exec leaked from TestRunner to Go build actions: "
+        + ", ".join(sorted(set(constrained_build_actions))),
+    )
 
 
 def _assert_expected_action(
@@ -556,6 +685,16 @@ def _assert_expected_action(
         not any("module_proxy/" in path.replace("\\", "/") for path in inputs),
         f"{action.mnemonic} unexpectedly declared module_proxy files as inputs",
     )
+    if action.mnemonic == "GoLink" and _argument_value(action.arguments, "-orchestrion_mode") is None:
+        _require(
+            "-stdlib_cache" not in action.arguments,
+            "ordinary GoLink unexpectedly received -stdlib_cache",
+        )
+        _require(
+            not _contains_path_fragment(inputs, "stdlib_/gocache")
+            and not _contains_path_fragment(inputs, "stdlib_/list_gocache"),
+            "ordinary GoLink unexpectedly declared a stdlib cache directory as an input",
+        )
     if action.mnemonic in {"GoCompilePkg", "GoCompilePkgExternal"}:
         _require(
             "-stdlib_cache" not in action.arguments,
@@ -592,13 +731,28 @@ def main() -> int:
 
     compile_actions = [a for a in actions if a.mnemonic in {"GoCompilePkg", "GoCompilePkgExternal"}]
     stdlib_actions = [a for a in actions if a.mnemonic == "GoStdlib"]
+    shared_helper_actions = [a for a in actions if a.mnemonic == "GoSyntheticTestmainHelpers"]
     link_actions = [a for a in actions if a.mnemonic == "GoLink"]
     stdlib_list_actions = [a for a in actions if a.mnemonic == "GoStdlibList"]
+
+    if args.require_test_runner_only_no_remote_exec:
+        _assert_test_runner_only_no_remote_exec(actions)
 
     _require(compile_actions, "aquery did not contain any GoCompilePkg or GoCompilePkgExternal actions")
     _require(stdlib_actions, "aquery did not contain any GoStdlib actions")
     _require(link_actions, "aquery did not contain any GoLink actions")
     _require(stdlib_list_actions, "aquery did not contain any GoStdlibList actions")
+
+    if args.expected_orchestrion_mode == "test_optimization":
+        _require(
+            len(shared_helper_actions) == 1,
+            f"expected exactly one shared synthetic testmain helper action, got {len(shared_helper_actions)}",
+        )
+        shared_helper_action = shared_helper_actions[0]
+        _assert_shared_synthetic_testmain_helper_action(
+            shared_helper_action,
+            _action_inputs(shared_helper_action, artifacts, dep_sets, path_fragments),
+        )
 
     orchestrion_actions = []
     orchestrion_stdlib_actions = []
@@ -667,6 +821,23 @@ def main() -> int:
             saw_plain_hello_external_test_compile,
             "test_optimization mode did not leave app/hello_external_test.go on the plain GoCompilePkgExternal path",
         )
+        synthetic_testmain_compile_actions = [
+            action for action in compile_actions if _is_synthetic_testmain_compile_action(action)
+        ]
+        _require(
+            synthetic_testmain_compile_actions,
+            "test_optimization mode did not produce a synthetic testmain compile action",
+        )
+        for action in synthetic_testmain_compile_actions:
+            inputs = _action_inputs(action, artifacts, dep_sets, path_fragments)
+            _require(
+                _argument_value(action.arguments, "-shared_synthetic_testmain_helpers") is not None,
+                "synthetic testmain compile action is missing -shared_synthetic_testmain_helpers",
+            )
+            _require(
+                _contains_path_fragment(inputs, "stdlib_/synthetic_testmain_helpers"),
+                "synthetic testmain compile action is missing the shared helper bundle input",
+            )
     if args.require_reduced_synthetic_testmain_link_inputs:
         synthetic_testmain_link_actions = [
             action for action in link_actions

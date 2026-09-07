@@ -95,21 +95,13 @@ The sync rule creates `@test_optimization_data//` containing:
   ```bash
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/
-  ./bazelw test //... || test_status=$?; test_status=${test_status:-0}
-  ./bazelw run //<topt-package>:dd_test_optimization_doctor || doctor_status=$?; doctor_status=${doctor_status:-0}
-  if [ "$doctor_status" -ne 0 ]; then
-    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-    exit "$doctor_status"
-  fi
-  ./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment || dry_run_status=$?; dry_run_status=${dry_run_status:-0}
-  if [ "$dry_run_status" -ne 0 ]; then
-    if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-    exit "$dry_run_status"
-  fi
-  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads
-  upload_status=$?
-  if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-  exit "$upload_status"
+  test_status=0; doctor_status=0; uploader_status=0
+  ./bazelw test //... || test_status=$?
+  ./bazelw run //<topt-package>:dd_test_optimization_doctor || doctor_status=$?
+  DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads -- --validate-enrichment || uploader_status=$?
+  for status in "$test_status" "$doctor_status" "$uploader_status"; do
+    if [ "$status" -ne 0 ]; then exit "$status"; fi
+  done
   ```
 - Force refetch of test optimization data:
   ```bash
@@ -163,8 +155,11 @@ The sync rule creates `@test_optimization_data//` containing:
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
 - In consumer workspaces, run `./bazelw run //<topt-package>:dd_test_optimization_doctor`
-  after tests complete, then run `./bazelw run //<topt-package>:dd_upload_payloads -- --dry-run --validate-enrichment`, then upload with `./bazelw run //<topt-package>:dd_upload_payloads`.
-  Do not run the real upload if doctor or dry-run enrichment validation fails.
+  after tests complete, then run the uploader once with `--validate-enrichment`.
+  Add `--dry-run` to that invocation only when upload is disabled.
+  When upload is authorized, process every available fresh valid payload even if
+  tests or doctor fail, and preserve the earliest test, doctor, or uploader
+  failure as the job result.
 - For Go, route the repository's central `dd_go_test` wrapper through
   `dd_topt_go_test`; `--config=test-optimization` is the only user-facing
   enable switch.
@@ -190,8 +185,8 @@ The sync rule creates `@test_optimization_data//` containing:
   )
   ```
 - In the repository's central Go wrapper: load `dd_topt_go_test` and the generated `topt_data`, then delegate every public `dd_go_test(...)` call to the Datadog macro. Do not create separate plain and optimized onboarding paths.
-- Import path inference (preferred): add a `go_library` and set `embed = [":<that_library>"]` in the central wrapper call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per-module payload group. Inferred misses use the core bundle. When synchronized metadata exposes module groups, an explicit `importpath` or `module_label_override` that does not match one fails analysis; when no groups exist, the canonical full bundle remains valid.
-- Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes `<go module path>/<bazel package>` using the exported `topt_data["runtimes"]["go"]["module_path"]`. In this fallback mode only, it consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate before attempting per‑module selection.
+- Import path inference (preferred): add a `go_library` with an explicit `importpath` and set `embed = [":<that_library>"]` in the central wrapper call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per-module payload group. Inferred misses use the core bundle. When synchronized metadata exposes module groups, an explicit `importpath` or `module_label_override` that does not match one fails analysis; when no groups exist, the canonical full bundle remains valid.
+- Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes the label-derived importpath that `rules_go` assigns to the hidden raw `go_test` target. In this fallback mode only, it consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate before attempting per-module selection.
 - Tests can read `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the manifest directory (via `filepath.Dir()`) and access synced payloads.
 - For Python/Java/NodeJS/.NET/Ruby companions, follow the corresponding quickstart sections in `README.md` (`Bzlmod + Python companion`, `Bzlmod + Java companion`, `Bzlmod + NodeJS companion`, `Bzlmod + .NET companion`, `Bzlmod + Ruby companion`).
 

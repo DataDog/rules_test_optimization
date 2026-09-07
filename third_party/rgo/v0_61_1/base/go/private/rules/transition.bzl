@@ -424,12 +424,23 @@ def _non_go_transition_impl(settings, _attr):
         #    and cause incorrect Go setting values.
         new_settings[original_key] = ""
 
+    # Runtime tools and files reached through non-Go attributes such as data
+    # are separate executables, not part of the selected instrumented target.
+    new_settings[_ORCHESTRION_ENABLED_SETTING] = False
+    new_settings[_ORCHESTRION_MODE_SETTING] = _ORCHESTRION_MODE_GENERAL
+
     return new_settings
 
 non_go_transition = transition(
     implementation = _non_go_transition_impl,
-    inputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
-    outputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
+    inputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values() + [
+        _ORCHESTRION_ENABLED_SETTING,
+        _ORCHESTRION_MODE_SETTING,
+    ],
+    outputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values() + [
+        _ORCHESTRION_ENABLED_SETTING,
+        _ORCHESTRION_MODE_SETTING,
+    ],
 )
 
 def _check_ternary(name, value):

@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -490,8 +491,15 @@ func TestModuleExportRequestKeyIgnoresSdkExecrootPath(t *testing.T) {
 	}
 }
 
-func TestModuleExportGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
-	sdkRoot := filepath.Join(t.TempDir(), "sdk")
+func TestModuleExportGoListBaseEnvUsesSDKGoRootAndWrapsRelativeCgoPaths(t *testing.T) {
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	sdkRoot := filepath.Join(baseDir, "sdk")
 	wovenGoRoot := filepath.Join(t.TempDir(), "woven_goroot")
 	if err := os.MkdirAll(filepath.Join(sdkRoot, "bin"), 0o755); err != nil {
 		t.Fatalf("mkdir fake sdk bin: %v", err)
@@ -501,6 +509,10 @@ func TestModuleExportGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
 		sdk:    sdkRoot,
 		goroot: wovenGoRoot,
 	}, []string{
+		"CGO_ENABLED=1",
+		"CC=external/llvm_toolchain/bin/cc_wrapper.sh",
+		"CGO_CFLAGS=-DKEEP --sysroot=external/sysroot -isystem external/include",
+		"CGO_LDFLAGS=-Lexternal/lib",
 		"GOROOT=" + wovenGoRoot,
 		"PATH=/usr/bin",
 	})
@@ -526,6 +538,27 @@ func TestModuleExportGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
 	}
 	if got := getEnv(envv, "DD_ORCHESTRION_IS_GOMOD_VERSION"); got != "" {
 		t.Fatalf("DD_ORCHESTRION_IS_GOMOD_VERSION = %q, want empty", got)
+	}
+	wantGOCC := quoteCommandArgs([]string{filepath.Join(baseDir, "external/llvm_toolchain/bin/cc_wrapper.sh")})
+	if got := getEnv(envv, "GO_CC"); got != wantGOCC {
+		t.Fatalf("GO_CC = %q, want %q", got, wantGOCC)
+	}
+	if got := getEnv(envv, "GO_CC_ROOT"); got != baseDir {
+		t.Fatalf("GO_CC_ROOT = %q, want %q", got, baseDir)
+	}
+	ccArgs, err := splitGoCommandArgs(getEnv(envv, "CC"))
+	if err != nil {
+		t.Fatalf("split wrapped CC: %v", err)
+	}
+	wantCCArgs := []string{absolutePathFromBase(os.Args[0], baseDir), "cc"}
+	if got, want := strings.Join(ccArgs, "\x00"), strings.Join(wantCCArgs, "\x00"); got != want {
+		t.Fatalf("CC args = %q, want %q", ccArgs, wantCCArgs)
+	}
+	if got, want := getEnv(envv, "CGO_CFLAGS"), "-DKEEP --sysroot="+cgoAbsPlaceholder+"external/sysroot -isystem "+cgoAbsPlaceholder+"external/include"; got != want {
+		t.Fatalf("CGO_CFLAGS = %q, want %q", got, want)
+	}
+	if got, want := getEnv(envv, "CGO_LDFLAGS"), "-L"+cgoAbsPlaceholder+"external/lib"; got != want {
+		t.Fatalf("CGO_LDFLAGS = %q, want %q", got, want)
 	}
 }
 
@@ -560,6 +593,47 @@ func TestCacheStdlibGoListBaseEnvUsesSDKGoRoot(t *testing.T) {
 	}
 	if got := getEnv(envv, "GOWORK"); got != "off" {
 		t.Fatalf("GOWORK = %q, want off", got)
+	}
+}
+
+func TestWritableStdlibCacheRootUsesPrivateCache(t *testing.T) {
+	privateCache := filepath.Join(t.TempDir(), "private")
+	declaredCache := filepath.Join(t.TempDir(), "declared")
+	cacheRoot, err := writableStdlibCacheRoot(&env{
+		goroot:      t.TempDir(),
+		stdlibCache: declaredCache,
+	}, []string{"GOCACHE=" + privateCache})
+	if err != nil {
+		t.Fatalf("writableStdlibCacheRoot error: %v", err)
+	}
+	if cacheRoot != abs(privateCache) {
+		t.Fatalf("writable cache = %q, want %q", cacheRoot, abs(privateCache))
+	}
+	if info, err := os.Stat(cacheRoot); err != nil || !info.IsDir() {
+		t.Fatalf("writable cache was not created: %v", err)
+	}
+}
+
+func TestWritableStdlibCacheRootRejectsDeclaredCache(t *testing.T) {
+	declaredCache := filepath.Join(t.TempDir(), "declared")
+	_, err := writableStdlibCacheRoot(&env{
+		goroot:      t.TempDir(),
+		stdlibCache: declaredCache,
+	}, []string{"GOCACHE=" + declaredCache})
+	if err == nil || !strings.Contains(err.Error(), "aliases declared cache") {
+		t.Fatalf("writableStdlibCacheRoot error = %v", err)
+	}
+}
+
+func TestResolveCacheStdlibExportsRejectsDeclaredCacheAsWritable(t *testing.T) {
+	declaredCache := t.TempDir()
+	_, err := resolveCacheStdlibExportsAt(&env{
+		goroot:      "fake-goroot",
+		sdk:         "fake-sdk",
+		stdlibCache: declaredCache,
+	}, []string{"fmt"}, declaredCache)
+	if err == nil || !strings.Contains(err.Error(), "refusing to use declared stdlib cache") {
+		t.Fatalf("resolveCacheStdlibExportsAt error = %v", err)
 	}
 }
 
@@ -654,6 +728,149 @@ func TestSeedWovenStdlibCacheNoopWhenAlreadyReady(t *testing.T) {
 	}
 	if string(before) != string(after) {
 		t.Fatalf("seedWovenStdlibCache rewrote ready archive: before=%q after=%q", string(before), string(after))
+	}
+}
+
+func TestCacheStdlibGoListBaseEnvWrapsRelativeCgoPaths(t *testing.T) {
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	envv := cacheStdlibGoListBaseEnv(
+		&env{sdk: filepath.Join(baseDir, "sdk")},
+		filepath.Join(baseDir, "gocache"),
+		[]string{
+			"CGO_ENABLED=1",
+			"CC=external/rules_cc/local_config_cc/cc_wrapper.sh",
+			"CGO_CFLAGS=-DKEEP --sysroot=external/sysroot -isystem external/include",
+			"CGO_LDFLAGS=-Lexternal/lib",
+		},
+	)
+
+	wantGOCC := quoteCommandArgs([]string{filepath.Join(baseDir, "external/rules_cc/local_config_cc/cc_wrapper.sh")})
+	if got := getEnv(envv, "GO_CC"); got != wantGOCC {
+		t.Fatalf("GO_CC = %q, want %q", got, wantGOCC)
+	}
+	if got := getEnv(envv, "GO_CC_ROOT"); got != baseDir {
+		t.Fatalf("GO_CC_ROOT = %q, want %q", got, baseDir)
+	}
+	ccArgs, err := splitGoCommandArgs(getEnv(envv, "CC"))
+	if err != nil {
+		t.Fatalf("split wrapped CC: %v", err)
+	}
+	wantCCArgs := []string{absolutePathFromBase(os.Args[0], baseDir), "cc"}
+	if got, want := strings.Join(ccArgs, "\x00"), strings.Join(wantCCArgs, "\x00"); got != want {
+		t.Fatalf("CC args = %q, want %q", ccArgs, wantCCArgs)
+	}
+	if got, want := getEnv(envv, "CGO_CFLAGS"), "-DKEEP --sysroot="+cgoAbsPlaceholder+"external/sysroot -isystem "+cgoAbsPlaceholder+"external/include"; got != want {
+		t.Fatalf("CGO_CFLAGS = %q, want %q", got, want)
+	}
+	if got, want := getEnv(envv, "CGO_LDFLAGS"), "-L"+cgoAbsPlaceholder+"external/lib"; got != want {
+		t.Fatalf("CGO_LDFLAGS = %q, want %q", got, want)
+	}
+}
+
+func TestCacheStdlibGoListBaseEnvPreservesExistingCgoWrapper(t *testing.T) {
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	existingCC := quoteCommandArgs([]string{filepath.Join(baseDir, "builder"), "cc"})
+	existingFlags := "--sysroot=" + cgoAbsPlaceholder + "external/sysroot"
+	envv := cacheStdlibGoListBaseEnv(
+		&env{sdk: filepath.Join(baseDir, "sdk")},
+		filepath.Join(baseDir, "gocache"),
+		[]string{
+			"CGO_ENABLED=1",
+			"CC=" + existingCC,
+			"GO_CC=external/toolchain/cc",
+			"GO_CC_ROOT=" + baseDir,
+			"CGO_CFLAGS=" + existingFlags,
+		},
+	)
+
+	wantGOCC := quoteCommandArgs([]string{filepath.Join(baseDir, "external/toolchain/cc")})
+	if got := getEnv(envv, "GO_CC"); got != wantGOCC {
+		t.Fatalf("GO_CC = %q, want %q", got, wantGOCC)
+	}
+	if got := getEnv(envv, "CC"); got != existingCC {
+		t.Fatalf("CC = %q, want existing wrapper %q", got, existingCC)
+	}
+	if got := getEnv(envv, "CGO_CFLAGS"); got != existingFlags {
+		t.Fatalf("CGO_CFLAGS = %q, want existing placeholders %q", got, existingFlags)
+	}
+}
+
+func TestResolveCacheStdlibExportsUsesBuilderWorkingDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake go executable is a POSIX shell script")
+	}
+
+	baseDir := t.TempDir()
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = baseDir
+	defer func() {
+		moduleProxyResolutionBaseDir = previousBaseDir
+	}()
+
+	relativeHeader := filepath.Join("toolchain", "sysroot", "usr", "include", "stdlib.h")
+	if err := os.MkdirAll(filepath.Join(baseDir, filepath.Dir(relativeHeader)), 0o755); err != nil {
+		t.Fatalf("mkdir fake toolchain include dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseDir, relativeHeader), []byte("/* fake stdlib */\n"), 0o644); err != nil {
+		t.Fatalf("write fake toolchain header: %v", err)
+	}
+
+	sdkRoot := filepath.Join(baseDir, "sdk")
+	goBinary := filepath.Join(sdkRoot, "bin", "go")
+	if err := os.MkdirAll(filepath.Dir(goBinary), 0o755); err != nil {
+		t.Fatalf("mkdir fake sdk bin: %v", err)
+	}
+	fakeGo := "#!/bin/sh\n" +
+		"set -eu\n" +
+		"test -f \"$EXPECTED_RELATIVE_CGO_INPUT\" || { echo \"relative CGO input unavailable from $PWD\" >&2; exit 1; }\n" +
+		"test \"$GO_CC\" = \"$EXPECTED_GO_CC\" || { echo \"GO_CC was not normalized: $GO_CC\" >&2; exit 1; }\n" +
+		"test \"$GO_CC_ROOT\" = \"$EXPECTED_GO_CC_ROOT\" || { echo \"GO_CC_ROOT was not preserved: $GO_CC_ROOT\" >&2; exit 1; }\n" +
+		"test \"$CGO_CFLAGS\" = \"$EXPECTED_CGO_CFLAGS\" || { echo \"CGO_CFLAGS were not wrapped: $CGO_CFLAGS\" >&2; exit 1; }\n" +
+		"printf 'runtime=%s\\n' \"$FAKE_STDLIB_EXPORT\"\n"
+	if err := os.WriteFile(goBinary, []byte(fakeGo), 0o755); err != nil {
+		t.Fatalf("write fake go executable: %v", err)
+	}
+
+	exportPath := filepath.Join(baseDir, "runtime.a")
+	if err := os.WriteFile(exportPath, []byte("runtime"), 0o644); err != nil {
+		t.Fatalf("write fake stdlib export: %v", err)
+	}
+	relativeCompiler := filepath.Join("toolchain", "bin", "cc")
+	t.Setenv("CGO_ENABLED", "1")
+	t.Setenv("CC", relativeCompiler)
+	t.Setenv("CGO_CFLAGS", "-isystem "+filepath.Dir(relativeHeader))
+	t.Setenv("EXPECTED_RELATIVE_CGO_INPUT", relativeHeader)
+	t.Setenv("EXPECTED_GO_CC", quoteCommandArgs([]string{filepath.Join(baseDir, relativeCompiler)}))
+	t.Setenv("EXPECTED_GO_CC_ROOT", baseDir)
+	t.Setenv("EXPECTED_CGO_CFLAGS", "-isystem "+cgoAbsPlaceholder+filepath.Dir(relativeHeader))
+	t.Setenv("FAKE_STDLIB_EXPORT", exportPath)
+
+	wovenGoRoot := filepath.Join(baseDir, "woven-goroot")
+	if err := os.MkdirAll(filepath.Join(wovenGoRoot, "src"), 0o755); err != nil {
+		t.Fatalf("mkdir woven GOROOT src: %v", err)
+	}
+	exports, err := resolveCacheStdlibExportsAt(
+		&env{sdk: sdkRoot, goroot: wovenGoRoot},
+		[]string{"runtime"},
+		filepath.Join(baseDir, "gocache"),
+	)
+	if err != nil {
+		t.Fatalf("resolveCacheStdlibExportsAt error: %v", err)
+	}
+	if got := exports["runtime"]; got != exportPath {
+		t.Fatalf("runtime export = %q, want %q", got, exportPath)
 	}
 }
 

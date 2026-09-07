@@ -16,7 +16,7 @@ Guided Go bootstrap accepts:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--dd-trace-go-version` | `v2.9.0` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
+| `--dd-trace-go-version` | `v2.9.1` | Go tracer query for bootstrap. Accepts a tag, pseudo-version, branch, or commit SHA and persists the exact resolved versions Bazel should use |
 | `--go-binary` | `go` | Go binary used for bootstrap module graph synchronization. Set this to a pinned SDK path named `go` or `go.exe` when the repository must match Bazel's Go SDK; do not include shell syntax or arguments |
 | `--go-mod-sync` | `targeted` | Local Go module synchronization strategy: `targeted` updates and verifies only Orchestrion tool packages, `tidy` also runs `go mod tidy`, and `off` skips Go module commands |
 
@@ -99,7 +99,7 @@ Manual Orchestrion wiring in `MODULE.bazel` accepts:
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `orchestrion.from_source(..., dd_trace_go_pin_files = ["@//:go.mod", "@//:go.sum"])` | none | Preferred consumer mode. Derives exact direct and transitive supported tracer versions from one checked-in `go.mod` and `go.sum` using the Bazel-managed Go SDK and `-mod=readonly` |
-| `orchestrion.from_source(..., dd_trace_go_version = "...")` | legacy `v2.9.0` when no selection mode is set | Explicit shared-version escape hatch that Bazel validates against the target Go module |
+| `orchestrion.from_source(..., dd_trace_go_version = "...")` | legacy `v2.9.1` when no selection mode is set | Explicit shared-version escape hatch that Bazel validates against the target Go module |
 | `orchestrion.from_source(..., dd_trace_go_versions = {...})` | none | Exact canonical per-module tracer versions that Bazel validates against the target Go module for `github.com/DataDog/dd-trace-go/v2`, `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and `github.com/DataDog/dd-trace-go/contrib/log/slog/v2` |
 | `orchestrion.from_source(..., go_sdk_root = "@repo//:ROOT")` | none | Bazel-managed Go SDK root used to build Orchestrion instead of discovering a host `go` binary |
 | `orchestrion.from_source(..., go_sdk_version = "...")` | none | Exact version of `go_sdk_root`; enables bootstrap-cache lookup before SDK materialization and is verified after materialization on a miss |
@@ -114,6 +114,7 @@ Notes:
 - Guided bootstrap declares `go_sdk_root` and `go_sdk_version` from
   `--runtime-version`. Manual wiring must set both together and keep the version
   equal to the registered Go toolchain and Test Optimization `runtime_version`.
+- Orchestrion `v1.12.0` requires Go `1.25.0` or newer.
 - Bootstrap repins the local Go module to the same effective versions.
 - Bootstrap uses targeted module sync by default and does not run
   `go mod tidy` unless `--go-mod-sync=tidy` is selected.
@@ -165,6 +166,29 @@ Go target metadata records the selected mode in `bazel.go.orchestrion.mode` and
 whether the linker optimization was active in
 `bazel.go.test_binary_linker_optimization`.
 
+### Explicit single-service Go descriptor
+
+`dd_topt_go_test` also accepts a local-static `topt_data` descriptor for a
+consumer-owned stable `.topt` target:
+
+```bzl
+topt_data = {
+    "repo_name": "test_optimization_data_service",
+    "service_name": "service-name",
+    "runtime_module_path": "example.com/repo",
+    # Optional only when the sync repository uses a non-default out_dir:
+    # "manifest_label": "@test_optimization_data_service//:custom/manifest.txt",
+}
+```
+
+The descriptor is literal configuration; it does not load the external
+repository's `export.bzl`. The macro derives
+`:test_optimization_repository_state`, `:test_optimization_files`, and
+`:test_optimization_runtime_module` from `repo_name`. The selector fails
+analysis when the repository is disabled or its service, Go runtime, or module
+identity differs. If the configured module is absent, the stable runtime-module
+label is empty and selection uses the canonical full bundle.
+
 ## Sync extension attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`
@@ -200,6 +224,11 @@ Notes:
   cache-key churn.
 - For HTTP numeric overrides, `-1` means "do not pin here"; resolution falls
   back to environment overrides first, then the rule default.
+- Single-service repositories expose stable public
+  `:test_optimization_repository_state` and
+  `:test_optimization_runtime_module` targets in both enabled and disabled
+  states. These support explicit static Go targets and do not activate a
+  repository by themselves.
 
 ## Multi-sync extension attributes
 
@@ -260,7 +289,7 @@ be added to a user's `.bazelrc` or set in ordinary jobs. Enabled resolution
 requires it to name a valid schema-v1 manifest; disabled resolution ignores it.
 
 One managed command invocation must keep that exact manifest path and
-environment value for test, doctor, uploader dry-run, and optional upload.
+environment value for test, doctor, and the validated uploader.
 Those phases therefore share one resolved repository snapshot. A later command
 invocation owns a new temporary manifest path and performs one new fetch round.
 Equivalent backend settings and module payloads remain byte-identical test
@@ -303,9 +332,12 @@ Rule: `dd_payload_uploader(...)`
 | `keep_payloads` | bool | `False` | Keep payload files after successful upload |
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
 | `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
+| `workers` | int | `8` | Maximum independent payload-file workers in Python mode; `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
+| `use_python_uploader` | bool | `True` | Use the default cross-platform Python uploader; set to `False` only for temporary rollback to the legacy platform runtime |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
-| `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; only fresh outputs are inspected or uploaded |
-| `expected_targets_file` | label | unset | Optional schema-v1 exact-target file. Static and file inputs must match when both are non-empty |
+| `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; missing results are reported while other fresh outputs continue to upload |
+| `expected_targets_file` | label | unset | Optional schema-v1 exact-target file. Static and file inputs must match when both are non-empty; missing results do not block other fresh uploads |
+| `runtime_selection` | bool | `False` | Require repeatable runtime `--expected-target` and `--context-entry` arguments instead of configured expected/context inputs |
 
 ## Doctor rule attributes
 
@@ -321,6 +353,7 @@ delete, or rewrite source payloads.
 | `data` | label_list | `["@test_optimization_data//:test_optimization_context"]` in examples | Context targets bundle `context.json` and `telemetry_facts.json`. Doctor selects `context.json` for Git validation; the same labels can be reused by the uploader for enrichment and rule telemetry |
 | `expected_targets` | string_list | `[]` | Optional strict list of local Bazel test labels to validate. When empty, the doctor validates discovered Test Optimization output directories and ignores plain non-instrumented test outputs |
 | `expected_targets_file` | label | unset | Optional schema-v1 JSON file containing the exact invocation-scoped target set. Static and file inputs must match when both are non-empty |
+| `runtime_selection` | bool | `False` | Require repeatable runtime `--expected-target` and `--context-entry` arguments instead of configured expected/context inputs |
 | `require_git_metadata` | bool | `True` | Require `git.repository_url`, `git.commit.sha`, and `git.branch` or `git.tag` in synced context data |
 | `require_bazel_metadata` | bool | `True` | Require `bazel_target_metadata.json` next to selected payload outputs |
 | `require_json_payloads` | bool | `True` | Require parseable `.json` payload files |
@@ -376,11 +409,12 @@ workspace root package.
 | `sync_repo_name` | string | `"test_optimization_data"` | Repository exposing `:test_optimization_context` |
 | `doctor_name` | string | `"dd_test_optimization_doctor"` | Generated doctor target name |
 | `uploader_name` | string | `"dd_upload_payloads"` | Generated uploader target name |
-| `expected_targets` | string_list | `[]` | Strict labels passed to both doctor and uploader. List only instrumented runtime test targets that emit payloads |
-| `expected_targets_file` | label or `None` | `None` | Generated exact-target JSON file forwarded to both doctor and uploader for manifest-driven invocations |
+| `expected_targets` | string_list | `[]` | Exact labels passed to both tools. Doctor validates them strictly; uploader reports missing results while continuing with other fresh payloads |
+| `expected_targets_file` | label or `None` | `None` | Generated exact-target JSON file forwarded to both tools with the same doctor/uploader semantics for manifest-driven invocations |
 | `context_data` | label_list or `None` | `["@<sync_repo>//:test_optimization_context"]` | Explicit context data labels when the default sync repo label is not enough |
-| `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, `expected_targets`, or `expected_targets_file` |
-| `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name`, `data`, `expected_targets`, or `expected_targets_file` |
+| `runtime_selection` | bool | `False` | Give both generated tools empty static data/expected inputs and require the runner to supply exact runtime targets and keyed contexts |
+| `doctor_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_test_optimization_doctor`; cannot override `name`, `data`, `expected_targets`, `expected_targets_file`, or `runtime_selection` |
+| `uploader_kwargs` | dict or `None` | `{}` | Extra attrs for `dd_payload_uploader`; cannot override `name`, `data`, `expected_targets`, `expected_targets_file`, or `runtime_selection` |
 
 Example:
 
@@ -397,6 +431,20 @@ dd_test_optimization_targets(
     },
 )
 ```
+
+With `runtime_selection = True`, do not configure `context_data`,
+`expected_targets`, or `expected_targets_file`. Invoke both tools with the same
+sorted exact selection:
+
+```text
+--expected-target=//pkg:test.topt
+--context-entry=test_optimization_data_service=/absolute/path/to/context.json
+```
+
+Both flags are repeatable. Context entries are keyed by the apparent Bazel
+repository name and require a sibling `telemetry_facts.json`; repository,
+service, runtime, schema, duplicate, and target-set mismatches fail before
+payload discovery or upload.
 
 ## Python snippet generator
 
@@ -447,11 +495,10 @@ invocation. They do not include
 `DD_CIVISIBILITY_AGENTLESS_ENABLED`.
 
 For Go onboarding, the generated block also contains
-`common:<config> --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1` and the existing
-`rules_go` analysis setting
-`build:<config> --@<rules_go_repo>//go/private/orchestrion:enabled=true`.
-`--config=<config>` is the single user-facing switch: removing it disables
-both metadata resolution and the real Orchestrion aliases.
+`common:<config> --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`. Optimized Go
+targets enable Orchestrion through their own transition, so no global
+`orchestrion:enabled` build setting is generated. `--config=<config>` remains
+the single user-facing metadata gate.
 
 In that disabled state, the patched `rules_go` aliases select package-local
 empty targets and the gated Orchestrion repository writes its stable empty
@@ -614,6 +661,7 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` uploads all payloads; `1` restricts to `span_events_*.json` / `coverage_*.json` |
 | `DD_TEST_OPTIMIZATION_DEBUG` | Enable verbose uploader logs |
 | `DD_TEST_OPTIMIZATION_GZIP` | Gzip test payloads before upload |
+| `DD_TEST_OPTIMIZATION_WORKERS` | Override the maximum independent payload-file workers in Python mode; must be a positive integer |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | Override uploader max wait |
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | Override uploader quiescence wait |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | Limit payload discovery depth in large trees |
@@ -623,10 +671,10 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | Freshness mode: `auto`, `required`, `optional`, or `disabled` |
 | `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Optional path for the doctor machine-readable diagnostic report |
 | `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Optional path for the uploader machine-readable diagnostic report |
-| `DD_TEST_OPTIMIZATION_REPORT_DIR` | Optional wrapper/report-script directory. CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`, and, when upload is enabled, `uploader-upload-report.json` under this directory unless explicit report paths override the doctor or dry-run uploader path |
+| `DD_TEST_OPTIMIZATION_REPORT_DIR` | Optional wrapper/report-script directory. CI wrappers write `doctor-report.json` plus `uploader-dry-run-report.json` without upload or `uploader-upload-report.json` with upload unless explicit report paths override them |
 | `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` | Optional doctor or wrapper path for the redacted support diagnostics zip |
 | `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR` | Optional override for the support bundle collector script. Doctor targets provide this through runfiles; wrappers default to `create_support_bundle.py` beside the wrapper |
-| `DD_TEST_OPTIMIZATION_PYTHON` | Optional Python interpreter used by wrapper support-bundle generation and helper scripts before falling back to `PYTHON`, `python3`, and `python` |
+| `DD_TEST_OPTIMIZATION_PYTHON` | Python interpreter override before falling back to `PYTHON`, `python3`, and `python`; Python 3.10+ is required by the default uploader and optional only when `use_python_uploader = False` selects the legacy runtime |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | Artifact discovery source: `local`, `bep`, or `auto`. Recommended CI with zipped undeclared outputs should set `bep` |
 | `DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS` | Remote BEP artifact handling: `disabled`, `download`, or `required`. HTTP/HTTPS `outputs.zip` carriers can be staged natively when enabled |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR` | Directory used for per-run staged BEP artifacts |
@@ -641,7 +689,8 @@ Uploader CLI flags:
 | Flag | Purpose |
 |------|---------|
 | `--dry-run` | Enrich and validate discovered payloads without uploading or deleting files |
-| `--validate-enrichment` | In dry-run mode, require key Git and Bazel tags to exist after enrichment |
+| `--validate-enrichment` | Require key Git and Bazel tags to exist after enrichment, before either validation-only completion or upload |
+| `--workers=<positive-integer>` | Override the maximum independent payload-file workers in Python mode; takes precedence over `DD_TEST_OPTIMIZATION_WORKERS` and the rule attribute |
 | `--expected-enriched-tag=<tag>` | Add a required enriched tag; repeatable. Defaults cover `git.repository_url`, `git.commit.sha`, `bazel.target`, and `bazel.package`. Add `bazel.go.payload_selection` explicitly when a Go rollout must prove per-module selection |
 | `--bep-json=<path>` | BEP JSON file from the matching Bazel test invocation; repeat for multiple invocations |
 | `--freshness-source=<source>` | Freshness source: `auto`, `bep`, or `execution_log` |
@@ -675,9 +724,9 @@ Wrapper report options:
 
 | Option / variable | Purpose |
 |-------------------|---------|
-| `--report-dir=<path>` / `-ReportDir <path>` / `DD_TEST_OPTIMIZATION_REPORT_DIR` | Recommended CI artifact directory. Bash and PowerShell wrappers write separate doctor, dry-run uploader, and upload reports under this directory |
+| `--report-dir=<path>` / `-ReportDir <path>` / `DD_TEST_OPTIMIZATION_REPORT_DIR` | Recommended CI artifact directory. Bash and PowerShell wrappers write a doctor report plus exactly one uploader report under this directory |
 | `--doctor-report-json=<path>` / `-DoctorReportJson <path>` / `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Override only the wrapper doctor report path |
-| `--uploader-report-json=<path>` / `-UploaderReportJson <path>` / `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Override only the wrapper dry-run uploader report path. Real upload still uses `<report-dir>/uploader-upload-report.json` when `--report-dir` is set |
+| `--uploader-report-json=<path>` / `-UploaderReportJson <path>` / `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Override the selected wrapper uploader report path, for either dry-run or real upload |
 | `--support-bundle=<path>` / `-SupportBundle <path>` / `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` | Write a redacted support diagnostics zip containing reports, selected BEP summaries, command metadata, runtime metadata, and a Markdown summary |
 | `--support-bundle-collector=<path>` / `-SupportBundleCollector <path>` / `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR` | Override the support bundle collector path. Defaults to `create_support_bundle.py` beside the wrapper |
 
@@ -686,7 +735,7 @@ so customers do not need to copy helper scripts just to create a first-pass
 diagnostics package. The wrapper support bundle still requires the full
 `tools/test_optimization/` helper directory or an explicit
 `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR` path. Both modes are opt-in and
-do not change the doctor, test, dry-run, upload, or final CI exit status.
+do not change the doctor, test, uploader, or final CI exit status.
 Bundle generation failures are reported as warnings.
 
 | Bundle file | Purpose |

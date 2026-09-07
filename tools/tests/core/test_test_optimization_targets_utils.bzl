@@ -51,6 +51,30 @@ def _explicit_context_data_test(ctx):
 
 explicit_context_data_test = unittest.make(_explicit_context_data_test)
 
+def _runtime_selection_test(ctx):
+    """Validate runtime selection owns empty static inputs for both tools."""
+    env = unittest.begin(ctx)
+    specs = build_test_optimization_target_specs_for_tests(
+        name = "test_optimization",
+        sync_repo_name = "unused",
+        doctor_name = "doctor",
+        uploader_name = "uploader",
+        expected_targets = [],
+        context_data = None,
+        doctor_kwargs = None,
+        uploader_kwargs = None,
+        runtime_selection = True,
+    )
+    asserts.equals(env, [], specs.doctor_attrs["data"])
+    asserts.equals(env, [], specs.uploader_attrs["data"])
+    asserts.equals(env, [], specs.doctor_attrs["expected_targets"])
+    asserts.equals(env, [], specs.uploader_attrs["expected_targets"])
+    asserts.equals(env, True, specs.doctor_attrs["runtime_selection"])
+    asserts.equals(env, True, specs.uploader_attrs["runtime_selection"])
+    return unittest.end(env)
+
+runtime_selection_test = unittest.make(_runtime_selection_test)
+
 def _expected_targets_test(ctx):
     """Validate strict expected target labels are forwarded to both tools."""
     env = unittest.begin(ctx)
@@ -200,6 +224,23 @@ def _uploader_controlled_attr_target_impl(_ctx):
 
 uploader_controlled_attr_target_rule = rule(implementation = _uploader_controlled_attr_target_impl)
 
+def _runtime_selection_mixed_source_target_impl(_ctx):
+    """Create a target that combines runtime selection with configured context data."""
+    build_test_optimization_target_specs_for_tests(
+        name = "test_optimization",
+        sync_repo_name = "test_optimization_data",
+        doctor_name = "doctor",
+        uploader_name = "uploader",
+        expected_targets = [],
+        context_data = ["@test_optimization_data//:test_optimization_context"],
+        doctor_kwargs = None,
+        uploader_kwargs = None,
+        runtime_selection = True,
+    )
+    return []
+
+runtime_selection_mixed_source_target_rule = rule(implementation = _runtime_selection_mixed_source_target_impl)
+
 def _empty_name_failure_test_impl(ctx):
     """Assert empty helper names fail with an actionable message."""
     env = analysistest.begin(ctx)
@@ -241,5 +282,16 @@ def _uploader_controlled_attr_failure_test_impl(ctx):
 
 uploader_controlled_attr_failure_test = analysistest.make(
     _uploader_controlled_attr_failure_test_impl,
+    expect_failure = True,
+)
+
+def _runtime_selection_mixed_source_failure_test_impl(ctx):
+    """Assert runtime selection cannot retain a configured context source."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "runtime_selection cannot be combined with context_data")
+    return analysistest.end(env)
+
+runtime_selection_mixed_source_failure_test = analysistest.make(
+    _runtime_selection_mixed_source_failure_test_impl,
     expect_failure = True,
 )

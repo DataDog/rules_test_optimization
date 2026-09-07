@@ -35,18 +35,16 @@ The `test-optimization` config should contain the recommended Bazel test flags:
 `--remote_download_minimal`, `--remote_download_regex=.*test[.]outputs.*`, and
 `--zip_undeclared_test_outputs`.
 
-For Go consumers using the reusable bootstrap, keep the phase-correct enablement
-in the same config:
+For Go consumers using the reusable bootstrap, keep metadata enablement in the
+same config:
 
 ```bazelrc
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 ```
 
-This is one user-facing switch. Removing `--config=test-optimization` disables
-both metadata resolution and the Orchestrion analysis aliases; it does not
-require a second bool flag. In WORKSPACE repositories, use the apparent
-`rules_go` repository name configured by that workspace.
+Optimized Go targets enable Orchestrion through their own transition. Removing
+`--config=test-optimization` disables metadata resolution; no global
+Orchestrion setting or second user-facing bool is required.
 
 Config-gated Python consumers use only the
 `DD_TEST_OPTIMIZATION_ENABLED=1` entry and omit the Go-specific Orchestrion
@@ -68,7 +66,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
 # With --upload it also writes uploader-upload-report.json. --support-bundle
 # adds dd-test-optimization-support.zip for escalation.
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
@@ -94,7 +92,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
 # With -Upload it also writes uploader-upload-report.json. -SupportBundle
 # adds dd-test-optimization-support.zip for escalation.
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -106,21 +104,25 @@ $env:DD_SITE = "datadoghq.com"
   //...
 ```
 
-Always preserve all statuses. Test failures should win, doctor failures should
-stop the real upload while still preserving an earlier test failure, and
-uploader failures must still fail the job when tests and validations passed.
+Always preserve all statuses. Test failures win, followed by doctor and uploader
+failures. When upload is enabled, enrichment validation happens during the real
+upload and does not block processing other fresh valid payloads.
 
-Dry-run enrichment validation:
+Enrichment validation:
 
-- The CI wrappers always run `--dry-run --validate-enrichment` before a real
-  upload. Manual invocations should pass the matching `--bep-json=<path>`
-  together with `--freshness-source=bep --freshness-mode=required
-  --artifact-source=bep`.
+- The CI wrappers run the uploader exactly once. Without upload they pass
+  `--dry-run --validate-enrichment`; with upload they pass
+  `--validate-enrichment` without `--dry-run`, validating each enriched source
+  payload once immediately before splitting and upload. Manual invocations
+  should pass the matching `--bep-json=<path>` together with
+  `--freshness-source=bep --freshness-mode=required --artifact-source=bep`.
 - Dry-run mode does not upload data, does not require `DD_API_KEY` in
   agentless mode, and does not delete payload files.
 - Raw files under `bazel-testlogs` are not expected to contain every final tag.
-  The dry-run validates the enriched outbound body after merging `context.json`
-  and `bazel_target_metadata.json`.
+  Validation inspects the enriched outbound body after merging `context.json`
+  and `bazel_target_metadata.json`. During a normal upload, a validation failure
+  prevents that source payload from being sent but does not suppress other
+  fresh payloads.
 - Empty JSON placeholders such as `{}` under `payloads/tests/` are skipped.
   They have no uploadable `events[]` and are not valid Test Optimization test
   payloads.
@@ -159,6 +161,60 @@ dd_test_optimization_targets(
     },
 )
 ```
+
+For a runner that selects explicit per-service repositories at execution time,
+create the same pair with `runtime_selection = True` and no static context or
+expected-target inputs:
+
+```bzl
+dd_test_optimization_targets(
+    name = "test_optimization",
+    runtime_selection = True,
+)
+```
+
+Pass the same repeatable arguments to doctor and uploader:
+
+```bash
+--expected-target=//pkg:test.topt \
+--context-entry=test_optimization_data_service=/absolute/path/to/context.json
+```
+
+Each context path must name an existing `context.json` with a sibling
+`telemetry_facts.json`. The apparent repository key and both documents' service
+and runtime identity must agree. Missing, duplicate, mismatched, or incomplete
+runtime selections fail before payload discovery, cleanup, enrichment, or
+network access.
+
+### Parallel Python uploader (default)
+
+The cross-platform Python uploader is the default. Use `uploader_kwargs` only
+when choosing a non-default number of independent payload-file workers:
+
+```bzl
+dd_test_optimization_targets(
+    name = "test_optimization",
+    sync_repo_name = "test_optimization_data",
+    uploader_kwargs = {
+        "workers": 8,
+    },
+)
+```
+
+This mode requires a host Python 3.10 or newer on Linux, macOS, and Windows at
+`bazel run` time. The launcher resolves `DD_TEST_OPTIMIZATION_PYTHON`, then
+`PYTHON`, then `python3`, then `python`. Each worker owns one payload file and
+performs its enrichment, validation, preflight split at the conservative
+`4_718_592`-byte (4.5 MiB) threshold, and upload/retries independently. Every
+worker can process test, coverage, or telemetry payloads; chunks and other
+derived requests belonging to one source remain sequential. Test and telemetry
+JSON reject non-standard numbers (`NaN` and positive/negative `Infinity`) before
+HTTP; coverage bodies remain opaque JSON/msgpack multipart parts. The
+rule-level `workers` value defaults to `8`; `DD_TEST_OPTIMIZATION_WORKERS`
+overrides it at runtime and `--workers=<positive-integer>` has highest
+precedence. Leave
+`use_python_uploader` unset for the Python implementation. Set it to `False`
+only for temporary rollback to the legacy Bash or PowerShell implementation.
 
 If your repository is small, the same helper can live in the root package. In
 large monorepos, prefer `//tools/test_optimization` or another lightweight
@@ -267,8 +323,9 @@ bazel run --config=test-optimization //:dd_upload_payloads
 |----------|---------|---------|
 | `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
 | `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | `0` uploads all payload files; set to `1` to only upload `span_events_*.json` or `coverage_*.json` |
-| `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose upload logging (HTTP codes, response bodies, startTime stats, and key runfile/CODEOWNERS resolution hits) |
+| `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose attempt, success, startTime, and runfile/CODEOWNERS resolution logging. Terminal test-upload failures always report the HTTP status, a bounded response body, and payload sizes. |
 | `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip test payloads before upload (adds `Content-Encoding: gzip`) |
+| `DD_TEST_OPTIMIZATION_WORKERS` | rule `workers` (`8`) | Override the maximum independent payload-file workers in Python mode; `--workers` has higher precedence |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
@@ -279,7 +336,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | `auto` | Cache-safety mode: `auto`, `required`, `optional`, or `disabled`. In CI, `auto` fails closed when no freshness source is available. |
 | `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | unset | Optional path for the doctor machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the doctor target's `--` separator. |
 | `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | unset | Optional path for the uploader machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the uploader target's `--` separator. |
-| `DD_TEST_OPTIMIZATION_REPORT_DIR` | unset | Optional wrapper report directory. CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`, and optional `uploader-upload-report.json` under this directory. |
+| `DD_TEST_OPTIMIZATION_REPORT_DIR` | unset | Optional wrapper report directory. CI wrappers write `doctor-report.json` plus `uploader-dry-run-report.json` without upload or `uploader-upload-report.json` with upload. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | `auto` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | unset | Optional explicit legacy execution-log fallback path. Prefer BEP for new CI integrations. The uploader does not auto-discover `.topt/bazel-execution-log.json` because stale execution-log files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | `local` | Artifact source for `test.outputs` materialization: `local`, `bep`, or `auto`. `local` preserves existing discovery. `bep` requires an explicit BEP JSON file and stages BEP-referenced artifacts. |
@@ -323,10 +380,9 @@ tools/test_optimization/run_test_optimization_ci.sh \
   //...
 ```
 
-The wrapper writes `.topt/reports/doctor-report.json` and
-`.topt/reports/uploader-dry-run-report.json`. If upload is enabled, it writes
-`.topt/reports/uploader-upload-report.json` for the real upload so the dry-run
-report is preserved.
+The wrapper writes `.topt/reports/doctor-report.json` plus exactly one uploader
+report: `.topt/reports/uploader-dry-run-report.json` without upload, or
+`.topt/reports/uploader-upload-report.json` with upload.
 
 For first-pass support, the doctor can create a doctor-only bundle without the
 wrapper:
@@ -387,13 +443,15 @@ a manual doctor invocation, or set `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`
 when CI needs a machine-readable debug artifact. The doctor writes the report
 on success and on controlled doctor failures. The report includes a `result`
 block with `status`, `reason_code`, `reason`, and `next_steps`, plus resolved
-config, expected targets, BEP files and seen targets, fresh/cached/remote-only
-BEP outputs, selected and blocked BEP artifact carriers, staged `outputs.zip`
-or `test.outputs` artifacts, local/staged payload directories, payload counts,
-Bazel metadata, payload-selection counts, and failure messages.
-When expected targets are configured, fresh and cached BEP labels jointly
-satisfy target coverage. Only fresh outputs are validated; an all-cached
-invocation succeeds with zero validated output directories.
+config, expected targets, BEP files and seen targets,
+fresh/cached/remote-only/platform-skipped BEP outputs, selected and blocked BEP
+artifact carriers, staged `outputs.zip` or `test.outputs` artifacts,
+local/staged payload directories, payload counts, Bazel metadata,
+payload-selection counts, and failure messages. When expected targets are
+configured, fresh, cached, and platform-skipped BEP labels jointly satisfy
+target coverage. Only fresh outputs are validated; an invocation with only
+cached or skipped expected targets succeeds with zero validated output
+directories.
 
 Example:
 
@@ -424,10 +482,10 @@ common no-upload cases such as `bep_output_remote_only_without_downloader`,
 `no_payload_json_found`, `payload_enrichment_failed`, and
 `upload_skipped_dry_run`.
 
-The CI wrapper writes a separate dry-run uploader report when `--report-dir` is
-used. If only `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` or
-`--uploader-report-json` is configured and `--report-dir` is not set, that
-single path is used by the dry-run invocation only.
+The CI wrapper writes exactly one uploader report when `--report-dir` is used:
+`uploader-dry-run-report.json` without upload, or `uploader-upload-report.json`
+with upload. `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` and
+`--uploader-report-json` override that selected report path.
 
 Example:
 
@@ -491,6 +549,9 @@ Cache-safety modes:
 When BEP filtering is active, the uploader:
 
 - Parses `TestResult` events from the BEP JSON file.
+- Accounts for explicit platform-incompatible targets from
+  `targetCompleted` events aborted with reason `SKIPPED`; these targets do not
+  require a payload.
 - Treats `cachedLocally: true` or `executionInfo.cachedRemotely: true` as ineligible.
 - Keeps only fresh outputs that map to local or staged
   `bazel-testlogs/.../test.outputs`.
@@ -654,13 +715,66 @@ payload discovery/quiescence before proceeding.
 
 ## Reliability
 
-- HTTP requests use a 60-second timeout
+### Python uploader
+
+- Python mode uses a 10-second connection timeout and a 60-second socket-I/O
+  timeout.
+- Each logical request makes at most four total attempts: the initial attempt
+  plus up to three retries, normally separated by 2 seconds.
+- Connection failures, timeouts, HTTP `408`, HTTP `429`, and HTTP `5xx` are
+  retryable. `Retry-After` is honored when the backend supplies it, with a
+  60-second safety cap per retry so a response cannot stall a worker
+  indefinitely.
+- Other HTTP `4xx` responses are terminal after the first attempt. For test
+  payloads, `413` indicates that the preventive split contract was violated.
+  Coverage and telemetry are not split, so their `413` failures use the
+  `upload_http_413` reason instead. No `413` is retried or triggers adaptive
+  splitting.
+- JSON, gzip, telemetry, and multipart bodies are prepared once per logical
+  request and replayed byte-for-byte for every retry.
+- Split test chunks are uploaded in event order and fail independently. After
+  partial success, the source is atomically replaced with only the failed
+  chunks so accepted events are not replayed; if every chunk fails or the
+  replacement cannot be written, the original source is retained.
+- A telemetry source and its synthetic rule-facts request are also attempted
+  independently. After partial success, only the rejected prepared request is
+  retained for the next invocation, without regenerating augmentation or
+  replaying the accepted request. If retention fails, the original source is
+  kept and the final result reports a warning.
+- The temporary legacy Bash/curl and PowerShell implementations remain
+  available only as an explicit opt-out rollback during the rollout window.
+  The normalized policy above is the default uploader contract on Linux,
+  macOS, and Windows.
+
+### Legacy Bash and PowerShell uploaders
+
+- HTTP requests use a 60-second timeout.
 - Failed requests are retried up to 3 times with a 2-second delay between
-  attempts
+  attempts.
 - Both transient errors (connection issues) and HTTP errors (4xx/5xx) trigger
-  retries
+  retries.
+- After enrichment, test payloads larger than 4,500,000 bytes are split by
+  their top-level `events` array before compression and transport. Each part
+  preserves the original top-level envelope and remains at or below the split
+  target when possible. This leaves headroom below the 5,000,000-byte intake
+  limit.
+- A single event between the split target and the intake limit is sent intact.
+  A single event above the intake limit cannot be split and fails without an
+  upload attempt.
+- On Unix, splitting requires `jq`. Without it, payloads at or below the intake
+  limit retain the existing unsplit upload path; larger payloads fail locally.
+  PowerShell performs the same split with its built-in JSON support.
+- Split parts are uploaded in event order and retry independently. A failed
+  part does not prevent the uploader from attempting the remaining parts. After
+  partial success, the retry payload is replaced with only the failed parts so
+  accepted events are not replayed. If every part fails, retry persistence
+  fails, or payload retention is explicitly enabled, the original source is
+  retained.
+- Terminal test-upload failures always log the HTTP status, up to 2,000
+  characters of the response body, and the uncompressed, compressed, and
+  transmitted byte counts. Response logging does not require debug mode.
 - Behavior is consistent across Linux/macOS (bash/curl) and Windows
-  (PowerShell-only runtime path; no Git Bash requirement)
+  (PowerShell-only runtime path; no Git Bash requirement).
 
 ## Metadata enrichment (`context.json`)
 
@@ -671,9 +785,12 @@ payload discovery/quiescence before proceeding.
   4. if multiple bundled contexts exist and no match is found, skip only the `context.json` merge for that payload and continue uploading
   5. if no bundled context resolves, upload without context enrichment
 - When a `context.json` file is available, the uploader enriches each test
-  payload by merging all non-null keys from `context.json` into each event's
-  `content.meta` or `content.metrics`, and it also normalizes top-level
-  `metadata.*` runtime tags.
+  payload by merging its keys into each event's `content.meta` or
+  `content.metrics`, and it also normalizes top-level `metadata.*` runtime
+  tags. Numbers become metrics; strings and booleans become meta values; other
+  JSON values use their compact JSON representation. For legacy compatibility,
+  JSON `null` therefore becomes the meta string `"null"` rather than being
+  omitted.
 - Bazel sidecar metadata from `bazel_target_metadata.json` is merged separately.
   If a multi-context payload has no repo match, those Bazel sidecar tags remain
   and only the `context.json` merge is skipped.
@@ -723,12 +840,14 @@ invocation manifest. Static `expected_targets` and the generated file may be
 used together only when they describe the same set; disagreement is a hard
 error.
 
-A cached Bazel test does not produce a fresh payload for the current
-invocation. With exact expected targets configured on both doctor and uploader,
-fresh and cached BEP results jointly satisfy invocation coverage. Only fresh
-outputs are validated or uploaded; an all-cached invocation is a successful
-no-op. Every fresh expected output must independently contain a handled
-payload, so one valid sibling output cannot hide an empty one.
+A cached Bazel test and a platform-incompatible target skipped by Bazel do not
+produce a fresh payload for the current invocation. With exact expected targets
+configured on both doctor and uploader, fresh, cached, and platform-skipped BEP
+results jointly satisfy invocation coverage. Only fresh outputs are validated
+or uploaded; an invocation with only cached or skipped targets is a successful
+no-op. A missing expected result is reported without blocking other fresh
+payloads. Every fresh expected output that exists must independently contain a
+handled payload, so one valid sibling output cannot hide an empty one.
 
 ### Advanced: reuse an already-fetched context file
 

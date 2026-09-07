@@ -122,6 +122,25 @@ def _module_proxy_resolved_modules_json_test(ctx):
 
 module_proxy_resolved_modules_json_test = unittest.make(_module_proxy_resolved_modules_json_test)
 
+def _module_proxy_exact_dd_trace_go_queries_test(ctx):
+    env = unittest.begin(ctx)
+
+    queries = orchestrion_extension_test_helpers.module_proxy_exact_dd_trace_go_queries({
+        "github.com/DataDog/dd-trace-go/v2": "v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.3.0",
+    })
+
+    asserts.equals(env, [
+        "github.com/DataDog/dd-trace-go/v2@v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1-rc.3",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.3.0",
+    ], queries)
+
+    return unittest.end(env)
+
+module_proxy_exact_dd_trace_go_queries_test = unittest.make(_module_proxy_exact_dd_trace_go_queries_test)
+
 def _parse_certutil_sha256_test(ctx):
     env = unittest.begin(ctx)
 
@@ -271,6 +290,29 @@ def _declared_dd_trace_go_versions_test(ctx):
 
 declared_dd_trace_go_versions_test = unittest.make(_declared_dd_trace_go_versions_test)
 
+def _resolver_cycle_guard_patch_test(ctx):
+    env = unittest.begin(ctx)
+    source_lines = [
+        "func (r ResolveResponse) mergeFrom(pkg *packages.Package) error {",
+        "\tif pkg.PkgPath == \"\" || pkg.PkgPath == \"unsafe\" || r[pkg.PkgPath].ExportFile != \"\" {",
+        "\t}",
+        "\tfor _, dep := range pkg.Imports {",
+        "\t\terrs = errors.Join(errs, r.mergeFrom(dep))",
+        "\t}",
+        "}",
+    ]
+
+    for line_ending in ["\n", "\r\n"]:
+        patched = orchestrion_extension_test_helpers.patch_resolver_cycle_guard(line_ending.join(source_lines) + line_ending)
+        asserts.true(env, ("return r.mergeFromVisited(pkg, make(map[*packages.Package]struct{}))" + line_ending + "}") in patched)
+        asserts.true(env, "if _, ok := visited[pkg]; ok" in patched)
+        asserts.true(env, "r.mergeFromVisited(dep, visited)" in patched)
+        asserts.false(env, "r.mergeFrom(dep)" in patched)
+
+    return unittest.end(env)
+
+resolver_cycle_guard_patch_test = unittest.make(_resolver_cycle_guard_patch_test)
+
 def orchestrion_extension_test_suite():
     unittest.suite(
         "orchestrion_extension_tests",
@@ -283,8 +325,10 @@ def orchestrion_extension_test_suite():
         git_env_test,
         go_module_fetch_env_test,
         host_platform_normalization_test,
+        module_proxy_exact_dd_trace_go_queries_test,
         module_proxy_resolved_modules_json_test,
         module_proxy_seed_go_mod_test,
         parse_certutil_sha256_test,
         powershell_single_quoted_literal_test,
+        resolver_cycle_guard_patch_test,
     )

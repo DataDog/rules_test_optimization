@@ -4,6 +4,9 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+# Validate supported hosts and generated consumer artifacts before merge.
+# The uploader smoke catches launcher/runfiles failures that imports cannot expose.
+
 name: CI
 
 on:
@@ -126,6 +129,18 @@ jobs:
         shell: bash
         run: ./bazelw test //tools/... --test_output=errors
 
+      - name: Smoke default Python uploader launcher
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          ./bazelw run \
+            //tools/tests/python/fixtures/generated_uploader:generated_uploader \
+            -- \
+            --dry-run \
+            --allow-cached-payload-uploads \
+            --workers=3 \
+            --debug
+
       - name: Build examples
         timeout-minutes: 20
         shell: bash
@@ -237,6 +252,18 @@ jobs:
       - name: Run Bazel tests
         shell: bash
         run: ./bazelw test //tools/... --test_output=errors
+
+      - name: Smoke default Python uploader launcher
+        timeout-minutes: 5
+        shell: bash
+        run: |
+          ./bazelw run \
+            //tools/tests/python/fixtures/generated_uploader:generated_uploader \
+            -- \
+            --dry-run \
+            --allow-cached-payload-uploads \
+            --workers=3 \
+            --debug
 
       - name: Run Bazel tests (go companion module)
         shell: bash

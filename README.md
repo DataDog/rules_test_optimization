@@ -42,6 +42,13 @@ Pick the path that matches your repository:
 The manifest-driven API is additive. Existing single-service and static
 multi-service consumers do not need to migrate.
 
+Large consumers may also keep explicit single-service repositories and expose
+stable ordinary/optimized target pairs such as `//pkg:test` and
+`//pkg:test.topt`. In that model the `.topt` target carries a small literal
+descriptor for exactly one service repository; Bazel resolves only the
+repositories reached by selected `.topt` targets. The manifest-driven model
+remains available for consumers that prefer invocation-scoped discovery.
+
 ### Ordinary and managed execution
 
 An ordinary test command omits `--config=test-optimization`. Config-gated Go
@@ -57,10 +64,10 @@ A managed command owns two Bazel phases behind one user-facing entrypoint:
 3. run metadata sync and the exact selected tests with
    `--config=test-optimization`;
 4. run the workspace doctor against the generated exact-target list, then run
-   uploader dry-run and optional upload.
+   one validated uploader pass: dry-run without upload, or real upload.
 
 The command reuses one manifest path and one resolved metadata snapshot for
-test, doctor, dry-run, and upload. A later command invocation creates a new
+test, doctor, and uploader. A later command invocation creates a new
 manifest path and fetches current backend state once. When the selected
 settings and module payloads are unchanged, those stable test inputs remain
 byte-identical and normal Bazel test-result cache hits are preserved.
@@ -80,8 +87,7 @@ flowchart LR
   M --> R[One aggregate metadata repository]
   R --> T[Exact selected tests]
   T --> D[Doctor with exact target set]
-  D --> V[Uploader dry-run]
-  V --> X[Optional upload]
+  D --> V[Validated uploader]
 ```
 
 See [Installation Reference](docs/Installation_Reference.md#manifest-driven-managed-gopython-monorepos),
@@ -162,7 +168,7 @@ When multiple upstream `rules_go` versions are supported, `rules_go_upstream`
 selects the upstream support line. Omitting `rules_go_upstream` preserves the
 repository default. The default `rules_go_upstream` is currently `v0_60_0`,
 which preserves the existing `third_party/rgo/v0_60_0/base` path.
-The registry also supports `v0_61_1` and `v0_62_0`.
+The registry also supports `v0_61_1`, `v0_62_0`, and `v0_63_0`.
 
 Maintainers track each supported upstream version with both patch series under
 `third_party/rules_go_orchestrion/patches/<upstream>/` and materialized base
@@ -186,10 +192,8 @@ config must include
 public Go bootstrap helpers apply metadata gating by default. Manual Go
 extension wiring uses the same config-gated default. Direct use of the
 low-level core sync API in a config-gated Go or Python setup must opt into
-`enabled_by_env = True`. Go
-additionally needs
-`build:test-optimization --@rules_go//go/private/orchestrion:enabled=true`
-for Bzlmod, or the same flag with `@io_bazel_rules_go` for WORKSPACE.
+`enabled_by_env = True`. Go optimized targets enable Orchestrion through their
+own transition; no global `orchestrion:enabled` build setting is required.
 Removing `--config=test-optimization` provides the complete metadata and
 runtime opt-out for the Go and Python integrations described below. This
 release does not change the enablement contract of the other companions.
@@ -237,7 +241,7 @@ automatically. No per-target disable attribute is required.
    `--build_event_json_file` in `.bazelrc`; CI wrappers should create a fresh
    BEP file path for each Bazel test invocation so parallel jobs cannot
    overwrite each other.
-5. Configure doctor, enrichment dry-run, and uploader with the matching BEP
+5. Configure doctor and the validated uploader with the matching BEP
    files and BEP artifact staging through wrapper arguments:
    - `--bep-json=<path>` once per Bazel test invocation
    - `--freshness-source=bep`
@@ -377,7 +381,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --report-dir .topt/reports \
@@ -395,7 +399,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -431,14 +435,16 @@ bazel_dep(name = "rules_go", version = "0.60.0")
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
 Go module. `--dd-trace-go-version` is optional; if you omit it, the default is
-`v2.9.0`.
+`v2.9.1`. Orchestrion `v1.12.0` requires Go `1.25.0` or newer, so the
+`--runtime-version` value and registered Bazel Go toolchain must satisfy that
+minimum.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0 \
+  --dd-trace-go-version v2.9.1 \
   --write-bazelrc
 ```
 
@@ -449,7 +455,7 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.0 \
+  --dd-trace-go-version v2.9.1 \
   --go-module-dir path/to/go-module \
   --write-bazelrc
 ```
@@ -527,6 +533,51 @@ workspace already has custom sync wiring, mixed-language layout, or multi-servic
 Go setup. Manual Go callsites should set
 `orchestrion_mode = "test_optimization"` for standard Go `testing`; the default
 `general` mode preserves broader generic Orchestrion behavior.
+
+An explicit per-service integration can pass the same macro a local-static
+descriptor instead of loading an external repository's `export.bzl`:
+
+```bzl
+dd_topt_go_test(
+    name = "pkg_go_test.topt",
+    topt_data = {
+        "repo_name": "test_optimization_data_go_service",
+        "service_name": "go-service",
+        "runtime_module_path": "example.com/repo",
+    },
+    orchestrion_mode = "test_optimization",
+    srcs = ["pkg_test.go"],
+)
+```
+
+The selected repository must expose the stable state, full-files, and
+configured-runtime-module labels generated by `test_optimization_sync`.
+Disabled or mismatched repositories fail analysis. This descriptor is an
+additive option; generated single-, multi-, and manifest-sync exports keep
+their existing behavior.
+
+Large consumers can warm the matching instrumented standard library in a
+dedicated cache-writing invocation:
+
+```bzl
+load("@datadog-rules-test-optimization-go//:topt_go_stdlib.bzl", "dd_topt_go_stdlib_warmup")
+
+dd_topt_go_stdlib_warmup(name = "go_stdlib_warmup")
+```
+
+```bash
+bazel build //tools/test_optimization:go_stdlib_warmup \
+  --config=test-optimization \
+  --config=remote-cache-write
+```
+
+The warmup target applies the same target-scoped Go configuration transitions,
+enables Orchestrion in `test_optimization` mode, and materializes both the
+instrumented stdlib and its Go build cache. The consumer
+remains responsible for restricting remote-cache writes to a trusted CI
+invocation.
+Without the named config, the target is a no-op so ordinary broad builds can
+analyze its package without enabling Test Optimization.
 
 ### Bzlmod + Python companion (`dd_topt_py_test`)
 
@@ -1235,11 +1286,11 @@ the fact that the repo still owns the actual refresh command.
 
 Bootstrap can also generate an operator-owned validation script for large
 repositories. The script repeats the RFC flow without hiding Bazel behavior:
-`sync -> controls -> instrumented tests -> doctor -> dry-run uploader -> optional upload`.
-Upload is disabled unless the operator passes `--upload`. Set
-`DD_TEST_OPTIMIZATION_REPORT_DIR` to keep its `doctor-report.json`,
-`uploader-dry-run-report.json`, and optional `uploader-upload-report.json`
-outside the script's temporary directory.
+`sync -> controls -> instrumented tests -> doctor -> validated uploader`.
+Without `--upload`, the uploader runs once in dry-run mode. With `--upload`, it
+runs once as a real upload and validates enrichment in that same pass. Set
+`DD_TEST_OPTIMIZATION_REPORT_DIR` to keep `doctor-report.json` and
+`uploader-report.json` outside the script's temporary directory.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
@@ -1298,14 +1349,26 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 - **Tracer/runtime with DD Test Optimization file-mode support** - Must honor `DD_TEST_OPTIMIZATION_MANIFEST_FILE` and `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
 - **rules_go v0.51.0+** (for Go importpath inference) - This repository reads `GoInfo`/`GoArchive` providers when selecting per-module payloads
 - **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; leading/trailing ASCII whitespace is trimmed, then normalized to `https://api.<site>`
-- **Uploader tooling (per platform)** - Required for `bazel run //:dd_upload_payloads`
-  - **Linux**: `bash`, `curl`, `find`, `stat` (GNU), `awk`, and one of `md5sum` or `shasum`
-  - **macOS**: `bash` (3.2+), `curl`, `find`, `stat` (BSD), `awk`, and one of `md5` or `shasum`
-  - **Windows**: `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+); the uploader uses .NET `HttpClient` and is intentionally PowerShell-only (no Git Bash dependency)
+- **Default uploader tooling** - `Python 3.10+` on every platform, plus `bash`
+  on Linux/macOS or `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+)
+  on Windows. The platform script only locates Python and Bazel runfiles; upload
+  behavior is shared.
+- **Temporary legacy rollback tooling** - Required only when
+  `use_python_uploader = False`: Linux needs `bash`, `curl`, `find`, GNU `stat`,
+  `awk`, and one of `md5sum` or `shasum`; macOS needs `bash` 3.2+, `curl`,
+  `find`, BSD `stat`, `awk`, and one of `md5` or `shasum`; Windows needs
+  `powershell.exe` and uses .NET `HttpClient`.
 
 Optional tooling:
-- **jq** (Linux/macOS) - Used to enrich test payloads with `context.json`. If missing, uploads proceed without enrichment.
-- **python3** - Used for uploader payload schema validation and Unix telemetry metadata extraction. If missing, schema validation is skipped and telemetry files fail individually with a warning.
+- **jq** (Linux/macOS, legacy rollback only) - Used by the legacy uploader to
+  enrich test payloads with `context.json` and split oversized test payloads. If
+  missing, legacy uploads proceed without enrichment; payloads up to the
+  5,000,000-byte intake limit can still be sent intact, but larger payloads fail
+  because their `events` array cannot be partitioned.
+
+See the [parallel Python uploader](docs/Uploader_Reference.md#parallel-python-uploader-default)
+for its shared cross-platform behavior. Set `use_python_uploader = False` only
+for temporary rollback to the legacy Bash or PowerShell implementation.
 
 ### Contract gate checklist
 
@@ -1409,6 +1472,15 @@ The uploader is a normal Bazel rule (not a test) that runs via `bazel run` after
 4. Then run the uploader via `bazel run`
 5. The uploader discovers all `test.outputs/` directories, waits for quiescence, uploads, and deletes files
 
+Before transport, the uploader enriches each test payload and splits any body
+larger than 4,500,000 bytes along its `events` array. Parts preserve event order
+and the original top-level envelope, are compressed independently when gzip is
+enabled, and use independent retries. The original payload is deleted only
+after every part uploads successfully. A terminal upload failure reports the
+HTTP status, a bounded response body, and uncompressed/compressed/transmitted
+sizes without requiring debug mode. A single event above the 5,000,000-byte
+intake limit is rejected because it cannot be split safely.
+
 Telemetry-specific notes:
 - Telemetry files must contain one raw top-level tracer telemetry request body per file.
 - Telemetry uploads are reconstructed from the raw body plus the uploader mode.
@@ -1424,7 +1496,7 @@ tools/test_optimization/run_test_optimization_ci.sh \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
   //...
 
-# Add --upload only when the real upload should run after doctor and dry-run pass.
+# Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
     --report-dir .topt/reports \
@@ -1440,7 +1512,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 
-# Add -Upload only when the real upload should run after doctor and dry-run pass.
+# Add -Upload to send every available fresh valid payload after validation attempts.
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
@@ -1450,10 +1522,10 @@ $env:DD_SITE = "datadoghq.com"
   //...
 ```
 
-**IMPORTANT**: Always preserve the test exit code. Upload failed-test payloads
-when doctor and dry-run enrichment pass, but do not run the real upload after a
-doctor or dry-run failure. Using plain `;` causes CI to report success even when
-tests fail.
+**IMPORTANT**: Always preserve the test exit code. When upload is enabled, the
+wrapper runs the doctor, then validates enrichment and uploads every available
+fresh valid payload in one uploader pass even if tests or doctor failed. The
+earliest test, doctor, or uploader failure remains the job result.
 
 ### Important runtime requirements
 
@@ -1486,10 +1558,11 @@ tools/test_optimization/run_test_optimization_ci.sh //...
 
 The wrapper creates a temporary BEP file for each Bazel test invocation and
 passes those files to doctor/uploader as repeatable `--bep-json` flags. The
-doctor accounts for configured expected targets using the union of fresh and
-cached BEP results, but validates payloads only from fresh outputs. An
-all-cached expected-target invocation is therefore a successful no-op. The
-uploader applies the same freshness filter and never uploads cached outputs.
+doctor accounts for configured expected targets using fresh, cached, and
+platform-incompatible `SKIPPED` BEP results, but validates payloads only from
+fresh outputs. An invocation whose expected targets are all cached or skipped
+is therefore a successful no-op. The uploader applies the same freshness filter
+and never uploads cached outputs.
 The default freshness source/mode is `auto`: when BEP is explicitly configured,
 the uploader uses it; otherwise it can use an explicitly configured legacy
 execution-log fallback. Artifact discovery defaults to local `bazel-testlogs`
@@ -1558,10 +1631,9 @@ tools/test_optimization/run_test_optimization_ci.sh \
   //...
 ```
 
-The wrapper writes `.topt/reports/doctor-report.json` and
-`.topt/reports/uploader-dry-run-report.json`. When `--upload` is also used, it
-writes the real upload result to `.topt/reports/uploader-upload-report.json`
-instead of overwriting the dry-run report. Reports include a `result` block with
+The wrapper writes `.topt/reports/doctor-report.json` plus exactly one uploader
+report: `uploader-dry-run-report.json` without `--upload`, or
+`uploader-upload-report.json` with it. Reports include a `result` block with
 `status`, `reason_code`, `reason`, `next_steps`, and the exact counts needed to
 answer why payloads were or were not uploaded: expected/seen targets, BEP
 fresh/cached/remote-only outputs, artifact staging, discovered payloads,
@@ -1571,7 +1643,7 @@ For support tickets, prefer
 `.topt/reports/dd-test-optimization-support.zip`. For the simplest customer ask,
 run the doctor with `--support-bundle=<path>` and attach the resulting doctor-only
 bundle. In CI, prefer the wrapper `--support-bundle=<path>` because it also
-includes uploader dry-run and optional upload reports. Bundles are redacted and
+includes the selected uploader report. Bundles are redacted and
 bounded by default and include `summary.md`, selected BEP summaries, effective
 flags, runtime metadata, and a redaction manifest. They do not include raw
 payloads, raw CI logs, raw environment variables, or raw BEP files.
@@ -1656,17 +1728,30 @@ pre-existing optional schema and telemetry helpers. Bash BEP freshness parsing
 still requires `jq` whenever BEP freshness validation is enabled in the Bash
 uploader path.
 
-### Enrichment dry-run
+### Enrichment validation
 
 Payload files written by tests are intentionally raw Bazel outputs. They do not
 need to contain every Git, Bazel, CODEOWNERS, or runtime tag before upload. The
 uploader enriches test payloads at `bazel run` time using `context.json` plus
 `bazel_target_metadata.json`.
 
-Use dry-run mode when you want to prove that the final outbound body would be
-properly enriched without uploading data or deleting local payload files. When
-invoking the uploader manually, use the same `$bep_json` path generated by the
-matching `bazel test --build_event_json_file=...` invocation:
+Pass `--validate-enrichment` during a normal upload to validate the exact
+enriched body before it is split and sent. This enriches and processes each
+source payload once; a validation failure skips that source payload while the
+uploader continues processing other fresh payloads:
+
+```bash
+DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
+bazel run --config=test-optimization //:dd_upload_payloads -- \
+  --bep-json="$bep_json" \
+  --freshness-source=bep \
+  --freshness-mode=required \
+  --validate-enrichment
+```
+
+Add `--dry-run` when you want the same validation without uploading data or
+deleting local payload files. In both modes, use the same `$bep_json` path
+generated by the matching `bazel test --build_event_json_file=...` invocation:
 
 ```bash
 bazel run --config=test-optimization //:dd_upload_payloads -- \
@@ -1677,7 +1762,7 @@ bazel run --config=test-optimization //:dd_upload_payloads -- \
   --validate-enrichment
 ```
 
-By default this validates that the enriched test payload has
+By default `--validate-enrichment` requires the enriched test payload to have
 `git.repository_url`, `git.commit.sha`, `bazel.target`, and `bazel.package`.
 Add repeatable `--expected-enriched-tag=<tag-name>` arguments when a repository
 needs extra tags validated before upload. Go rollouts that need to prove
@@ -1690,6 +1775,7 @@ For complete uploader details, use [`docs/Uploader_Reference.md`](docs/Uploader_
 - uploader target attributes and optional environment variables
 - agentless vs EVP credential modes and endpoint behavior
 - retry/reliability semantics and exit codes
+- automatic test-payload splitting and failure-size diagnostics
 - metadata enrichment (`context.json`, CODEOWNERS) and schema validation
 
 ## Convenience macro: dd_topt_go_test
@@ -1768,7 +1854,7 @@ warmed host Go module cache. Test payloads still use the Bazel file-output
 contract: the tracer writes JSON files under `TEST_UNDECLARED_OUTPUTS_DIR`, and
 the uploader enriches those JSON files with repository and Bazel metadata. Pass
 `--dd-trace-go-version <query>` if you want a non-default tracer version;
-otherwise the default is `v2.9.0`.
+otherwise the default is `v2.9.1`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
@@ -1808,7 +1894,7 @@ use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.9.0",
+    version = "v1.12.0",
     dd_trace_go_pin_files = [
         "@//:go.mod",
         "@//:go.sum",
@@ -1836,11 +1922,11 @@ use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
-    version = "v1.9.0",
+    version = "v1.12.0",
     dd_trace_go_versions = {
-        "github.com/DataDog/dd-trace-go/v2": "v2.9.0",
-        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.0",
-        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.0",
+        "github.com/DataDog/dd-trace-go/v2": "v2.9.1",
+        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1",
+        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.1",
     },
     go_sdk_root = "@test_optimization_go_sdk//:ROOT",
     go_sdk_version = "<go-version>",
@@ -1853,7 +1939,7 @@ with explicit Bazel flags in the script itself. There is no special repo-root
 `--config=hermetic` shortcut for this flow.
 
 If all three selection settings are omitted, the legacy default is still
-`v2.9.0`. Manual setups must keep the local Go module pins on the same effective
+`v2.9.1`. Manual setups must keep the local Go module pins on the same effective
 versions, or the build will stop with a mismatch error. Do not combine
 `dd_trace_go_pin_files`, `dd_trace_go_version`, or `dd_trace_go_versions` in
 the same `orchestrion.from_source(...)` call.
@@ -1948,7 +2034,7 @@ dd_topt_go_test(
 `embedsrcs`. When enabled, it changes the default `rundir` to `.` only if you
 did not already set `rundir`. An explicit `rundir` still wins unchanged.
 
-Then run tests, doctor, enrichment dry-run, and upload with the same BEP-required
+Then run tests, doctor, and one validated uploader pass with the same BEP-required
 flow shown in [Basic usage](#basic-usage): let the wrapper generate a fresh BEP
 file path for each `bazel test` invocation, pass those paths to doctor/uploader
 via repeatable `--bep-json`, and keep
@@ -1979,8 +2065,8 @@ The macro auto-selects the correct per-module payloads by inferring the Go packa
 
 - Precedence:
   1) `importpath` explicitly set on your `go_test` invocation (if provided in kwargs)
-  2) Inference via `embed = [":<go_library>"]` by reading `GoArchive.importpath` from rules_go (recommended)
-  3) Fallback: `<go module path>/<bazel package>` where the Go module path comes from the synced repo's exported `topt_data["runtimes"]["go"]["module_path"]`
+  2) Inference via `embed = [":<go_library>"]` when that library has an explicit rules_go importpath (recommended)
+  3) Fallback: the label-derived importpath that `rules_go` assigns to the hidden raw `go_test` target
 
 When automatic per-module selection is close but not exact (for example, custom
 import path layouts), use `module_label_override` to pin the expected sanitized

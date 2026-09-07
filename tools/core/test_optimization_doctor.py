@@ -119,12 +119,14 @@ class BepFreshness:
         remote_only_outputs: list[BepRemoteOnlyOutput],
         missing_output_mappings: set[str],
         artifact_references: list[BepArtifactReference] | None = None,
+        skipped_targets: set[str] | None = None,
     ) -> None:
         self.eligible_outputs = eligible_outputs
         self.cached_outputs = cached_outputs
         self.remote_only_outputs = remote_only_outputs
         self.missing_output_mappings = missing_output_mappings
         self.artifact_references = artifact_references or []
+        self.skipped_targets = skipped_targets or set()
 
 
 class StagedBepArtifact:
@@ -212,6 +214,8 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     """Parse doctor runtime arguments, including optional BEP freshness flags."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--expected-target", action="append", default=[])
+    parser.add_argument("--context-entry", action="append", default=[])
     parser.add_argument("--bep-json", action="append", default=[])
     parser.add_argument(
         "--freshness-source",
@@ -533,6 +537,8 @@ def _load_expected_targets_file(path: Path) -> list[str]:
 def _resolve_expected_targets(
     config: dict[str, Any],
     config_path: Path,
+    runtime_targets: list[str] | None = None,
+    runtime_selection: bool = False,
 ) -> tuple[list[str], str]:
     static_targets = config["expected_targets"]
     for label in static_targets:
@@ -544,17 +550,96 @@ def _resolve_expected_targets(
         "expected_targets_file_path",
         "expected_targets_file_short_path",
     )
-    if expected_targets_file is None:
-        return list(static_targets), "static" if static_targets else "discovery"
+    configured_targets = list(static_targets)
+    configured_source = "static" if static_targets else "discovery"
+    if expected_targets_file is not None:
+        dynamic_targets = _load_expected_targets_file(expected_targets_file)
+        if static_targets and set(static_targets) != set(dynamic_targets):
+            _fail(
+                "static expected_targets and expected_targets_file contain different target sets"
+            )
+        configured_targets = sorted(set(static_targets)) if static_targets else dynamic_targets
+        configured_source = "static_and_file" if static_targets else "file"
 
-    dynamic_targets = _load_expected_targets_file(expected_targets_file)
-    if static_targets and set(static_targets) != set(dynamic_targets):
-        _fail(
-            "static expected_targets and expected_targets_file contain different target sets"
-        )
-    if static_targets:
-        return sorted(set(static_targets)), "static_and_file"
-    return dynamic_targets, "file"
+    runtime_targets = runtime_targets or []
+    normalized_runtime = [_validate_expected_target_label(label) for label in runtime_targets]
+    if len(set(normalized_runtime)) != len(normalized_runtime):
+        _fail("runtime --expected-target arguments contain duplicate target labels")
+    normalized_runtime = sorted(normalized_runtime)
+    if normalized_runtime:
+        if configured_targets and set(configured_targets) != set(normalized_runtime):
+            _fail("configured and runtime expected targets contain different target sets")
+        return normalized_runtime, "runtime_and_configured" if configured_targets else "runtime"
+    if runtime_selection:
+        _fail("runtime selection requires at least one --expected-target argument")
+    return configured_targets, configured_source
+
+
+_APPARENT_REPO_NAME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-"
+)
+
+
+def _validate_runtime_repo_name(repo_name: str) -> str:
+    if not repo_name or any(ch not in _APPARENT_REPO_NAME_CHARS for ch in repo_name):
+        _fail(f"context entry has invalid apparent repository name: {repo_name!r}")
+    return repo_name
+
+
+def _load_runtime_contexts(entries: list[str]) -> list[tuple[str, Path]]:
+    """Validate keyed runtime context files and their telemetry siblings."""
+    contexts: list[tuple[str, Path]] = []
+    seen_repos: set[str] = set()
+    seen_paths: set[Path] = set()
+    for entry in entries:
+        repo_name, separator, raw_path = entry.partition("=")
+        if not separator or not raw_path:
+            _fail("--context-entry must use <apparent-repo-name>=<context-json-path>")
+        repo_name = _validate_runtime_repo_name(repo_name)
+        if repo_name in seen_repos:
+            _fail(f"duplicate --context-entry repository name: {repo_name!r}")
+        context_path = Path(raw_path).expanduser().resolve()
+        if context_path.name != "context.json" or not context_path.is_file():
+            _fail(f"context entry for {repo_name!r} must reference an existing regular context.json file")
+        if context_path in seen_paths:
+            _fail(f"duplicate --context-entry path: {context_path}")
+        telemetry_path = context_path.with_name("telemetry_facts.json")
+        if not telemetry_path.is_file():
+            _fail(f"context entry for {repo_name!r} is missing sibling telemetry_facts.json")
+
+        context = _load_json(context_path)
+        if not isinstance(context, dict):
+            _fail(f"runtime context for {repo_name!r} must be a JSON object")
+        context_repo = context.get("topt.sync.repository_name")
+        service_name = context.get("service.name")
+        runtime_name = context.get("runtime.name")
+        if context_repo != repo_name:
+            _fail(
+                f"runtime context repository mismatch: argument={repo_name!r} context={context_repo!r}"
+            )
+        if not isinstance(service_name, str) or not service_name:
+            _fail(f"runtime context for {repo_name!r} is missing service.name")
+        if not isinstance(runtime_name, str) or not runtime_name:
+            _fail(f"runtime context for {repo_name!r} is missing runtime.name")
+
+        telemetry = _load_json(telemetry_path)
+        if not isinstance(telemetry, dict):
+            _fail(f"telemetry facts for {repo_name!r} must be a JSON object")
+        if telemetry.get("schema_version") != 1:
+            _fail(f"telemetry facts for {repo_name!r} must use schema_version 1")
+        if not isinstance(telemetry.get("counts"), list) or not isinstance(
+            telemetry.get("distributions"), list
+        ):
+            _fail(f"telemetry facts for {repo_name!r} has an invalid facts schema")
+        if telemetry.get("service_name") != service_name:
+            _fail(f"runtime context and telemetry service mismatch for {repo_name!r}")
+        if telemetry.get("runtime_name") != runtime_name:
+            _fail(f"runtime context and telemetry runtime mismatch for {repo_name!r}")
+
+        seen_repos.add(repo_name)
+        seen_paths.add(context_path)
+        contexts.append((repo_name, context_path))
+    return sorted(contexts, key=lambda item: item[0])
 
 
 def _expected_target_outputs(testlogs_dir: Path | None, label: str, *, allow_missing: bool = False) -> list[Path]:
@@ -1178,6 +1263,7 @@ def _stage_bep_artifacts(
     workspace: Path,
     staging_dir: Path,
     remote_artifacts: str,
+    selected_labels: set[str] | None = None,
     downloader: str = "",
     downloader_timeout_sec: float = 300.0,
 ) -> list[StagedBepArtifact]:
@@ -1204,6 +1290,8 @@ def _stage_bep_artifacts(
                 _fail(message)
             warn_once(message)
         for ref in refs:
+            if selected_labels is not None and ref.label not in selected_labels:
+                continue
             if ref.cached:
                 continue
             display_fetch_value = _display_artifact_reference(ref.fetch_value)
@@ -1463,6 +1551,8 @@ def _parse_bep_freshness(
     remote_only_outputs: list[BepRemoteOnlyOutput] = []
     missing_output_mappings: set[str] = set()
     artifact_references: list[BepArtifactReference] = []
+    skipped_targets: set[str] = set()
+    test_result_labels: set[str] = set()
 
     for bep_file in bep_files:
         if not bep_file.is_file():
@@ -1498,12 +1588,27 @@ def _parse_bep_freshness(
                     return None
                 _fail(f"invalid BEP JSON in {bep_file}:{line_number}: {exc}")
             event_id = event.get("id") if isinstance(event, dict) else {}
+            target_completed_id = _coalesced_field(
+                event_id, "targetCompleted", "target_completed", {}
+            )
+            aborted = event.get("aborted", {}) if isinstance(event, dict) else {}
+            if isinstance(target_completed_id, dict) and isinstance(aborted, dict):
+                skipped_label = target_completed_id.get("label")
+                if (
+                    isinstance(skipped_label, str)
+                    and skipped_label
+                    and aborted.get("reason") == "SKIPPED"
+                ):
+                    skipped_targets.add(skipped_label)
+                    continue
             test_result_id = _coalesced_field(event_id, "testResult", "test_result", {})
             if not isinstance(test_result_id, dict):
                 continue
             label = test_result_id.get("label")
             if not isinstance(label, str) or not label:
                 continue
+            # A TestResult proves execution even when a cache hit omits test.outputs.
+            test_result_labels.add(label)
 
             result = _coalesced_field(event, "testResult", "test_result", {})
             if not isinstance(result, dict):
@@ -1604,12 +1709,22 @@ def _parse_bep_freshness(
             "invocation and do not pass overlapping stale BEP files."
         )
 
+    conflicting_labels = skipped_targets.intersection(test_result_labels)
+    if conflicting_labels:
+        label = sorted(conflicting_labels)[0]
+        _fail(
+            "BEP freshness is ambiguous: the same target is reported as both "
+            f"platform-skipped and executed: {label}. Use one BEP file per Bazel "
+            "test invocation and do not pass overlapping stale BEP files."
+        )
+
     return BepFreshness(
         eligible_outputs=eligible_outputs,
         cached_outputs=cached_outputs,
         remote_only_outputs=remote_only_outputs,
         missing_output_mappings=missing_output_mappings,
         artifact_references=artifact_references,
+        skipped_targets=skipped_targets,
     )
 
 
@@ -1692,7 +1807,9 @@ def _validate_expected_target_bep_freshness(
             fresh_output_dirs.append(output_dir)
             fresh_labels.add(label)
 
-    missing_labels = expected_targets.difference(fresh_labels.union(cached_only_labels))
+    missing_labels = expected_targets.difference(
+        fresh_labels.union(cached_only_labels).union(freshness.skipped_targets)
+    )
     if missing_labels:
         missing_label = sorted(missing_labels)[0]
         if missing_label in freshness.missing_output_mappings:
@@ -1888,7 +2005,10 @@ def _resolve_configured_context_manifest(config: dict[str, Any], config_path: Pa
 
 
 def _validate_git_metadata(context_manifest: Path) -> None:
-    contexts = _load_contexts(context_manifest)
+    _validate_git_metadata_contexts(_load_contexts(context_manifest))
+
+
+def _validate_git_metadata_contexts(contexts: list[tuple[str, Path]]) -> None:
     if not contexts:
         _fail("require_git_metadata=True but no context.json was provided in data")
     for repo_key, context_path in contexts:
@@ -2105,6 +2225,7 @@ def _new_diagnostic_report(args: argparse.Namespace) -> dict[str, Any]:
             "cached_output_keys": [],
             "remote_only_outputs": [],
             "missing_output_mappings": [],
+            "skipped_targets": [],
             "artifact_references": 0,
             "selected_artifact_outputs": [],
             "blocked_artifact_labels": [],
@@ -2123,6 +2244,7 @@ def _new_diagnostic_report(args: argparse.Namespace) -> dict[str, Any]:
             "cached": [],
             "missing": [],
             "remote_only": [],
+            "skipped": [],
         },
         "outputs": [],
         "summary": {
@@ -2303,6 +2425,7 @@ def _update_diagnostic_bep(
     }
     seen_targets.update(item.label for item in freshness.remote_only_outputs)
     seen_targets.update(ref.label for ref in freshness.artifact_references)
+    seen_targets.update(freshness.skipped_targets)
     expected = set(report.get("targets", {}).get("expected", []))
     cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
     fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
@@ -2324,6 +2447,7 @@ def _update_diagnostic_bep(
                 for item in freshness.remote_only_outputs
             ],
             "missing_output_mappings": sorted(freshness.missing_output_mappings),
+            "skipped_targets": sorted(freshness.skipped_targets),
             "artifact_references": len(freshness.artifact_references),
             "selected_artifact_outputs": _sorted_pairs(selected_bep_artifact_outputs or set()),
             "blocked_artifact_labels": sorted(blocked_bep_artifact_labels or set()),
@@ -2336,6 +2460,7 @@ def _update_diagnostic_bep(
             "cached": sorted(cached_labels),
             "missing": sorted(expected.difference(seen_targets)),
             "remote_only": sorted(remote_only_labels),
+            "skipped": sorted(freshness.skipped_targets),
         }
     )
 
@@ -2709,16 +2834,33 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
     if execroot is not None and not os.environ.get(DOCTOR_EXECROOT_ENV):
         os.environ[DOCTOR_EXECROOT_ENV] = str(execroot)
 
+    runtime_selection = bool(config.get("runtime_selection", False))
+    expected_targets, expected_targets_source = _resolve_expected_targets(
+        config,
+        config_path,
+        args.expected_target,
+        runtime_selection,
+    )
+    runtime_contexts = _load_runtime_contexts(args.context_entry)
+    if runtime_selection and not runtime_contexts:
+        _fail("runtime selection requires at least one --context-entry argument")
+
     workspace = _workspace_root()
-    testlogs_dir = _resolve_testlogs_dir(workspace, allow_missing=staging_requested)
+    testlogs_dir = _resolve_testlogs_dir(
+        workspace,
+        # Expected-target validation below uses BEP to distinguish a missing
+        # output from a cached or platform-skipped target.
+        allow_missing=staging_requested or bool(expected_targets and bep_files),
+    )
 
     if config["forbid_dd_git_test_env"]:
         _validate_bazelrc(workspace)
     if config["require_git_metadata"]:
-        context_manifest = _resolve_configured_context_manifest(config, config_path)
-        _validate_git_metadata(context_manifest)
-
-    expected_targets, expected_targets_source = _resolve_expected_targets(config, config_path)
+        if runtime_contexts:
+            _validate_git_metadata_contexts(runtime_contexts)
+        else:
+            context_manifest = _resolve_configured_context_manifest(config, config_path)
+            _validate_git_metadata(context_manifest)
     _update_diagnostic_config(
         report,
         config_path=config_path,
@@ -2743,7 +2885,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 target_output_dirs = _expected_target_outputs(
                     testlogs_dir,
                     label,
-                    allow_missing=staging_requested,
+                    allow_missing=staging_requested or bool(bep_files),
                 )
                 output_dirs.extend(target_output_dirs)
                 for output_dir in target_output_dirs:
@@ -2786,12 +2928,19 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             staged=staged,
         )
         if staging_enabled and freshness is not None:
+            selected_labels = set(expected_targets) if expected_targets else None
             selected_bep_artifact_outputs = _selected_bep_artifact_outputs(
                 freshness,
                 workspace,
                 args.remote_artifacts,
             )
+            if selected_labels is not None:
+                selected_bep_artifact_outputs = {
+                    output for output in selected_bep_artifact_outputs if output[0] in selected_labels
+                }
             blocked_bep_artifact_labels = _blocked_bep_artifact_labels(freshness, args.remote_artifacts)
+            if selected_labels is not None:
+                blocked_bep_artifact_labels.intersection_update(selected_labels)
             _update_diagnostic_bep(
                 report,
                 freshness,
@@ -2804,6 +2953,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 workspace=workspace,
                 staging_dir=staging_base,
                 remote_artifacts=args.remote_artifacts,
+                selected_labels=selected_labels,
                 downloader=args.bep_artifact_downloader,
                 downloader_timeout_sec=args.bep_artifact_downloader_timeout_sec,
             )
@@ -2852,19 +3002,21 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 )
 
         if not output_dirs:
-            cached_only_expected_targets = False
+            non_fresh_expected_targets = False
             if expected_targets and freshness is not None:
                 bep_fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
                 bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
-                cached_only_expected_targets = set(expected_targets).issubset(
-                    bep_cached_labels.difference(bep_fresh_labels)
+                non_fresh_expected_targets = set(expected_targets).issubset(
+                    bep_cached_labels.difference(bep_fresh_labels).union(
+                        freshness.skipped_targets
+                    )
                 )
-            if cached_only_expected_targets:
+            if non_fresh_expected_targets:
                 _update_diagnostic_output_summary(report, [])
                 report["summary"]["payload_selection"] = {}
                 print(
-                    "[dd-test-optimization-doctor] OK: all expected targets were served "
-                    "from Bazel's test cache; no fresh payloads require validation"
+                    "[dd-test-optimization-doctor] OK: all expected targets were cached "
+                    "or skipped as platform-incompatible; no fresh payloads require validation"
                 )
                 return 0
             if expected_targets:

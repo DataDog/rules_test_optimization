@@ -29,9 +29,9 @@ const (
 	// DefaultArchiveType is the archive type used by GitHub codeload tarballs.
 	DefaultArchiveType = "tar.gz"
 	// DefaultDDTraceGoVersion is the Go tracer version that supports the Bazel JSON payload contract.
-	DefaultDDTraceGoVersion = "v2.9.0"
+	DefaultDDTraceGoVersion = "v2.9.1"
 	// DefaultOrchestrionVersion is the Orchestrion version validated by the Go onboarding fixtures.
-	DefaultOrchestrionVersion = "v1.9.0"
+	DefaultOrchestrionVersion = "v1.12.0"
 	// DefaultMainRef is the remote ref that published pins must be reachable from.
 	DefaultMainRef = "origin/main"
 
@@ -204,9 +204,9 @@ func FormatMarkdownSummary(pins Pins) string {
 	buf.WriteString("## Recommended Flow\n\n")
 	buf.WriteString("1. Wire the published repositories using the tuple above.\n")
 	buf.WriteString("2. Run tests with the Test Optimization Bazel config so JSON payloads are downloaded locally.\n")
-	buf.WriteString("3. Run the doctor target, then the uploader dry-run with enrichment validation.\n")
-	buf.WriteString("4. Upload only after tests, doctor, and dry-run pass, with credentials available only to `bazel run`.\n")
-	buf.WriteString("5. In CI, set `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir` so `doctor-report.json`, `uploader-dry-run-report.json`, and optional `uploader-upload-report.json` are archived separately.\n")
+	buf.WriteString("3. Run the doctor target, then one uploader pass with enrichment validation.\n")
+	buf.WriteString("4. Enable real upload only with credentials available to `bazel run`; otherwise keep that uploader pass in dry-run mode.\n")
+	buf.WriteString("5. In CI, set `DD_TEST_OPTIMIZATION_REPORT_DIR` or wrapper `--report-dir` so `doctor-report.json` and the selected uploader report are archived.\n")
 	return buf.String()
 }
 

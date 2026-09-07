@@ -298,10 +298,9 @@ func TestSummaryContainsCurrentCommitOnly(t *testing.T) {
 		t.Fatalf("summary contains stale commit %s:\n%s", staleCommit, got)
 	}
 	for _, want := range []string{
-		"uploader dry-run with enrichment validation",
+		"one uploader pass with enrichment validation",
 		"DD_TEST_OPTIMIZATION_REPORT_DIR",
-		"uploader-dry-run-report.json",
-		"uploader-upload-report.json",
+		"selected uploader report",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("summary missing %q:\n%s", want, got)
@@ -414,6 +413,6 @@ func ExampleFormatShell() {
 	// RULES_GO_UPSTREAM="v0_60_0"
 	// RULES_GO_VARIANT="base"
 	// RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
-	// DD_TRACE_GO_VERSION="v2.9.0"
-	// ORCHESTRION_VERSION="v1.9.0"
+	// DD_TRACE_GO_VERSION="v2.9.1"
+	// ORCHESTRION_VERSION="v1.12.0"
 }

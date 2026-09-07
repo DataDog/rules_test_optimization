@@ -252,6 +252,21 @@ example_stub_repo.example_stub_repo(
     labels = _EXAMPLE_STUB_LABELS,
     service_name = "go-service",
 )
+example_stub_repo.example_stub_repo(
+    name = "test_optimization_data_static",
+    service_name = "static-service",
+)
+example_stub_repo.example_stub_repo(
+    name = "test_optimization_data_static_module",
+    go_module_included = True,
+    labels = ["example_com_stub"],
+    service_name = "static-module-service",
+)
+example_stub_repo.example_stub_repo(
+    name = "test_optimization_data_static_disabled",
+    enabled = False,
+    service_name = "static-disabled-service",
+)
 use_repo(
     example_stub_repo,
     "test_optimization_data",
@@ -261,4 +276,7 @@ use_repo(
     "test_optimization_data_nodejs",
     "test_optimization_data_python",
     "test_optimization_data_ruby",
+    "test_optimization_data_static",
+    "test_optimization_data_static_disabled",
+    "test_optimization_data_static_module",
 )

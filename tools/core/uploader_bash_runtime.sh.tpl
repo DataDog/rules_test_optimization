@@ -305,6 +305,197 @@ resolve_runtime_file_path() {
     resolve_artifact_path "$input_path"
 }
 
+RUNTIME_SELECTION_REQUIRED="__DDTPL_RUNTIME_SELECTION__"
+RUNTIME_EXPECTED_TARGETS=()
+RUNTIME_CONTEXT_REPOS=()
+RUNTIME_CONTEXT_FILES=()
+RUNTIME_TELEMETRY_FACTS_FILES=()
+
+validate_runtime_expected_target() {
+    local label="$1"
+    if [[ ! "$label" =~ ^//[^:[:space:]]*:[^:[:space:]]+$ || "$label" == *"..."* || "$label" == *"*"* || "$label" == *"\\"* ]]; then
+        log "error: --expected-target must be a fully expanded local //pkg:target label, got '$label'"
+        exit 2
+    fi
+}
+
+validate_runtime_context_pair() {
+    local repo_key="$1"
+    local context_file="$2"
+    local telemetry_file="$3"
+    if command -v jq >/dev/null 2>&1; then
+        if ! jq -e --arg repo "$repo_key" '
+          type == "object" and
+          .["topt.sync.repository_name"] == $repo and
+          (.["service.name"] | type == "string" and length > 0) and
+          (.["runtime.name"] | type == "string" and length > 0)
+        ' "$context_file" >/dev/null; then
+            log "error: runtime context/telemetry identity or schema mismatch for repository '$repo_key'"
+            exit 2
+        fi
+        local service_name runtime_name
+        service_name="$(jq -r '.["service.name"]' "$context_file")"
+        runtime_name="$(jq -r '.["runtime.name"]' "$context_file")"
+        if ! jq -e --arg service "$service_name" --arg runtime "$runtime_name" '
+          type == "object" and
+          .schema_version == 1 and
+          .service_name == $service and
+          .runtime_name == $runtime and
+          (.counts | type == "array") and
+          (.distributions | type == "array")
+        ' "$telemetry_file" >/dev/null; then
+            log "error: runtime context/telemetry identity or schema mismatch for repository '$repo_key'"
+            exit 2
+        fi
+        return 0
+    fi
+    if command -v python3 >/dev/null 2>&1; then
+        if ! python3 - "$repo_key" "$context_file" "$telemetry_file" <<'PY'
+import json
+import sys
+
+repo, context_path, telemetry_path = sys.argv[1:]
+with open(context_path, encoding="utf-8-sig") as handle:
+    context = json.load(handle)
+with open(telemetry_path, encoding="utf-8-sig") as handle:
+    telemetry = json.load(handle)
+valid = (
+    isinstance(context, dict)
+    and context.get("topt.sync.repository_name") == repo
+    and isinstance(context.get("service.name"), str)
+    and bool(context.get("service.name"))
+    and isinstance(context.get("runtime.name"), str)
+    and bool(context.get("runtime.name"))
+    and isinstance(telemetry, dict)
+    and telemetry.get("schema_version") == 1
+    and telemetry.get("service_name") == context.get("service.name")
+    and telemetry.get("runtime_name") == context.get("runtime.name")
+    and isinstance(telemetry.get("counts"), list)
+    and isinstance(telemetry.get("distributions"), list)
+)
+raise SystemExit(0 if valid else 1)
+PY
+        then
+            log "error: runtime context/telemetry identity or schema mismatch for repository '$repo_key'"
+            exit 2
+        fi
+        return 0
+    fi
+    log "error: runtime --context-entry validation requires jq or python3"
+    exit 2
+}
+
+scan_runtime_selection_args() {
+    local args=("$@")
+    local i=0 arg value repo_key raw_path resolved telemetry existing
+    while (( i < ${#args[@]} )); do
+        arg="${args[$i]}"
+        case "$arg" in
+            --expected-target)
+                ((++i))
+                if (( i >= ${#args[@]} )); then
+                    log "error: --expected-target requires a local label"
+                    exit 2
+                fi
+                value="${args[$i]}"
+                ;;
+            --expected-target=*)
+                value="${arg#--expected-target=}"
+                ;;
+            --context-entry)
+                ((++i))
+                if (( i >= ${#args[@]} )); then
+                    log "error: --context-entry requires <repo>=<context.json>"
+                    exit 2
+                fi
+                value="${args[$i]}"
+                ;;
+            --context-entry=*)
+                value="${arg#--context-entry=}"
+                ;;
+            *)
+                ((++i))
+                continue
+                ;;
+        esac
+
+        if [[ "$arg" == --expected-target* ]]; then
+            validate_runtime_expected_target "$value"
+            for existing in "${RUNTIME_EXPECTED_TARGETS[@]+"${RUNTIME_EXPECTED_TARGETS[@]}"}"; do
+                if [[ "$existing" == "$value" ]]; then
+                    log "error: duplicate --expected-target '$value'"
+                    exit 2
+                fi
+            done
+            RUNTIME_EXPECTED_TARGETS+=("$value")
+        else
+            repo_key="${value%%=*}"
+            raw_path="${value#*=}"
+            if [[ "$repo_key" == "$value" || -z "$repo_key" || -z "$raw_path" || "$repo_key" == *[^A-Za-z0-9._+-]* ]]; then
+                log "error: --context-entry must use <apparent-repo-name>=<context-json-path>"
+                exit 2
+            fi
+            resolved="$(resolve_runtime_file_path "$raw_path")"
+            if [[ -z "$resolved" || ! -f "$resolved" || "$(basename "$resolved")" != "context.json" ]]; then
+                log "error: context entry for '$repo_key' must reference an existing regular context.json file"
+                exit 2
+            fi
+            telemetry="$(dirname "$resolved")/telemetry_facts.json"
+            if [[ ! -f "$telemetry" ]]; then
+                log "error: context entry for '$repo_key' is missing sibling telemetry_facts.json"
+                exit 2
+            fi
+            for existing in "${RUNTIME_CONTEXT_REPOS[@]+"${RUNTIME_CONTEXT_REPOS[@]}"}"; do
+                if [[ "$existing" == "$repo_key" ]]; then
+                    log "error: duplicate --context-entry repository '$repo_key'"
+                    exit 2
+                fi
+            done
+            for existing in "${RUNTIME_CONTEXT_FILES[@]+"${RUNTIME_CONTEXT_FILES[@]}"}"; do
+                if [[ "$existing" == "$resolved" ]]; then
+                    log "error: duplicate --context-entry path for repository '$repo_key'"
+                    exit 2
+                fi
+            done
+            validate_runtime_context_pair "$repo_key" "$resolved" "$telemetry"
+            RUNTIME_CONTEXT_REPOS+=("$repo_key")
+            RUNTIME_CONTEXT_FILES+=("$resolved")
+            RUNTIME_TELEMETRY_FACTS_FILES+=("$telemetry")
+        fi
+        ((++i))
+    done
+
+    if [[ "$RUNTIME_SELECTION_REQUIRED" == "true" ]]; then
+        if (( ${#RUNTIME_EXPECTED_TARGETS[@]} == 0 )); then
+            log "error: runtime selection requires at least one --expected-target"
+            exit 2
+        fi
+        if (( ${#RUNTIME_CONTEXT_REPOS[@]} == 0 )); then
+            log "error: runtime selection requires at least one --context-entry"
+            exit 2
+        fi
+    fi
+
+    local left right tmp
+    for (( left = 0; left < ${#RUNTIME_CONTEXT_REPOS[@]}; ++left )); do
+        for (( right = left + 1; right < ${#RUNTIME_CONTEXT_REPOS[@]}; ++right )); do
+            if [[ "${RUNTIME_CONTEXT_REPOS[$right]}" < "${RUNTIME_CONTEXT_REPOS[$left]}" ]]; then
+                tmp="${RUNTIME_CONTEXT_REPOS[$left]}"
+                RUNTIME_CONTEXT_REPOS[$left]="${RUNTIME_CONTEXT_REPOS[$right]}"
+                RUNTIME_CONTEXT_REPOS[$right]="$tmp"
+                tmp="${RUNTIME_CONTEXT_FILES[$left]}"
+                RUNTIME_CONTEXT_FILES[$left]="${RUNTIME_CONTEXT_FILES[$right]}"
+                RUNTIME_CONTEXT_FILES[$right]="$tmp"
+                tmp="${RUNTIME_TELEMETRY_FACTS_FILES[$left]}"
+                RUNTIME_TELEMETRY_FACTS_FILES[$left]="${RUNTIME_TELEMETRY_FACTS_FILES[$right]}"
+                RUNTIME_TELEMETRY_FACTS_FILES[$right]="$tmp"
+            fi
+        done
+    done
+}
+
+scan_runtime_selection_args "$@"
+
 # Resolve bundled context inputs used for payload enrichment.
 # Runtime override wins first so callers can reuse an already-fetched context
 # file without making `bazel run //:dd_upload_payloads` depend on sync labels.
@@ -315,7 +506,7 @@ CONTEXT_JSON_PATH="__DDTPL_CONTEXT_JSON_PATH__"
 TELEMETRY_FACTS_MANIFEST_RLOC="__DDTPL_TELEMETRY_FACTS_MANIFEST_RLOC__"
 TELEMETRY_FACTS_MANIFEST_PATH="__DDTPL_TELEMETRY_FACTS_MANIFEST_PATH__"
 CONTEXT_JSON_OVERRIDE="${DD_TEST_OPTIMIZATION_CONTEXT_JSON:-}"
-dbg "context.json resolution inputs: override='$CONTEXT_JSON_OVERRIDE' path='$CONTEXT_JSON_PATH' rloc='$CONTEXT_JSON_RLOC' manifest_path='$CONTEXT_MANIFEST_PATH' manifest_rloc='$CONTEXT_MANIFEST_RLOC'"
+dbg "resolving configured context.json and manifest inputs"
 CONTEXT_JSON=""
 CONTEXT_JSON_FROM_OVERRIDE=0
 CONTEXT_MANIFEST=""
@@ -370,32 +561,38 @@ load_context_manifest_entries() {
     CONTEXT_REPO_COUNT=${#CONTEXT_REPO_KEYS[@]}
 }
 
-if [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
+if (( ${#RUNTIME_CONTEXT_REPOS[@]} > 0 )); then
+    CONTEXT_REPO_KEYS=("${RUNTIME_CONTEXT_REPOS[@]}")
+    CONTEXT_REPO_FILES=("${RUNTIME_CONTEXT_FILES[@]}")
+    CONTEXT_REPO_COUNT=${#CONTEXT_REPO_KEYS[@]}
+    CONTEXT_JSON="${CONTEXT_REPO_FILES[0]}"
+    dbg "runtime contexts selected for repos: ${CONTEXT_REPO_KEYS[*]}"
+elif [[ -n "$CONTEXT_JSON_OVERRIDE" ]]; then
     CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_OVERRIDE")
     if [[ -n "$CONTEXT_JSON" ]]; then
         CONTEXT_JSON_FROM_OVERRIDE=1
-        dbg "context.json resolved via runtime override: '$CONTEXT_JSON'"
+        dbg "context.json resolved via runtime override"
     else
         log "warning: DD_TEST_OPTIMIZATION_CONTEXT_JSON did not resolve to a readable file; falling back to configured data"
     fi
 fi
-if (( CONTEXT_JSON_FROM_OVERRIDE == 0 )); then
+if (( ${#RUNTIME_CONTEXT_REPOS[@]} == 0 && CONTEXT_JSON_FROM_OVERRIDE == 0 )); then
     CONTEXT_MANIFEST="$(resolve_artifact_path "$CONTEXT_MANIFEST_PATH")"
     if [[ -n "$CONTEXT_MANIFEST" ]]; then
-        dbg "context manifest resolved via direct path: '$CONTEXT_MANIFEST'"
+        dbg "context manifest resolved via direct path"
     elif [[ -n "$CONTEXT_MANIFEST_RLOC" ]]; then
         CONTEXT_MANIFEST="$(resolve_runfile "$CONTEXT_MANIFEST_RLOC")"
         if [[ -n "$CONTEXT_MANIFEST" ]]; then
-            dbg "context manifest resolved via runfiles: '$CONTEXT_MANIFEST'"
+            dbg "context manifest resolved via runfiles"
         fi
     fi
     load_context_manifest_entries "$CONTEXT_MANIFEST"
     if (( CONTEXT_REPO_COUNT > 0 )); then
         CONTEXT_JSON="${CONTEXT_REPO_FILES[0]}"
         if (( CONTEXT_REPO_COUNT == 1 )); then
-            dbg "context.json resolved from single bundled context: '$CONTEXT_JSON'"
+            dbg "context.json resolved from single bundled context"
         else
-            dbg "primary context.json resolved from bundled manifest: '$CONTEXT_JSON' (repos=${CONTEXT_REPO_KEYS[*]})"
+            dbg "primary context.json resolved from bundled manifest (repos=${CONTEXT_REPO_KEYS[*]})"
         fi
     fi
 fi
@@ -403,21 +600,25 @@ if [[ -z "$CONTEXT_JSON" ]]; then
     CONTEXT_JSON=$(resolve_artifact_path "$CONTEXT_JSON_PATH")
     if [[ -n "$CONTEXT_JSON" ]]; then
         # Direct artifact path is fastest and most deterministic when available.
-        dbg "context.json resolved via direct path: '$CONTEXT_JSON'"
+        dbg "context.json resolved via direct path"
     elif [[ -n "$CONTEXT_JSON_RLOC" ]]; then
         # Runfiles lookup supports launcher/platform variants and bzlmod naming.
         CONTEXT_JSON=$(resolve_runfile "$CONTEXT_JSON_RLOC")
         if [[ -z "$CONTEXT_JSON" ]]; then
             log "warning: context.json not found in runfiles; payloads will not be enriched"
         else
-            dbg "context.json resolved via runfiles: '$CONTEXT_JSON'"
+            dbg "context.json resolved via runfiles"
         fi
     else
         dbg "context.json not configured in data files; enrichment disabled"
     fi
 fi
 PRIMARY_CONTEXT_JSON="$CONTEXT_JSON"
-dbg "primary context.json: ${PRIMARY_CONTEXT_JSON:-<none>} (bundled_contexts=$CONTEXT_REPO_COUNT)"
+if [[ -n "$PRIMARY_CONTEXT_JSON" ]]; then
+    dbg "primary context.json available (bundled_contexts=$CONTEXT_REPO_COUNT)"
+else
+    dbg "primary context.json unavailable (bundled_contexts=$CONTEXT_REPO_COUNT)"
+fi
 
 dbg "telemetry facts manifest resolution inputs: path='$TELEMETRY_FACTS_MANIFEST_PATH' rloc='$TELEMETRY_FACTS_MANIFEST_RLOC'"
 TELEMETRY_FACTS_MANIFEST=$(resolve_artifact_path "$TELEMETRY_FACTS_MANIFEST_PATH")
@@ -600,6 +801,9 @@ KEEP_PAYLOADS=$(normalize_bool "${DD_TEST_OPTIMIZATION_KEEP_PAYLOADS:-__DDTPL_KE
 FILTER_PREFIX=$(normalize_bool "${DD_TEST_OPTIMIZATION_FILTER_PREFIX:-__DDTPL_FILTER_PREFIX__}")
 DEBUG=$(normalize_bool "${DD_TEST_OPTIMIZATION_DEBUG:-__DDTPL_DEBUG__}")
 GZIP_PAYLOADS=$(normalize_bool "${DD_TEST_OPTIMIZATION_GZIP:-__DDTPL_GZIP_PAYLOADS__}")
+TEST_PAYLOAD_SPLIT_TARGET_BYTES=4500000
+TEST_PAYLOAD_MAX_BYTES=5000000
+UPLOAD_RESPONSE_LOG_BYTES=2000
 RULES_VERSION="__DDTPL_RULES_VERSION__"
 RUNTIME_ID=$(generate_uuid)
 # Reuse one uploader-local session fallback for telemetry files that do not
@@ -613,6 +817,7 @@ REPORT_REASON_CODE="running"
 REPORT_REASON="Uploader is still running."
 REPORT_NEXT_STEPS=()
 REPORT_UPLOAD_ATTEMPTED=0
+REPORT_UPLOAD_FAILED=0
 REPORT_PAYLOADS_DISCOVERED_TESTS=0
 REPORT_PAYLOADS_DISCOVERED_COVERAGE=0
 REPORT_PAYLOADS_DISCOVERED_TELEMETRY=0
@@ -655,9 +860,12 @@ DEFAULT_EXECUTION_LOG_JSON=".topt/bazel-execution-log.json"
 FRESHNESS_ELIGIBILITY_ENABLED=0
 FRESHNESS_SELECTED_SOURCE="none"
 FRESHNESS_ELIGIBLE_LABELS_FILE=""
+REMOTE_ONLY_OUTPUTS_VALIDATED=0
 FRESHNESS_ELIGIBLE_OUTPUTS_FILE=""
 FRESHNESS_CACHED_OUTPUTS_FILE=""
 FRESHNESS_SKIPPED_OUTPUTS_FILE=""
+FRESHNESS_SKIPPED_TARGETS_FILE=""
+FRESHNESS_TEST_RESULT_LABELS_FILE=""
 FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE=""
 FRESHNESS_MISSING_OUTPUT_LABELS_FILE=""
 FRESHNESS_SKIP_WAS_EMITTED=0
@@ -678,12 +886,14 @@ DEFAULT_EXPECTED_ENRICHED_TAGS=(
 
 print_usage() {
     cat <<'EOF'
-Usage: dd_upload_payloads [--dry-run [--validate-enrichment] [--expected-enriched-tag=TAG ...]]
+Usage: dd_upload_payloads [--dry-run] [--validate-enrichment] [--expected-enriched-tag=TAG ...]
 
 Options:
   --dry-run                    Enrich and validate payloads without uploading or deleting files.
-  --validate-enrichment        In dry-run mode, require key context and Bazel tags after enrichment.
+  --validate-enrichment        Require key context and Bazel tags after enrichment, before upload.
   --expected-enriched-tag TAG  Add one required enriched tag; repeatable. Defaults to git and Bazel tags.
+  --expected-target LABEL       Select one exact local target; repeatable.
+  --context-entry REPO=PATH     Select one keyed context.json and telemetry sibling; repeatable.
   --bep-json PATH              BEP JSON file from the matching bazel test invocation; repeatable.
   --freshness-source SOURCE    Cache-safety source: auto, bep, execution_log. Default: auto.
   --freshness-mode MODE        Cache-safety mode: auto, required, optional, or disabled. Default: auto.
@@ -722,6 +932,16 @@ while (($# > 0)); do
             ;;
         --expected-enriched-tag=*)
             EXPECTED_ENRICHED_TAGS+=("${1#--expected-enriched-tag=}")
+            shift
+            ;;
+        --expected-target|--context-entry)
+            if (($# < 2)); then
+                log "error: $1 requires a value"
+                exit 2
+            fi
+            shift 2
+            ;;
+        --expected-target=*|--context-entry=*)
             shift
             ;;
         --bep-json)
@@ -889,11 +1109,6 @@ if (( FRESHNESS_DISABLED_EXPLICIT == 1 )); then
     EXECUTION_LOG_MODE="disabled"
 fi
 
-if (( VALIDATE_ENRICHMENT == 1 && DRY_RUN == 0 )); then
-    log "error: --validate-enrichment requires --dry-run"
-    exit 2
-fi
-
 FRESHNESS_MODE="$(echo "$FRESHNESS_MODE" | tr '[:upper:]' '[:lower:]')"
 FRESHNESS_SOURCE="$(echo "$FRESHNESS_SOURCE" | tr '[:upper:]' '[:lower:]')"
 ARTIFACT_SOURCE="$(echo "$ARTIFACT_SOURCE" | tr '[:upper:]' '[:lower:]')"
@@ -961,6 +1176,10 @@ dbg "gzip enabled: $GZIP_PAYLOADS"
 CURL_RETRY_FLAGS=(__DDTPL_CURL_RETRY_FLAGS__)
 if curl --help all 2>/dev/null | grep -q -- '--retry-all-errors'; then
     CURL_RETRY_FLAGS+=(--retry-all-errors)
+fi
+CURL_FAIL_FLAG=(-f)
+if curl --help all 2>/dev/null | grep -q -- '--fail-with-body'; then
+    CURL_FAIL_FLAG=(--fail-with-body)
 fi
 dbg "curl retry flags: ${CURL_RETRY_FLAGS[*]}"
 
@@ -1213,7 +1432,7 @@ classify_uploader_result() {
             "Use the BEP from the exact matching bazel test invocation and verify each expected target is fresh or exclusively cached."
         return
     fi
-    if (( exit_code != 0 && DRY_RUN == 0 && REPORT_UPLOAD_ATTEMPTED > 0 && ${UPLOAD_FAILURES:-0} > 0 )); then
+    if (( exit_code != 0 && DRY_RUN == 0 && REPORT_UPLOAD_FAILED > 0 )); then
         set_report_result "upload_failed_http" \
             "One or more payload uploads failed." \
             "Check HTTP status diagnostics and Datadog credentials/site configuration."
@@ -1301,7 +1520,8 @@ write_uploader_report() {
         printf '    "cached_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_CACHED_OUTPUTS_FILE:-}")"
         printf '    "remote_only_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE:-}")"
         printf '    "skipped_outputs": %s,\n' "$(report_count_lines_file "${FRESHNESS_SKIPPED_OUTPUTS_FILE:-}")"
-        printf '    "missing_output_labels": %s\n' "$(report_count_lines_file "${FRESHNESS_MISSING_OUTPUT_LABELS_FILE:-}")"
+        printf '    "missing_output_labels": %s,\n' "$(report_count_lines_file "${FRESHNESS_MISSING_OUTPUT_LABELS_FILE:-}")"
+        printf '    "skipped_targets": %s\n' "$(report_count_lines_file "${FRESHNESS_SKIPPED_TARGETS_FILE:-}")"
         printf '  },\n'
         printf '  "artifacts": {\n'
         printf '    "source": %s,\n' "$(report_json_string "${ARTIFACT_SOURCE:-}")"
@@ -1500,8 +1720,14 @@ stage_bep_artifacts() {
     for bep_json in "${BEP_JSON_FILES[@]+"${BEP_JSON_FILES[@]}"}"; do
         resolved_bep_json="$(resolve_runtime_file_path "$bep_json")"
         if [[ -z "$resolved_bep_json" || ! -f "$resolved_bep_json" ]]; then
-            log "error: BEP JSON not found for artifact staging: $bep_json"
-            exit 2
+            log "error: BEP JSON not found for artifact staging: $bep_json; continuing with other BEP files"
+            # BEP freshness normally accounts for this failure later. When it
+            # is disabled or another freshness source owns filtering, staging
+            # is the only phase that observes the missing requested input.
+            if [[ "$FRESHNESS_MODE" == "disabled" || "$FRESHNESS_SOURCE" == "execution_log" ]]; then
+                ((++UPLOAD_FAILURES))
+            fi
+            continue
         fi
         resolved_bep_files+=("$resolved_bep_json")
     done
@@ -1964,7 +2190,11 @@ dbg_headers() {
 JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
 dbg "jq available: $JQ_AVAILABLE"
-dbg "primary context.json: ${PRIMARY_CONTEXT_JSON:-<none>}"
+if [[ -n "$PRIMARY_CONTEXT_JSON" ]]; then
+  dbg "primary context.json available"
+else
+  dbg "primary context.json unavailable"
+fi
 
 # CODEOWNERS state (initialized lazily on first enrichment attempt).
 CODEOWNERS_INITIALIZED=0
@@ -2671,61 +2901,132 @@ inject_codeowners_tags() {
   init_codeowners
   (( CODEOWNERS_ENABLED == 1 )) || return 0
 
-  local events_len idx event_type has_existing source_path owners_json tmp_payload
-  # Skip gracefully on malformed payload shapes; uploader remains best-effort.
-  events_len=$(jq '.events | if type=="array" then length else 0 end' "$payload_file" 2>/dev/null || echo 0)
-  if ! [[ "$events_len" =~ ^[0-9]+$ ]]; then
+  local event_rows unique_sources owners_by_source assignments stats tmp_payload
+  event_rows=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_events.XXXXXX" 2>/dev/null || true)
+  unique_sources=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_sources.XXXXXX" 2>/dev/null || true)
+  owners_by_source=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_owners.XXXXXX" 2>/dev/null || true)
+  assignments=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_assignments.XXXXXX" 2>/dev/null || true)
+  stats=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_stats.XXXXXX" 2>/dev/null || true)
+  if [[ -z "$event_rows" || -z "$unique_sources" || -z "$owners_by_source" || -z "$assignments" || -z "$stats" ]]; then
+    [[ -n "$event_rows" ]] && rm -f "$event_rows" 2>/dev/null || true
+    [[ -n "$unique_sources" ]] && rm -f "$unique_sources" 2>/dev/null || true
+    [[ -n "$owners_by_source" ]] && rm -f "$owners_by_source" 2>/dev/null || true
+    [[ -n "$assignments" ]] && rm -f "$assignments" 2>/dev/null || true
+    [[ -n "$stats" ]] && rm -f "$stats" 2>/dev/null || true
+    ((++CO_EVENTS_SKIPPED_ERRORS))
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip internal error creating batch files"
     return 0
   fi
 
-  for ((idx = 0; idx < events_len; idx++)); do
-    event_type=$(jq -r --argjson idx "$idx" '.events[$idx].type // ""' "$payload_file" 2>/dev/null || true)
+  # Extract the relevant event state once. URI encoding keeps tabs and newlines
+  # in source paths from interfering with the tab-separated batch format.
+  if ! jq -r '
+    def source_path:
+      (.content.meta["test.source.file"]
+        // .content.meta["test.source.path"]
+        // .content.meta["source.file"]
+        // .content.meta["source.path"]
+        // .content.source.file
+        // .content.source.path
+        // "")
+      | tostring;
+    .events
+    | if type == "array" then to_entries[] else empty end
+    | .key as $idx
+    | .value as $event
     # CODEOWNERS remains scoped to non-span lifecycle/test events. Span-form Go
     # events still receive context and Bazel tags before this CODEOWNERS pass.
-    [[ "$event_type" == "span" ]] && continue
-    ((++CO_EVENTS_SCANNED))
+    | select(($event.type // "") != "span")
+    | if (($event.content.meta | type) == "object" and ($event.content.meta | has("test.codeowners"))) then
+        [$idx, "existing"]
+      else
+        ($event | source_path) as $source
+        | if $source == "" then
+            [$idx, "missing"]
+          else
+            [$idx, "source", ($source | @uri)]
+          end
+      end
+    | @tsv
+  ' "$payload_file" > "$event_rows" 2>/dev/null; then
+    rm -f "$event_rows" "$unique_sources" "$owners_by_source" "$assignments" "$stats" 2>/dev/null || true
+    return 0
+  fi
 
-    has_existing=$(jq -r --argjson idx "$idx" 'if (.events[$idx].content.meta | type) == "object" and (.events[$idx].content.meta | has("test.codeowners")) then "1" else "0" end' "$payload_file" 2>/dev/null || echo "0")
-    if [[ "$has_existing" == "1" ]]; then
-      ((++CO_EVENTS_SKIPPED_EXISTING))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip existing tag at event[$idx]"
-      continue
-    fi
-
-    source_path=$(jq -r --argjson idx "$idx" '.events[$idx].content.meta["test.source.file"] // .events[$idx].content.meta["test.source.path"] // .events[$idx].content.meta["source.file"] // .events[$idx].content.meta["source.path"] // .events[$idx].content.source.file // .events[$idx].content.source.path // ""' "$payload_file" 2>/dev/null || true)
-    if [[ -z "$source_path" ]]; then
-      ((++CO_EVENTS_SKIPPED_MISSING_SOURCE))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip missing source at event[$idx]"
-      continue
-    fi
-
+  awk -F '\t' '$2 == "source" { print $3 }' "$event_rows" | LC_ALL=C sort -u > "$unique_sources"
+  local encoded_source source_path owners_json
+  while IFS= read -r encoded_source; do
+    [[ -n "$encoded_source" ]] || continue
+    source_path=$(decode_percent_path "$encoded_source")
     owners_json=$(resolve_codeowners_json_for_source "$source_path")
-    if [[ -z "$owners_json" ]]; then
-      ((++CO_EVENTS_SKIPPED_UNMATCHED))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip unmatched source '$source_path' at event[$idx]"
-      continue
-    fi
+    printf '%s\t%s\n' "$encoded_source" "$owners_json" >> "$owners_by_source"
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: resolved source '$source_path' owners='${owners_json:-<none>}'"
+  done < "$unique_sources"
 
+  # Join all events to the per-source ownership cache in one process. This
+  # avoids both a jq invocation and a linear Bash cache scan per event.
+  if ! awk -F '\t' \
+    -v owners_file="$owners_by_source" \
+    -v assignments_file="$assignments" \
+    -v stats_file="$stats" '
+      FILENAME == owners_file {
+        owners[$1] = $2
+        next
+      }
+      {
+        scanned++
+        if ($2 == "existing") {
+          existing++
+        } else if ($2 == "missing") {
+          missing++
+        } else if ($2 == "source" && owners[$3] != "") {
+          print $1 "\t" owners[$3] > assignments_file
+          enriched++
+        } else {
+          unmatched++
+        }
+      }
+      END {
+        print scanned + 0 "\t" enriched + 0 "\t" existing + 0 "\t" missing + 0 "\t" unmatched + 0 > stats_file
+      }
+    ' "$owners_by_source" "$event_rows"; then
+    rm -f "$event_rows" "$unique_sources" "$owners_by_source" "$assignments" "$stats" 2>/dev/null || true
+    ((++CO_EVENTS_SKIPPED_ERRORS))
+    [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip internal error joining batch assignments"
+    return 0
+  fi
+
+  local batch_scanned pending_enriched batch_existing batch_missing batch_unmatched
+  IFS=$'\t' read -r batch_scanned pending_enriched batch_existing batch_missing batch_unmatched < "$stats"
+  CO_EVENTS_SCANNED=$((CO_EVENTS_SCANNED + batch_scanned))
+  CO_EVENTS_SKIPPED_EXISTING=$((CO_EVENTS_SKIPPED_EXISTING + batch_existing))
+  CO_EVENTS_SKIPPED_MISSING_SOURCE=$((CO_EVENTS_SKIPPED_MISSING_SOURCE + batch_missing))
+  CO_EVENTS_SKIPPED_UNMATCHED=$((CO_EVENTS_SKIPPED_UNMATCHED + batch_unmatched))
+
+  if (( pending_enriched > 0 )); then
     tmp_payload=$(mktemp "$TMP_PAYLOAD_DIR/codeowners_payload.XXXXXX" 2>/dev/null || true)
-    if [[ -z "$tmp_payload" ]]; then
-      ((++CO_EVENTS_SKIPPED_ERRORS))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip internal error creating temp payload at event[$idx]"
-      continue
-    fi
-    if jq --arg owners "$owners_json" --argjson idx "$idx" '
-      .events[$idx].content = (.events[$idx].content // {})
-      | .events[$idx].content.meta = ((.events[$idx].content.meta // {}) | .["test.codeowners"] = $owners)
+    if [[ -n "$tmp_payload" ]] && jq --rawfile assignments "$assignments" '
+      ($assignments
+        | split("\n")
+        | map(select(length > 0) | split("\t") | {(.[0]): .[1]})
+        | add // {}) as $owners_by_index
+      | reduce ($owners_by_index | to_entries[]) as $entry (.;
+          ($entry.key | tonumber) as $idx
+          | .events[$idx].content = (.events[$idx].content // {})
+          | .events[$idx].content.meta = ((.events[$idx].content.meta // {}) | .["test.codeowners"] = $entry.value)
+        )
     ' "$payload_file" > "$tmp_payload"; then
-      # Atomic replacement prevents partially-written payload files.
+      # One atomic replacement avoids rewriting the full payload per event.
       mv "$tmp_payload" "$payload_file"
-      ((++CO_EVENTS_ENRICHED))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: assigned owners '$owners_json' at event[$idx]"
+      CO_EVENTS_ENRICHED=$((CO_EVENTS_ENRICHED + pending_enriched))
     else
-      rm -f "$tmp_payload" 2>/dev/null || true
-      ((++CO_EVENTS_SKIPPED_ERRORS))
-      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip jq update failure at event[$idx]"
+      [[ -n "$tmp_payload" ]] && rm -f "$tmp_payload" 2>/dev/null || true
+      CO_EVENTS_SKIPPED_ERRORS=$((CO_EVENTS_SKIPPED_ERRORS + pending_enriched))
+      [[ "$DEBUG" == "1" ]] && dbg "codeowners: skip batch jq update failure for $pending_enriched event(s)"
     fi
-  done
+  fi
+
+  rm -f "$event_rows" "$unique_sources" "$owners_by_source" "$assignments" "$stats" 2>/dev/null || true
 
   if [[ "$DEBUG" == "1" ]]; then
     dbg "codeowners: scanned=$CO_EVENTS_SCANNED enriched=$CO_EVENTS_ENRICHED skipped_existing=$CO_EVENTS_SKIPPED_EXISTING skipped_missing_source=$CO_EVENTS_SKIPPED_MISSING_SOURCE skipped_unmatched=$CO_EVENTS_SKIPPED_UNMATCHED skipped_errors=$CO_EVENTS_SKIPPED_ERRORS"
@@ -2911,6 +3212,7 @@ prepare_expected_targets() {
   fi
 
   if [[ -z "$EXPECTED_TARGETS_FILE_PATH" && -z "$EXPECTED_TARGETS_FILE_RLOC" ]]; then
+    apply_runtime_expected_targets
     if [[ -s "$EXPECTED_TARGETS_RESOLVED_FILE" ]]; then
       EXPECTED_TARGETS_CONFIGURED=1
     fi
@@ -2951,6 +3253,21 @@ prepare_expected_targets() {
   fi
   cp "$dynamic_targets" "$EXPECTED_TARGETS_RESOLVED_FILE"
   EXPECTED_TARGETS_CONFIGURED=1
+  apply_runtime_expected_targets
+}
+
+apply_runtime_expected_targets() {
+  local runtime_targets
+  (( ${#RUNTIME_EXPECTED_TARGETS[@]} > 0 )) || return 0
+  runtime_targets="$TMP_PAYLOAD_DIR/expected_targets_runtime.txt"
+  printf '%s\n' "${RUNTIME_EXPECTED_TARGETS[@]}" | LC_ALL=C sort >"$runtime_targets"
+  if [[ -s "$EXPECTED_TARGETS_RESOLVED_FILE" ]] &&
+      ! cmp -s "$EXPECTED_TARGETS_RESOLVED_FILE" "$runtime_targets"; then
+    log "error: configured and runtime expected targets contain different target sets"
+    exit 2
+  fi
+  cp "$runtime_targets" "$EXPECTED_TARGETS_RESOLVED_FILE"
+  EXPECTED_TARGETS_CONFIGURED=1
 }
 
 filter_bep_rows_to_expected_targets() {
@@ -2977,7 +3294,24 @@ filter_bep_freshness_to_expected_targets() {
   filter_bep_rows_to_expected_targets "$FRESHNESS_CACHED_OUTPUTS_FILE"
   filter_bep_rows_to_expected_targets "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
   filter_bep_rows_to_expected_targets "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
+  filter_bep_rows_to_expected_targets "$FRESHNESS_SKIPPED_TARGETS_FILE"
+  filter_bep_rows_to_expected_targets "$FRESHNESS_TEST_RESULT_LABELS_FILE"
   cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
+}
+
+validate_bep_freshness_ambiguity() {
+  local conflicting_output conflicting_target
+  conflicting_output="$(comm -12 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_CACHED_OUTPUTS_FILE" | head -n 1 || true)"
+  if [[ -n "$conflicting_output" ]]; then
+    log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $conflicting_output. Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  fi
+
+  conflicting_target="$(comm -12 "$FRESHNESS_SKIPPED_TARGETS_FILE" "$FRESHNESS_TEST_RESULT_LABELS_FILE" | head -n 1 || true)"
+  if [[ -n "$conflicting_target" ]]; then
+    log "error: BEP freshness is ambiguous: the same target is reported as both platform-skipped and executed: $conflicting_target. Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
+    exit 2
+  fi
 }
 
 prepare_bep_eligibility() {
@@ -2993,32 +3327,39 @@ prepare_bep_eligibility() {
   FRESHNESS_ELIGIBLE_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_eligible_outputs.txt"
   FRESHNESS_CACHED_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_cached_outputs.txt"
   FRESHNESS_SKIPPED_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_skipped_outputs.txt"
+  FRESHNESS_SKIPPED_TARGETS_FILE="$TMP_PAYLOAD_DIR/freshness_skipped_targets.txt"
+  FRESHNESS_TEST_RESULT_LABELS_FILE="$TMP_PAYLOAD_DIR/freshness_test_result_labels.txt"
   FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE="$TMP_PAYLOAD_DIR/freshness_remote_only_outputs.txt"
   FRESHNESS_MISSING_OUTPUT_LABELS_FILE="$TMP_PAYLOAD_DIR/freshness_missing_output_labels.txt"
   : >"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
   : >"$FRESHNESS_CACHED_OUTPUTS_FILE"
   : >"$FRESHNESS_SKIPPED_OUTPUTS_FILE"
+  : >"$FRESHNESS_SKIPPED_TARGETS_FILE"
+  : >"$FRESHNESS_TEST_RESULT_LABELS_FILE"
   : >"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
   : >"$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
 
-  local bep_json resolved_bep tmp_records tmp_remote tmp_missing
+  local bep_json resolved_bep tmp_records tmp_remote tmp_missing tmp_event_labels bep_valid
   for bep_json in "${BEP_JSON_FILES[@]}"; do
     resolved_bep="$(resolve_runtime_file_path "$bep_json")"
     if [[ -z "$resolved_bep" || ! -f "$resolved_bep" ]]; then
       if optional_bep_unavailable "BEP JSON not found: $bep_json"; then
         return 0
       fi
-      log "error: BEP JSON not found: $bep_json"
-      exit 2
+      log "error: BEP JSON not found: $bep_json; continuing with other BEP files"
+      ((++UPLOAD_FAILURES))
+      continue
     fi
     tmp_records="$(mktemp "$TMP_PAYLOAD_DIR/bep_records.XXXXXX" 2>/dev/null || true)"
     tmp_remote="$(mktemp "$TMP_PAYLOAD_DIR/bep_remote.XXXXXX" 2>/dev/null || true)"
     tmp_missing="$(mktemp "$TMP_PAYLOAD_DIR/bep_missing.XXXXXX" 2>/dev/null || true)"
-    if [[ -z "$tmp_records" || -z "$tmp_remote" || -z "$tmp_missing" ]]; then
+    tmp_event_labels="$(mktemp "$TMP_PAYLOAD_DIR/bep_event_labels.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$tmp_records" || -z "$tmp_remote" || -z "$tmp_missing" || -z "$tmp_event_labels" ]]; then
       log "error: failed to create BEP freshness temp files"
       exit 2
     fi
 
+	    bep_valid=1
 	    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
 	      def field($obj; $camel; $snake):
 	        ($obj[$camel] // $obj[$snake]);
@@ -3065,13 +3406,11 @@ prepare_bep_eligibility() {
       if optional_bep_unavailable "failed to parse BEP JSON: $resolved_bep"; then
         return 0
       fi
-      log "error: failed to parse BEP JSON: $resolved_bep"
-      exit 2
+      log "error: failed to parse BEP JSON: $resolved_bep; continuing with other BEP files"
+      bep_valid=0
     fi
-    awk -F '\t' '$3 == "eligible" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
-    awk -F '\t' '$3 == "cached" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_CACHED_OUTPUTS_FILE"
 
-    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
+    if (( bep_valid == 1 )) && ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
       def field($obj; $camel; $snake):
         ($obj[$camel] // $obj[$snake]);
 	      def candidates($output):
@@ -3120,12 +3459,11 @@ prepare_bep_eligibility() {
       if optional_bep_unavailable "failed to parse BEP remote-only outputs: $resolved_bep"; then
         return 0
       fi
-      log "error: failed to parse BEP remote-only outputs: $resolved_bep"
-      exit 2
+      log "error: failed to parse BEP remote-only outputs: $resolved_bep; continuing with other BEP files"
+      bep_valid=0
     fi
-    cat "$tmp_remote" >>"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
 
-    if ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
+    if (( bep_valid == 1 )) && ! jq -r "$bep_test_output_key_jq $is_remote_only_bep_reference_jq"'
 	      def field($obj; $camel; $snake):
 	        ($obj[$camel] // $obj[$snake]);
 	      def candidates($output):
@@ -3171,31 +3509,63 @@ prepare_bep_eligibility() {
       if optional_bep_unavailable "failed to parse BEP missing output mappings: $resolved_bep"; then
         return 0
       fi
-      log "error: failed to parse BEP missing output mappings: $resolved_bep"
-      exit 2
+      log "error: failed to parse BEP missing output mappings: $resolved_bep; continuing with other BEP files"
+      bep_valid=0
     fi
+    if (( bep_valid == 0 )); then
+      ((++UPLOAD_FAILURES))
+      continue
+    fi
+    # A TestResult proves execution even when a cache hit omits test.outputs.
+    if ! jq -r '
+      (
+        select(.id.testResult? != null or .id.test_result? != null)
+        | (.id.testResult // .id.test_result // {})
+        | (.label // empty)
+        | select(. != "")
+        | "test_result\t\(.)"
+      ),
+      (
+        select(.id.targetCompleted? != null or .id.target_completed? != null)
+        | (.id.targetCompleted // .id.target_completed // {}) as $id
+        | select((.aborted.reason // "") == "SKIPPED")
+        | ($id.label // empty)
+        | select(. != "")
+        | "skipped\t\(.)"
+      )
+    ' "$resolved_bep" >"$tmp_event_labels"; then
+      if optional_bep_unavailable "failed to parse BEP event labels: $resolved_bep"; then
+        return 0
+      fi
+      log "error: failed to parse BEP event labels: $resolved_bep; continuing with other BEP files"
+      ((++UPLOAD_FAILURES))
+      continue
+    fi
+    awk -F '\t' '$3 == "eligible" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
+    awk -F '\t' '$3 == "cached" { print $1 "\t" $2 }' "$tmp_records" >>"$FRESHNESS_CACHED_OUTPUTS_FILE"
+    cat "$tmp_remote" >>"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
     cat "$tmp_missing" >>"$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
+    awk -F '\t' '$1 == "skipped" { print $2 }' "$tmp_event_labels" >>"$FRESHNESS_SKIPPED_TARGETS_FILE"
+    awk -F '\t' '$1 == "test_result" { print $2 }' "$tmp_event_labels" >>"$FRESHNESS_TEST_RESULT_LABELS_FILE"
   done
 
 	  LC_ALL=C sort -u -o "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE"
 	  LC_ALL=C sort -u -o "$FRESHNESS_CACHED_OUTPUTS_FILE" "$FRESHNESS_CACHED_OUTPUTS_FILE"
 	  LC_ALL=C sort -u -o "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
 	  LC_ALL=C sort -u -o "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE"
-	  local conflicting_output
-	  conflicting_output="$(comm -12 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_CACHED_OUTPUTS_FILE" | head -n 1 || true)"
-	  if [[ -n "$conflicting_output" ]]; then
-	    log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $conflicting_output. Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
-	    exit 2
-	  fi
-	  cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
+	  LC_ALL=C sort -u -o "$FRESHNESS_SKIPPED_TARGETS_FILE" "$FRESHNESS_SKIPPED_TARGETS_FILE"
+	  LC_ALL=C sort -u -o "$FRESHNESS_TEST_RESULT_LABELS_FILE" "$FRESHNESS_TEST_RESULT_LABELS_FILE"
+  validate_bep_freshness_ambiguity
+  cut -f1 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | LC_ALL=C sort -u >"$FRESHNESS_ELIGIBLE_LABELS_FILE"
   filter_bep_freshness_to_expected_targets
 
   FRESHNESS_SELECTED_SOURCE="bep"
   FRESHNESS_ELIGIBILITY_ENABLED=1
-  local eligible_count remote_count
+  local eligible_count remote_count skipped_target_count
   eligible_count="$(wc -l <"$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" | tr -d ' ')"
   remote_count="$(wc -l <"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" | tr -d ' ')"
-  log "freshness filtering enabled: source=bep files=${#BEP_JSON_FILES[@]} eligible_outputs=$eligible_count remote_only_outputs=$remote_count"
+  skipped_target_count="$(wc -l <"$FRESHNESS_SKIPPED_TARGETS_FILE" | tr -d ' ')"
+  log "freshness filtering enabled: source=bep files=${#BEP_JSON_FILES[@]} eligible_outputs=$eligible_count remote_only_outputs=$remote_count skipped_targets=$skipped_target_count"
   if [[ "$FRESHNESS_MODE" == "optional" && "$REMOTE_ARTIFACTS" != "required" && "$remote_count" != "0" ]]; then
     local first_label first_artifact first_artifact_display
     first_label="$(awk -F '\t' 'NR == 1 { print $1 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
@@ -3226,21 +3596,14 @@ merge_staged_bep_freshness() {
       "$STAGED_REMOTE_CLEARANCES_FILE" "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" >"$filtered_remote"
     mv "$filtered_remote" "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE"
   fi
-  if [[ -s "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" && -s "$FRESHNESS_CACHED_OUTPUTS_FILE" ]]; then
-    local conflicting_output
-    conflicting_output="$(comm -12 "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" "$FRESHNESS_CACHED_OUTPUTS_FILE" | head -n 1 || true)"
-    if [[ -n "$conflicting_output" ]]; then
-      log "error: BEP freshness is ambiguous: the same test output is reported as both fresh and cached: $conflicting_output. Use one BEP file per Bazel test invocation and do not pass overlapping stale BEP files."
-      exit 2
-    fi
-  fi
+  validate_bep_freshness_ambiguity
 }
 
 validate_expected_target_coverage() {
   (( EXPECTED_TARGETS_CONFIGURED == 1 )) || return 0
   [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" ]] || return 0
 
-  local label
+  local label missing_count=0
   while IFS= read -r label; do
     [[ -n "$label" ]] || continue
     if grep -Fq "$label"$'\t' "$FRESHNESS_ELIGIBLE_OUTPUTS_FILE" 2>/dev/null ||
@@ -3250,16 +3613,27 @@ validate_expected_target_coverage() {
     if grep -Fq "$label"$'\t' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" 2>/dev/null; then
       continue
     fi
-    if grep -Fxq "$label" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" 2>/dev/null; then
-      log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference)"
-    else
-      log "error: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target)"
+    if grep -Fxq "$label" "$FRESHNESS_SKIPPED_TARGETS_FILE" 2>/dev/null; then
+      continue
     fi
-    exit 2
+    if grep -Fxq "$label" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" 2>/dev/null; then
+      log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (the fresh TestResult did not contain a mappable test.outputs reference); continuing with other fresh outputs"
+    else
+      log "warning: expected target output is neither fresh nor exclusively cached in BEP: $label (no TestResult matched this target); continuing with other fresh outputs"
+    fi
+    ((++missing_count))
   done <"$EXPECTED_TARGETS_RESOLVED_FILE"
+  if (( missing_count > 0 )); then
+    log "warning: $missing_count expected target(s) produced no current uploadable output; available fresh payloads will still be processed"
+    UPLOAD_FAILURES=$((UPLOAD_FAILURES + missing_count))
+  fi
 }
 
 validate_bep_remote_only_outputs() {
+  if (( REMOTE_ONLY_OUTPUTS_VALIDATED == 1 )); then
+    return 0
+  fi
+  REMOTE_ONLY_OUTPUTS_VALIDATED=1
   if [[ "$FRESHNESS_SELECTED_SOURCE" != "bep" ]]; then
     return 0
   fi
@@ -3269,8 +3643,11 @@ validate_bep_remote_only_outputs() {
     first_artifact="$(awk -F '\t' 'NR == 1 { print $3 }' "$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE")"
     first_artifact_display="$(display_artifact_reference "$first_artifact")"
     if [[ "$FRESHNESS_MODE" == "required" || "$REMOTE_ARTIFACTS" == "required" ]]; then
-      log "error: BEP references remote-only test outputs for ${first_label:-<unknown>}, but local test.outputs was not found: ${first_artifact_display:-<unknown>}. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-      exit 2
+      local remote_count
+      remote_count="$(wc -l <"$FRESHNESS_REMOTE_ONLY_OUTPUTS_FILE" | tr -d ' ')"
+      log "error: BEP references remote-only test outputs for ${first_label:-<unknown>}, but local test.outputs was not found: ${first_artifact_display:-<unknown>}. Those outputs will be skipped while other fresh payloads are processed. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* or configure a BEP artifact fetcher. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+      UPLOAD_FAILURES=$((UPLOAD_FAILURES + remote_count))
+      return 0
     fi
     if [[ "$REMOTE_ARTIFACTS" == "download" ]]; then
       log "warning: BEP references remote-only test outputs for ${first_label:-<unknown>} and they were not materialized: ${first_artifact_display:-<unknown>}; skipping those outputs."
@@ -3490,6 +3867,12 @@ test_output_dir_is_freshness_eligible() {
     return 1
   fi
 
+  if [[ -n "$FRESHNESS_SKIPPED_TARGETS_FILE" ]] &&
+      grep -Fxq "$target_label" "$FRESHNESS_SKIPPED_TARGETS_FILE" 2>/dev/null; then
+    log_freshness_skip_once "$outputs_dir" "Bazel skipped platform-incompatible target $target_label"
+    return 1
+  fi
+
   local output_key
   output_key="$(test_output_dir_key "$outputs_dir")"
   if [[ -z "$output_key" ]]; then
@@ -3509,8 +3892,13 @@ test_output_dir_is_freshness_eligible() {
     log_freshness_skip_once "$outputs_dir" "BEP reported cached result for target $target_label output $output_key"
 	  elif [[ "$FRESHNESS_SELECTED_SOURCE" == "bep" && "$FRESHNESS_MODE" == "required" ]]; then
 	    if [[ -n "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" ]] && grep -Fxq "$target_label" "$FRESHNESS_MISSING_OUTPUT_LABELS_FILE" 2>/dev/null; then
-	      log "error: BEP required freshness cannot authorize $outputs_dir because the fresh TestResult for $target_label did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
-	      exit 2
+	      log_freshness_skip_once "$outputs_dir" "fresh BEP TestResult for $target_label did not contain a mappable test.outputs reference"
+	      if (( FRESHNESS_SKIP_WAS_EMITTED == 1 )); then
+	        log "warning: BEP required freshness skipped $outputs_dir because the fresh TestResult for $target_label did not contain a mappable test.outputs reference. Rerun with --remote_download_minimal --remote_download_regex=.*test[.]outputs.* and inspect the BEP testActionOutput entries. If the test run used --zip_undeclared_test_outputs, rerun the uploader with --artifact-source=bep."
+	        if (( EXPECTED_TARGETS_CONFIGURED == 0 )); then
+	          ((++UPLOAD_FAILURES))
+	        fi
+	      fi
 	    else
 	      log_freshness_skip_once "$outputs_dir" "no fresh BEP TestResult matched target $target_label output $output_key"
 	    fi
@@ -3651,7 +4039,7 @@ select_context_json_for_payload() {
     return 0
   fi
 
-  dbg "selected bundled context '$matched_context' for payload '$payload_file' via repo '$repo_key'"
+  dbg "selected bundled context for payload via repo '$repo_key'"
   echo "$matched_context"
 }
 
@@ -3692,7 +4080,7 @@ enrich_with_context() {
   local infile="$1"; local tmpfile="$2"
   local selected_ctx_file=""
   selected_ctx_file="$(select_context_json_for_payload "$infile")"
-  dbg "enrich_with_context: infile='$infile' outfile='$tmpfile' ctx='${selected_ctx_file:-<none>}' primary='${PRIMARY_CONTEXT_JSON:-<none>}' jq=$JQ_AVAILABLE"
+  dbg "enrich_with_context: jq=$JQ_AVAILABLE"
   if (( JQ_AVAILABLE == 0 )); then
     # No jq means no structural merge; forward original payload unchanged.
     cp "$infile" "$tmpfile"
@@ -3896,6 +4284,7 @@ cleanup_file() {
         # Some runfiles can be read-only; best-effort cleanup keeps uploads resilient.
         if ! rm -f "$file" 2>/dev/null; then
             chmod u+w "$file" 2>/dev/null || true
+            chmod u+w "$(dirname "$file")" 2>/dev/null || true
             rm -f "$file" 2>/dev/null || true
         fi
     else
@@ -4087,6 +4476,13 @@ resolve_telemetry_facts_sources() {
             printf '%s\n' "$canonical" >>"$tmp_sources"
         fi
     fi
+
+    for resolved in "${RUNTIME_TELEMETRY_FACTS_FILES[@]+"${RUNTIME_TELEMETRY_FACTS_FILES[@]}"}"; do
+        canonical=$(canonicalize_existing_file "$resolved")
+        if [[ -n "$canonical" ]]; then
+            printf '%s\n' "$canonical" >>"$tmp_sources"
+        fi
+    done
 
     if [[ ! -s "$tmp_sources" ]]; then
         rm -f "$tmp_sources" 2>/dev/null || true
@@ -4635,8 +5031,8 @@ PY
     return 0
 }
 
-# Track upload failures globally
-UPLOAD_FAILURES=0
+# Track per-payload upload report counters. UPLOAD_FAILURES is initialized
+# before BEP preparation so partial-input failures remain part of the result.
 REPORT_TESTS_PROCESSED=0
 REPORT_TESTS_FAILED=0
 REPORT_TESTS_SKIPPED=0
@@ -4682,7 +5078,11 @@ validate_enriched_payload_tags() {
         log "error: enriched test payload for '$source_file' is missing expected tag(s): ${missing[*]}"
         return 1
     fi
-    log "dry-run validated enriched test payload: $source_file"
+    if (( DRY_RUN == 1 )); then
+        dbg "dry-run validated enriched test payload: $source_file"
+    else
+        dbg "validated enriched test payload: $source_file"
+    fi
     return 0
 }
 
@@ -4704,54 +5104,203 @@ dry_run_single_test() {
         rm -f "$body" 2>/dev/null || true
         return 1
     fi
-    rm -f "$body" 2>/dev/null || true
+    if ! prepare_test_payload_parts "$body" "$file"; then
+        cleanup_prepared_test_payloads
+        return 1
+    fi
+    if (( ${#PREPARED_TEST_PAYLOADS[@]} > 1 )); then
+        log "dry-run would split test payload '$file' into ${#PREPARED_TEST_PAYLOADS[@]} parts"
+    fi
+    cleanup_prepared_test_payloads
     return 0
 }
 
-# Handle upload single test behavior.
-upload_single_test() {
-    local file="$1"
-    local body resp payload_file gz http rc
-    # Use a temp file to avoid collisions when multiple uploads run in parallel.
-    body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
-    if [[ -z "$body" ]]; then
-        dbg "upload_single_test: failed to create temp file"
+PREPARED_TEST_PAYLOADS=()
+PREPARED_TEST_TEMP_FILES=()
+
+test_payload_size_bytes() {
+    wc -c <"$1" | tr -d '[:space:]'
+}
+
+track_prepared_test_temp_file() {
+    PREPARED_TEST_TEMP_FILES+=("$1")
+}
+
+cleanup_prepared_test_payloads() {
+    local path
+    for path in "${PREPARED_TEST_TEMP_FILES[@]}"; do
+        [[ -n "$path" ]] && rm -f "$path" 2>/dev/null || true
+    done
+    PREPARED_TEST_PAYLOADS=()
+    PREPARED_TEST_TEMP_FILES=()
+}
+
+split_test_payload_part() {
+    local payload="$1"
+    local source_file="$2"
+    local size event_count midpoint left right
+    size="$(test_payload_size_bytes "$payload")"
+    if (( size <= TEST_PAYLOAD_SPLIT_TARGET_BYTES )); then
+        PREPARED_TEST_PAYLOADS+=("$payload")
+        return 0
+    fi
+
+    if ! event_count="$(jq -r '.events | if type == "array" then length else -1 end' "$payload" 2>/dev/null)" ||
+       [[ ! "$event_count" =~ ^[0-9]+$ ]] || (( event_count < 1 )); then
+        log "error: oversized test payload cannot be split because its events array is invalid: $source_file"
         return 1
     fi
-    enrich_with_context "$file" "$body"
-    validate_payload "$body"
-    build_common_headers "$body"
-    dbg "upload_single_test: posting '$file' (body '$body')"
-    if [[ "$DEBUG" == "1" ]]; then
-        local gzip_note=""
-        if [[ "$GZIP_PAYLOADS" == "1" ]]; then
-            gzip_note="; Content-Encoding=gzip"
+    if (( event_count == 1 )); then
+        if (( size <= TEST_PAYLOAD_MAX_BYTES )); then
+            log "warning: single-event test payload exceeds the split target but remains within the intake limit: source='$source_file' uncompressed_bytes=$size"
+            PREPARED_TEST_PAYLOADS+=("$payload")
+            return 0
         fi
-        echo "[dd-uploader][dbg] payload content (enriched) for '$file':" >&2
-        cat "$body" >&2
-        echo "" >&2
-        log_start_time_stats "$body"
-        dbg "headers: Content-Type=application/json${gzip_note}"
+        log "error: single_event_too_large: source='$source_file' uncompressed_bytes=$size max_bytes=$TEST_PAYLOAD_MAX_BYTES"
+        return 1
     fi
+
+    midpoint=$((event_count / 2))
+    left="$(mktemp "$TMP_PAYLOAD_DIR/test_payload_part.XXXXXX" 2>/dev/null || true)"
+    right="$(mktemp "$TMP_PAYLOAD_DIR/test_payload_part.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$left" || -z "$right" ]]; then
+        [[ -n "$left" ]] && rm -f "$left" 2>/dev/null || true
+        [[ -n "$right" ]] && rm -f "$right" 2>/dev/null || true
+        log "error: failed to create temporary files while splitting test payload: $source_file"
+        return 1
+    fi
+    track_prepared_test_temp_file "$left"
+    track_prepared_test_temp_file "$right"
+    if ! jq -c --argjson midpoint "$midpoint" '.events = .events[0:$midpoint]' "$payload" >"$left" ||
+       ! jq -c --argjson midpoint "$midpoint" '.events = .events[$midpoint:]' "$payload" >"$right"; then
+        log "error: failed to split oversized test payload: $source_file"
+        return 1
+    fi
+    split_test_payload_part "$left" "$source_file" && split_test_payload_part "$right" "$source_file"
+}
+
+prepare_test_payload_parts() {
+    local body="$1"
+    local source_file="$2"
+    local size compact
+    PREPARED_TEST_PAYLOADS=()
+    PREPARED_TEST_TEMP_FILES=("$body")
+    size="$(test_payload_size_bytes "$body")"
+    if (( size <= TEST_PAYLOAD_SPLIT_TARGET_BYTES )); then
+        PREPARED_TEST_PAYLOADS=("$body")
+        return 0
+    fi
+    if (( JQ_AVAILABLE == 0 )); then
+        if (( size <= TEST_PAYLOAD_MAX_BYTES )); then
+            log "warning: test payload exceeds the split target but jq is unavailable; sending within the intake limit: source='$source_file' uncompressed_bytes=$size"
+            PREPARED_TEST_PAYLOADS=("$body")
+            return 0
+        fi
+        log "error: oversized test payload requires jq for event splitting: source='$source_file' uncompressed_bytes=$size"
+        return 1
+    fi
+
+    compact="$(mktemp "$TMP_PAYLOAD_DIR/test_payload_compact.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$compact" ]]; then
+        log "error: failed to create temporary file while preparing test payload: $source_file"
+        return 1
+    fi
+    track_prepared_test_temp_file "$compact"
+    if ! jq -c '.' "$body" >"$compact"; then
+        if (( size <= TEST_PAYLOAD_MAX_BYTES )); then
+            log "warning: oversized test payload could not be compacted; sending within the intake limit: source='$source_file' uncompressed_bytes=$size"
+            PREPARED_TEST_PAYLOADS=("$body")
+            return 0
+        fi
+        log "error: oversized test payload is not valid JSON and cannot be split: $source_file"
+        return 1
+    fi
+    if ! split_test_payload_part "$compact" "$source_file"; then
+        return 1
+    fi
+    log "split test payload: source='$source_file' uncompressed_bytes=$size parts=${#PREPARED_TEST_PAYLOADS[@]} target_bytes=$TEST_PAYLOAD_SPLIT_TARGET_BYTES"
+    return 0
+}
+
+persist_failed_test_payload_parts() {
+    local source_file="$1"
+    shift
+    local retry_file source_dir failed_count=$#
+    if (( failed_count == 0 )) || [[ "$KEEP_PAYLOADS" == "1" ]]; then
+        return 0
+    fi
+    retry_file="$(mktemp "${source_file}.retry.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$retry_file" ]]; then
+        source_dir="$(dirname "$source_file")"
+        chmod u+w "$source_dir" 2>/dev/null || true
+        retry_file="$(mktemp "${source_file}.retry.XXXXXX" 2>/dev/null || true)"
+        if [[ -z "$retry_file" ]]; then
+            log "warning: failed to create retry payload beside source; retaining the original payload: $source_file"
+            return 1
+        fi
+    fi
+    if (( failed_count == 1 )); then
+        if ! cp "$1" "$retry_file"; then
+            rm -f "$retry_file" 2>/dev/null || true
+            log "warning: failed to retain the rejected split payload part; retaining the original payload: $source_file"
+            return 1
+        fi
+    elif ! jq -cs '
+      .[0] as $first
+      | (reduce .[] as $part ([]; . + ($part.events // []))) as $events
+      | $first
+      | .events = $events
+    ' "$@" >"$retry_file"; then
+        rm -f "$retry_file" 2>/dev/null || true
+        log "warning: failed to combine rejected split payload parts; retaining the original payload: $source_file"
+        return 1
+    fi
+    if ! mv -f "$retry_file" "$source_file"; then
+        rm -f "$retry_file" 2>/dev/null || true
+        log "warning: failed to replace the source with rejected split payload parts; retaining the original payload: $source_file"
+        return 1
+    fi
+    log "retained $failed_count failed split payload part(s) for retry: $source_file"
+    return 0
+}
+
+bounded_upload_response() {
+    local response_file="$1"
+    head -c "$UPLOAD_RESPONSE_LOG_BYTES" "$response_file" 2>/dev/null | tr '\r\n' '  '
+}
+
+send_test_payload_part() {
+    local source_file="$1"
+    local body="$2"
+    local part_index="$3"
+    local part_count="$4"
+    local resp payload_file gz http rc uncompressed_bytes transmitted_bytes compressed_bytes encoding response_bytes response_text truncated
+    build_common_headers "$body"
+    uncompressed_bytes="$(test_payload_size_bytes "$body")"
 
     payload_file="$body"
     gz=""
+    compressed_bytes="none"
+    encoding="identity"
     if [[ "$GZIP_PAYLOADS" == "1" ]]; then
         # Compress enriched payload, but gracefully fall back to plain JSON if
         # gzip is unavailable/fails on the host.
         gz="$body.gz"
         if gzip -c "$body" > "$gz"; then
             payload_file="$gz"
+            compressed_bytes="$(test_payload_size_bytes "$gz")"
+            encoding="gzip"
         else
             log "warning: gzip failed; sending uncompressed payload"
             gz=""
         fi
     fi
+    transmitted_bytes="$(test_payload_size_bytes "$payload_file")"
 
     resp="$(mktemp "$TMP_PAYLOAD_DIR/test_resp.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$resp" ]]; then
-        dbg "upload_single_test: failed to create response temp file"
-        rm -f "$body" "$gz" 2>/dev/null || true
+        log "error: failed to create response temp file for test payload: $source_file"
+        rm -f "$gz" 2>/dev/null || true
         return 1
     fi
     local ce_hdr=()
@@ -4769,15 +5318,16 @@ upload_single_test() {
             dbg "header[content-encoding]: Content-Encoding: gzip"
         fi
     fi
+    REPORT_UPLOAD_ATTEMPTED=1
     if (( AGENTLESS == 1 )); then
-      if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+      if http=$(curl_agentless "${CURL_FAIL_FLAG[@]}" -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
         rc=$?
       fi
     else
-      if http=$(curl -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
+      if http=$(curl "${CURL_FAIL_FLAG[@]}" -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TEST_URL}" "${COMMON_HDRS[@]}" "${TEST_EVP[@]}" "${ce_hdr[@]+${ce_hdr[@]}}" -H "Content-Type: application/json" --data-binary @"${payload_file}" -o "$resp" -w "%{http_code}"); then
         rc=0
       else
@@ -4785,18 +5335,69 @@ upload_single_test() {
       fi
     fi
     http="${http:-000}"
-    if [[ "$DEBUG" == "1" || $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
-        dbg "upload_single_test: HTTP $http (rc=$rc)"
-        if [[ -s "$resp" ]]; then
-            dbg "upload_single_test response: $(head -c 2000 "$resp")"
-        fi
+    if [[ "$DEBUG" == "1" ]]; then
+        dbg "upload_single_test: HTTP $http (rc=$rc; part=$part_index/$part_count; uncompressed_bytes=$uncompressed_bytes; transmitted_bytes=$transmitted_bytes; encoding=$encoding)"
     fi
-    rm -f "$resp" "$body" "$gz" 2>/dev/null || true
+    if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        REPORT_UPLOAD_FAILED=1
+        response_bytes="$(test_payload_size_bytes "$resp")"
+        response_text="<empty>"
+        truncated="false"
+        if [[ -s "$resp" ]]; then
+            response_text="$(bounded_upload_response "$resp")"
+            (( response_bytes > UPLOAD_RESPONSE_LOG_BYTES )) && truncated="true"
+        fi
+        log "upload failed: source='$source_file' part=$part_index/$part_count http=$http curl_rc=$rc encoding=$encoding uncompressed_bytes=$uncompressed_bytes compressed_bytes=$compressed_bytes transmitted_bytes=$transmitted_bytes response_bytes=$response_bytes response_truncated=$truncated response_body='$response_text'"
+    fi
+    rm -f "$resp" "$gz" 2>/dev/null || true
     # Cleanup happens before return to avoid temp-file buildup on retries/runs.
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
         return 1
     fi
     return 0
+}
+
+# Enrich one source payload, split it when necessary, and send every prepared
+# part independently so one failed part does not suppress the remaining data.
+upload_single_test() {
+    local file="$1"
+    local body part part_index=0 part_count failed=0
+    local failed_parts=()
+    body="$(mktemp "$TMP_PAYLOAD_DIR/test_payload.XXXXXX" 2>/dev/null || true)"
+    if [[ -z "$body" ]]; then
+        log "error: failed to create temporary test payload: $file"
+        return 1
+    fi
+    enrich_with_context "$file" "$body"
+    validate_payload "$body"
+    dbg "upload_single_test: posting '$file' (body '$body')"
+    if [[ "$DEBUG" == "1" ]]; then
+        echo "[dd-uploader][dbg] payload content (enriched) for '$file':" >&2
+        cat "$body" >&2
+        echo "" >&2
+        log_start_time_stats "$body"
+    fi
+    if ! validate_enriched_payload_tags "$body" "$file"; then
+        rm -f "$body" 2>/dev/null || true
+        return 1
+    fi
+    if ! prepare_test_payload_parts "$body" "$file"; then
+        cleanup_prepared_test_payloads
+        return 1
+    fi
+    part_count=${#PREPARED_TEST_PAYLOADS[@]}
+    for part in "${PREPARED_TEST_PAYLOADS[@]}"; do
+        ((++part_index))
+        if ! send_test_payload_part "$file" "$part" "$part_index" "$part_count"; then
+            failed=1
+            failed_parts+=("$part")
+        fi
+    done
+    if (( failed == 1 && ${#failed_parts[@]} < part_count )); then
+        persist_failed_test_payload_parts "$file" "${failed_parts[@]}" || true
+    fi
+    cleanup_prepared_test_payloads
+    (( failed == 0 ))
 }
 
 # Handle upload single coverage behavior.
@@ -4830,6 +5431,7 @@ upload_single_coverage() {
         fi
         dbg "headers: multipart/form-data (event + coveragex=${coverage_content_type})"
     fi
+    REPORT_UPLOAD_ATTEMPTED=1
     if (( AGENTLESS == 1 )); then
       if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${COV_URL}" "${COMMON_HDRS[@]}" \
@@ -4858,6 +5460,7 @@ upload_single_coverage() {
     fi
     rm -f "$resp" "$eventjson" 2>/dev/null || true
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        REPORT_UPLOAD_FAILED=1
         return 1
     fi
     return 0
@@ -4904,6 +5507,7 @@ upload_single_telemetry() {
         rm -f "$meta_file" 2>/dev/null || true
         return 1
     fi
+    REPORT_UPLOAD_ATTEMPTED=1
     if (( AGENTLESS == 1 )); then
       if http=$(curl_agentless -f -sS --connect-timeout 10 --max-time 60 "${CURL_RETRY_FLAGS[@]}" \
         -X POST "${TELEMETRY_URL}" "${TELEMETRY_HDRS[@]}" -H "Content-Type: application/json" --data-binary @"${upload_body}" -o "$resp" -w "%{http_code}"); then
@@ -4928,6 +5532,7 @@ upload_single_telemetry() {
     fi
     rm -f "$resp" "$meta_file" "$provider_body" 2>/dev/null || true
     if [[ $rc -ne 0 || "$http" -lt 200 || "$http" -ge 300 ]]; then
+        REPORT_UPLOAD_FAILED=1
         return 1
     fi
     return 0
@@ -4984,7 +5589,6 @@ upload_all_tests() {
                 fi
                 continue
             fi
-            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_test "$f"; then
                 log "uploaded test payload: $f"
                 mark_fresh_output_handled "$outputs_dir"
@@ -5043,7 +5647,6 @@ upload_all_coverage() {
                 ((++REPORT_COVERAGE_PROCESSED))
                 continue
             fi
-            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_coverage "$f"; then
                 log "uploaded coverage payload: $f"
                 mark_fresh_output_handled "$outputs_dir"
@@ -5104,7 +5707,6 @@ upload_all_telemetry() {
                 ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
-            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$f" "${replacement_body:-$f}"; then
                 log "uploaded telemetry payload: $f"
                 mark_fresh_output_handled "$outputs_dir"
@@ -5131,7 +5733,6 @@ upload_all_telemetry() {
                 ((++REPORT_TELEMETRY_PROCESSED))
                 continue
             fi
-            REPORT_UPLOAD_ATTEMPTED=1
             if upload_single_telemetry "$anchor_path" "$synthetic_body"; then
                 log "uploaded telemetry payload: $anchor_path"
                 ((++total))

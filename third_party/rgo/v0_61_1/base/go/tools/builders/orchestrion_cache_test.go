@@ -84,6 +84,64 @@ func TestAcquireCacheLockReplacesStaleLock(t *testing.T) {
 	}
 }
 
+func TestAcquireCacheLockWaitsForActiveOwnerPastTimeout(t *testing.T) {
+	lockDir := filepath.Join(t.TempDir(), "cache.lock")
+	releaseOwner, err := tryAcquireCacheLock(lockDir, time.Minute)
+	if err != nil {
+		t.Fatalf("acquire owner lock: %v", err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		releaseOwner()
+	}()
+
+	releaseWaiter, err := acquireCacheLockWithTimings(lockDir, 20*time.Millisecond, time.Minute, 5*time.Millisecond)
+	if err != nil {
+		t.Fatalf("wait for active owner: %v", err)
+	}
+	releaseWaiter()
+}
+
+func TestAcquireCacheLockDoesNotStealLiveOwnerPastStaleThreshold(t *testing.T) {
+	lockDir := filepath.Join(t.TempDir(), "cache.lock")
+	releaseOwner, err := tryAcquireCacheLock(lockDir, 20*time.Millisecond)
+	if err != nil {
+		t.Fatalf("acquire owner lock: %v", err)
+	}
+	go func() {
+		time.Sleep(80 * time.Millisecond)
+		releaseOwner()
+	}()
+
+	releaseWaiter, err := acquireCacheLockWithTimings(lockDir, 15*time.Millisecond, 20*time.Millisecond, 2*time.Millisecond)
+	if err != nil {
+		t.Fatalf("wait for live owner: %v", err)
+	}
+	releaseWaiter()
+}
+
+func TestOldCacheLockReleaseDoesNotRemoveReplacementOwner(t *testing.T) {
+	root := t.TempDir()
+	lockDir := filepath.Join(root, "cache.lock")
+	releaseOld, err := tryAcquireCacheLock(lockDir, time.Minute)
+	if err != nil {
+		t.Fatalf("acquire old lock: %v", err)
+	}
+	abandonedDir := filepath.Join(root, "abandoned.lock")
+	if err := os.Rename(lockDir, abandonedDir); err != nil {
+		t.Fatalf("rename old lock: %v", err)
+	}
+	releaseReplacement, err := tryAcquireCacheLock(lockDir, time.Minute)
+	if err != nil {
+		t.Fatalf("acquire replacement lock: %v", err)
+	}
+	releaseOld()
+	if _, err := os.Stat(lockDir); err != nil {
+		t.Fatalf("old release removed replacement lock: %v", err)
+	}
+	releaseReplacement()
+}
+
 func TestWriteFileAtomically(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "manifest.json")
 	if err := writeFileAtomically(path, []byte("payload\n"), 0o644); err != nil {

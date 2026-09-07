@@ -4,6 +4,9 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+# Export host-side Test Optimization tools and their dependency-free runtimes.
+# The uploader sources are runfiles because consumers execute them after Bazel tests.
+
 exports_files(
     [
         "bep_artifact_stage_helper.py",
@@ -15,6 +18,7 @@ exports_files(
         "test_optimization_sync.bzl",
         "test_optimization_manifest_sync.bzl",
         "test_optimization_multi_sync.bzl",
+        "test_optimization_repository_state.bzl",
         "test_optimization_context_utils.bzl",
         "test_optimization_doctor.bzl",
         "test_optimization_doctor.py",
@@ -26,7 +30,21 @@ exports_files(
         "uploader_bash_runtime.sh.tpl",
         "uploader_powershell_runtime.ps1.tpl",
         "uploader_batch_runtime.bat.tpl",
+        "uploader_python_launcher.sh.tpl",
+        "uploader_python_launcher.ps1.tpl",
         "validate_payload_schema.py",
     ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
+    name = "uploader_python_runtime",
+    srcs = [
+        "uploader_main.py",
+        "validate_payload_schema.py",
+    ] + glob([
+        "topt_runtime/*.py",
+        "uploader_py/*.py",
+    ]),
     visibility = ["//visibility:public"],
 )

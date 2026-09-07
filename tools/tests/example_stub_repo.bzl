@@ -158,7 +158,13 @@ def _render_stub_build(
         service_keys = None,
         module_labels = None,
         manifest_root = ".testoptimization",
-        flaky_tests = None):
+        flaky_tests = None,
+        repo_name = "test_optimization_data",
+        service_name = "stub-service",
+        runtime_module_path = "example.com/stub",
+        runtime_module_label = "example_com_stub",
+        runtime_module_included = False,
+        enabled = True):
     """Render BUILD content for stub repo targets."""
 
     def _append_filegroups(name_suffix, srcs):
@@ -180,7 +186,10 @@ def _render_stub_build(
     if flaky_tests == None:
         flaky_tests = "%s/cache/http/flaky_tests.json" % manifest_root
     files_srcs = [settings, manifest, known_tests, test_management, flaky_tests]
-    lines = ['load(":module_runfiles.bzl", "topt_module_files")\n\n']
+    lines = [
+        'load(":module_runfiles.bzl", "topt_module_files")\n',
+        'load("@datadog-rules-test-optimization//tools/core:test_optimization_repository_state.bzl", "test_optimization_repository_state")\n\n',
+    ]
     _append_filegroups("", files_srcs)
     for key in list(service_keys or []):
         _append_filegroups("_%s" % key, files_srcs)
@@ -196,6 +205,29 @@ def _render_stub_build(
             '    visibility = ["//visibility:public"],\n' +
             ")\n\n",
         )
+    runtime_label = ""
+    if runtime_module_included:
+        runtime_label = runtime_module_label
+    lines.append(
+        "filegroup(\n" +
+        '    name = "test_optimization_runtime_module",\n' +
+        ("    srcs = %s,\n" % repr([":module_%s" % runtime_label] if runtime_label else [])) +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n\n",
+    )
+    lines.append(
+        "test_optimization_repository_state(\n" +
+        '    name = "test_optimization_repository_state",\n' +
+        ("    enabled = %s,\n" % ("True" if enabled else "False")) +
+        ("    repo_name = %s,\n" % repr(repo_name)) +
+        ("    service_name = %s,\n" % repr(service_name)) +
+        '    runtime_name = "go",\n' +
+        ("    runtime_module_path = %s,\n" % repr(runtime_module_path)) +
+        ("    runtime_module_included = %s,\n" % ("True" if runtime_module_included else "False")) +
+        ("    disabled_reason = %s,\n" % repr("" if enabled else "disabled by repository configuration")) +
+        '    visibility = ["//visibility:public"],\n' +
+        ")\n\n",
+    )
     lines.append('exports_files(["export.bzl", %s], visibility = ["//visibility:public"])\n' % repr(manifest))
     return "".join(lines)
 
@@ -273,6 +305,12 @@ def _example_stub_repo_impl(ctx):
         module_labels = module_labels,
         manifest_root = out_dir,
         flaky_tests = flaky_tests,
+        repo_name = exported_repo_name,
+        service_name = ctx.attr.service_name,
+        runtime_module_path = ctx.attr.go_module_path,
+        runtime_module_label = ctx.attr.go_sanitized_module_path,
+        runtime_module_included = ctx.attr.go_module_included,
+        enabled = ctx.attr.enabled,
     )
     ctx.file("BUILD", build)
 

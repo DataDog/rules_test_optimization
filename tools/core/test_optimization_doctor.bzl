@@ -43,6 +43,9 @@ def _doctor_impl(ctx):
     _validate_expected_targets(ctx.attr.expected_targets)
     expected_targets_file = ctx.file.expected_targets_file
 
+    if ctx.attr.runtime_selection and (ctx.attr.data or ctx.attr.expected_targets or expected_targets_file):
+        fail_with_prefix(_OWNER, "runtime_selection cannot be combined with configured data, expected_targets, or expected_targets_file")
+
     context_entries = context_manifest_entries_or_fail(ctx.attr.data, ctx.files.data, _OWNER)
     context_manifest = ctx.actions.declare_file(ctx.label.name + ".context_manifest")
     ctx.actions.write(
@@ -60,6 +63,7 @@ def _doctor_impl(ctx):
             '  "expected_targets": %s,' % _json_string_list(ctx.attr.expected_targets),
             '  "expected_targets_file_path": %s,' % json.encode(expected_targets_file.path if expected_targets_file else ""),
             '  "expected_targets_file_short_path": %s,' % json.encode(expected_targets_file.short_path if expected_targets_file else ""),
+            '  "runtime_selection": %s,' % _json_bool(ctx.attr.runtime_selection),
             '  "require_git_metadata": %s,' % _json_bool(ctx.attr.require_git_metadata),
             '  "require_bazel_metadata": %s,' % _json_bool(ctx.attr.require_bazel_metadata),
             '  "require_json_payloads": %s,' % _json_bool(ctx.attr.require_json_payloads),
@@ -398,6 +402,7 @@ dd_test_optimization_doctor = rule(
         "data": attr.label_list(allow_files = True, doc = "Context files, normally @test_optimization_data//:test_optimization_context."),
         "expected_targets": attr.string_list(default = [], doc = "Optional local labels whose bazel-testlogs outputs must be present."),
         "expected_targets_file": attr.label(allow_single_file = True, doc = "Optional generated JSON file containing invocation-scoped expected targets."),
+        "runtime_selection": attr.bool(default = False, doc = "Require expected targets and keyed context files to be supplied at runtime."),
         "require_git_metadata": attr.bool(default = True, doc = "Require repository URL, commit SHA, and branch/tag in context.json."),
         "require_bazel_metadata": attr.bool(default = True, doc = "Require bazel_target_metadata.json next to payload outputs."),
         "require_json_payloads": attr.bool(default = True, doc = "Require parseable JSON payload files."),

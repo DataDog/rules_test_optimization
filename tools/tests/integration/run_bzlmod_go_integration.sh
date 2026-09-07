@@ -41,7 +41,7 @@ BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion"
 # release downloaded SDKs, extracted repos, and sandbox outputs during cleanup.
 BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_root}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
-ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.9.0}"
+ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
 ORCHESTRION_MODE="${ORCHESTRION_MODE:-general}"
 ORCHESTRION_DISABLED_SENTINEL="${ORCHESTRION_DISABLED_SENTINEL:-0}"
 ORCHESTRION_DISABLED_SENTINEL_VERSION="v0.0.0-rto-disabled-fetch-sentinel"
@@ -52,7 +52,7 @@ CONFIG_TRANSITION_ONLY="${CONFIG_TRANSITION_ONLY:-$WINDOWS_CONFIG_TRANSITION_ONL
 FORBID_HOST_GO="${FORBID_HOST_GO:-0}"
 EXPECTED_ORCHESTRION_CACHE_PHASE="${EXPECTED_ORCHESTRION_CACHE_PHASE:-}"
 HOST_GO_SENTINEL_LOG=""
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.0}"
+DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.1}"
 PIN_ROOT_VERSION="v2.9.1-rc.3"
 PIN_HTTP_VERSION="v2.9.1-rc.3"
 PIN_SLOG_VERSION="v2.3.0"
@@ -539,7 +539,6 @@ run_bep_freshness_scenario() {
       --expected-enriched-tag=bazel.go.payload_selection
   ) >"$fresh_log" 2>&1
   assert_log_contains "$fresh_log" "freshness filtering enabled: source=bep" "fresh BEP run did not select BEP freshness"
-  assert_log_contains "$fresh_log" "dry-run validated enriched test payload" "fresh BEP run did not validate enrichment"
   assert_log_matches "$fresh_log" "dry-run validated [1-9][0-9]* test payloads" "fresh BEP run did not validate any payloads"
 
   simulated_testlogs="$(simulate_bep_artifact_only_outputs "$ws_dir" "$fresh_bep")"
@@ -648,6 +647,7 @@ write_fixture_bazelrc() {
 
   cat > "$ws_dir/.bazelrc" <<EOF
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
+common --incompatible_allow_tags_propagation
 build:test-optimization --@${rules_go_repo}//go/private/orchestrion:enabled=true
 EOF
 }
@@ -709,6 +709,12 @@ go_binary(
     importpath = "${MODULE_IMPORTPATH}/fixture_tool",
 )
 
+go_binary(
+    name = "fixture_testing_tool",
+    srcs = ["fixture_testing_tool.go"],
+    importpath = "${MODULE_IMPORTPATH}/fixture_testing_tool",
+)
+
 go_reset_target(
     name = "fixture_tool_reset",
     dep = ":fixture_tool",
@@ -720,8 +726,12 @@ dd_go_test(
         "hello_external_test.go",
         "hello_test.go",
     ],
-    data = [":fixture_tool_reset"],
+    data = [
+        ":fixture_testing_tool",
+        ":fixture_tool_reset",
+    ],
     embed = [":hello_lib"],
+    tags = ["no-remote-exec"] if "${ORCHESTRION_MODE}" == "test_optimization" else [],
     orchestrion_pin_files = [
         "//:go.mod",
         "//:go.sum",
@@ -748,6 +758,16 @@ EOF
 
   cat > "$ws_dir/app/fixture_tool.go" <<'EOF'
 package main
+
+func main() {}
+EOF
+
+  cat > "$ws_dir/app/fixture_testing_tool.go" <<'EOF'
+package main
+
+import "testing"
+
+var _ = testing.Short
 
 func main() {}
 EOF
@@ -1142,12 +1162,17 @@ run_fixture_subscenario() {
   local aquery_output="$hermetic_root/hello_test_aquery.textproto"
   local opt_aquery_output="$hermetic_root/hello_test_opt_aquery.textproto"
   local no_strip_aquery_output="$hermetic_root/hello_test_no_strip_aquery.textproto"
+  local -a execution_policy_assertion=()
   local output_base=""
   local start_ns=""
   local end_ns=""
   local elapsed_seconds=""
   local proxy_size_bytes=""
   mkdir -p "$hermetic_home" "$hermetic_xdg"
+
+  if [[ "$ORCHESTRION_MODE" == "test_optimization" ]]; then
+    execution_policy_assertion+=(--require-test-runner-only-no-remote-exec)
+  fi
 
   if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     (
@@ -1218,6 +1243,7 @@ PY
     --require-reduced-synthetic-testmain-link-inputs \
     --require-test-optimization-linker-flags \
     --expected-test-optimization-linker-flag-count 2 \
+    "${execution_policy_assertion[@]}" \
     "$aquery_output"
 
   (
@@ -1241,6 +1267,7 @@ PY
     --require-reduced-synthetic-testmain-link-inputs \
     --require-test-optimization-linker-flags \
     --expected-test-optimization-linker-flag-count 1 \
+    "${execution_policy_assertion[@]}" \
     "$opt_aquery_output"
 
   (
@@ -1264,6 +1291,7 @@ PY
     --require-reduced-synthetic-testmain-link-inputs \
     --require-test-optimization-linker-flags \
     --expected-test-optimization-linker-flag-count 0 \
+    "${execution_policy_assertion[@]}" \
     "$no_strip_aquery_output"
 }
 

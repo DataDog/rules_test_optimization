@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 import sys
 from types import ModuleType
@@ -34,6 +35,28 @@ def _load_doctor_runtime(path: str) -> ModuleType:
     return module
 
 
+def _valid_bep_paths(paths: list[str]) -> list[Path]:
+    valid: list[Path] = []
+    for value in paths:
+        path = Path(value)
+        if not path.is_file():
+            print(f"[dd-test-optimization] error: BEP JSON not found: {path}; continuing with other BEP files", file=sys.stderr)
+            continue
+        try:
+            with path.open("r", encoding="utf-8-sig") as handle:
+                for line_number, line in enumerate(handle, start=1):
+                    if line.strip():
+                        json.loads(line)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            print(
+                f"[dd-test-optimization] error: failed to parse BEP JSON {path}: {exc}; continuing with other BEP files",
+                file=sys.stderr,
+            )
+            continue
+        valid.append(path)
+    return valid
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--doctor-runtime", required=True)
@@ -54,7 +77,10 @@ def main(argv: list[str]) -> int:
 
     workspace = doctor._workspace_root()
     staging_base = Path(args.staging_dir)
-    freshness = doctor._parse_bep_freshness([Path(path) for path in args.bep_json], unavailable_is_error=True)
+    valid_bep_paths = _valid_bep_paths(args.bep_json)
+    if not valid_bep_paths:
+        return 0
+    freshness = doctor._parse_bep_freshness(valid_bep_paths, unavailable_is_error=True)
     if freshness is None:
         return 0
     selected_outputs = sorted(

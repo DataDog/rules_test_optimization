@@ -6,8 +6,10 @@
 
 """Uploader rule implementation for Datadog CI Visibility payloads.
 
-This file generates platform-specific uploader entrypoints (Bash + PowerShell)
-at analysis time and exposes them via a normal Bazel rule (`bazel run`).
+This file generates platform-specific uploader entrypoints at analysis time
+and exposes them via a normal Bazel rule (`bazel run`). During the migration
+window it emits both the legacy Bash/PowerShell runtimes and the small launchers
+for the shared Python implementation.
 
 Operational model:
 - Tests run hermetically and write JSON payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
@@ -20,30 +22,19 @@ Operational model:
 - `bazel run //:dd_upload_payloads -- --dry-run --validate-enrichment`
   exercises the same enrichment path without uploading or deleting payloads.
 
-Why generated scripts:
-- Upload logic needs host-specific tooling (`bash/curl` on Unix,
-  PowerShell/.NET HttpClient on Windows).
-- Keeping scripts generated from one Starlark source preserves parity while
-  avoiding separate hand-maintained script files.
+Why generated launchers/configuration:
+- Bazel must still select a native Unix or Windows entrypoint.
+- The Python launchers only resolve a host interpreter, the bootstrap, and the
+  generated typed configuration; uploader behavior lives in `uploader_py`.
+- The large legacy runtimes remain generated only for the temporary rollout
+  fallback and are not part of the target Python architecture.
 
 Developer navigation:
 - Starlark test helpers (manifest/CODEOWNERS parsing parity) near the top.
 - `_uploader_impl` builds both script templates and wires rule outputs.
-- Script templates contain the runtime behavior for discovery, enrichment,
-  uploads, retries, and locking.
+- `uploader_py` owns current runtime behavior; legacy generated scripts remain
+  here only as a rollout fallback.
 """
-
-# Usage pattern:
-#   bazel test //... || test_status=$?; test_status=${test_status:-0}; DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run //:dd_upload_payloads; exit $test_status
-#
-# Key features:
-# - Discovers all test.outputs/ directories in bazel-testlogs automatically
-# - Supports sharded tests (shard_N_of_M/) and retries (run_N_of_M/)
-# - Uploads test payloads to CI Test Cycle intake
-# - Uploads coverage payloads to Code Coverage intake
-# - Deletes payloads after successful upload (unless DD_TEST_OPTIMIZATION_KEEP_PAYLOADS=1)
-# - Uses workspace-level lock to prevent concurrent uploaders
-# - Enriches payloads with context.json metadata
 
 load(
     "//tools/core:common_utils.bzl",
@@ -146,7 +137,8 @@ def _base_template_substitutions(
         expected_targets_rloc,
         expected_targets_path,
         expected_targets_file_rloc,
-        expected_targets_file_path):
+        expected_targets_file_path,
+        runtime_selection):
     """Build shared template substitutions for Bash/PowerShell scripts."""
     return {
         "quiescent_sec": quiescent_sec,
@@ -173,6 +165,7 @@ def _base_template_substitutions(
         "expected_targets_path": expected_targets_path,
         "expected_targets_file_rloc": expected_targets_file_rloc,
         "expected_targets_file_path": expected_targets_file_path,
+        "runtime_selection": _bool_to_str(runtime_selection),
         "rules_version": RULES_VERSION,
     }
 
@@ -650,8 +643,9 @@ resolve_runfile_manifest_powershell_for_tests = _resolve_runfile_manifest_powers
 def _uploader_impl(ctx):
     """Rule implementation that generates cross-platform uploader executables.
 
-    The generated scripts perform runtime payload discovery/enrichment/upload,
-    while this function stays analysis-time only (template rendering + runfiles).
+    Generated legacy scripts or Python launchers perform runtime execution,
+    while this function stays analysis-time only (configuration, templates,
+    and runfiles).
     """
 
     # `_uploader_impl` is responsible for generating *all* runtime uploader
@@ -660,8 +654,8 @@ def _uploader_impl(ctx):
     #
     # Responsibilities:
     # 1) collect rule attrs and data dependencies (context/schema/validator)
-    # 2) render Bash and PowerShell script templates with concrete runfile paths
-    # 3) emit platform launchers (`.sh`, `.ps1`, `.bat`) with consistent behavior
+    # 2) render rollout-only Bash and PowerShell legacy runtimes
+    # 3) emit small Python platform launchers (`.sh`, `.ps1`, `.bat`)
     # 4) return DefaultInfo exposing the correct executable for the target OS
     #
     # Keep template substitutions explicit and centralized. If new placeholders
@@ -678,7 +672,12 @@ def _uploader_impl(ctx):
     keep_payloads = ctx.attr.keep_payloads
     filter_prefix_enabled = ctx.attr.filter_prefix
     gzip_payloads = ctx.attr.gzip_payloads
+    workers = ctx.attr.workers
+    if workers <= 0:
+        fail_with_prefix("test_optimization_uploader", "workers must be a positive integer")
     expected_targets_file = ctx.file.expected_targets_file
+    if ctx.attr.runtime_selection and (ctx.attr.data or ctx.attr.expected_targets or expected_targets_file):
+        fail_with_prefix("test_optimization_uploader", "runtime_selection cannot be combined with configured data, expected_targets, or expected_targets_file")
     expected_targets = ctx.actions.declare_file(ctx.label.name + ".expected_targets")
     ctx.actions.write(
         output = expected_targets,
@@ -722,6 +721,43 @@ def _uploader_impl(ctx):
     schema_json_path = ctx.file._schema.path if ctx.file._schema else ""
     schema_validator_rloc = ctx.file._schema_validator.short_path if ctx.file._schema_validator else ""
     schema_validator_path = ctx.file._schema_validator.path if ctx.file._schema_validator else ""
+
+    # Generate the complete Python runtime contract now, while the legacy
+    # launchers remain published until parity gates are complete.
+    python_config = ctx.actions.declare_file(ctx.label.name + ".uploader_config.json")
+    ctx.actions.write(
+        output = python_config,
+        content = json.encode({
+            "schema_version": 1,
+            "quiescent_sec": quiescent_sec,
+            "max_wait_sec": max_wait_sec,
+            "fail_on_error": fail_on_error,
+            "debug": debug,
+            "keep_payloads": keep_payloads,
+            "filter_prefix": filter_prefix_enabled,
+            "gzip_payloads": gzip_payloads,
+            "workers": workers,
+            "rules_version": RULES_VERSION,
+            "uploader_version": UPLOADER_VERSION,
+            "workspace_name": ctx.workspace_name,
+            "context_manifest_path": context_manifest.path,
+            "context_manifest_short_path": context_manifest.short_path,
+            "telemetry_facts_manifest_path": telemetry_facts_manifest.path,
+            "telemetry_facts_manifest_short_path": telemetry_facts_manifest.short_path,
+            "schema_json_path": schema_json_path,
+            "schema_json_short_path": schema_json_rloc,
+            "doctor_runtime_path": ctx.file._doctor_runtime.path,
+            "doctor_runtime_short_path": ctx.file._doctor_runtime.short_path,
+            "expected_targets": sorted(ctx.attr.expected_targets),
+            "expected_targets_file_path": (
+                expected_targets_file.path if expected_targets_file else ""
+            ),
+            "expected_targets_file_short_path": (
+                expected_targets_file.short_path if expected_targets_file else ""
+            ),
+            "runtime_selection": ctx.attr.runtime_selection,
+        }) + "\n",
+    )
 
     # High-level debug of rule inputs
     log_info("Generating uploader scripts (Option 2: TEST_UNDECLARED_OUTPUTS_DIR)")
@@ -790,6 +826,7 @@ def _uploader_impl(ctx):
         expected_targets.path,
         expected_targets_file.short_path if expected_targets_file else "",
         expected_targets_file.path if expected_targets_file else "",
+        ctx.attr.runtime_selection,
     )
     bash_substitutions["curl_retry_flags"] = " ".join(_bash_curl_retry_flags_for_tests())
     bash_file = ctx.actions.declare_file(ctx.label.name + ".sh")
@@ -833,6 +870,7 @@ def _uploader_impl(ctx):
                 expected_targets.path,
                 expected_targets_file.short_path if expected_targets_file else "",
                 expected_targets_file.path if expected_targets_file else "",
+                ctx.attr.runtime_selection,
             ),
         ),
         is_executable = False,
@@ -852,6 +890,38 @@ def _uploader_impl(ctx):
     )
     log_debug(debug, "outputs", "Declared outputs → bash='%s', ps='%s', bat='%s'" % (bash_file.basename, ps_file.basename, bat_file.basename))
 
+    # The Python implementation is emitted in parallel during rollout.  Its
+    # platform launchers only resolve Python, the bootstrap, and this target's
+    # generated config; all functional behavior lives in uploader_py.
+    python_launcher_substitutions = _tokenize_template_substitutions({
+        "python_config_name": python_config.basename,
+        "python_config_path": python_config.path,
+        "python_config_rloc": python_config.short_path,
+        "python_main_path": ctx.file._python_main.path,
+        "python_main_rloc": ctx.file._python_main.short_path,
+    })
+    python_bash_file = ctx.actions.declare_file(ctx.label.name + ".python.sh")
+    ctx.actions.expand_template(
+        template = ctx.file._python_bash_launcher_template,
+        output = python_bash_file,
+        substitutions = python_launcher_substitutions,
+        is_executable = True,
+    )
+    python_ps_file = ctx.actions.declare_file(ctx.label.name + ".python.ps1")
+    ctx.actions.expand_template(
+        template = ctx.file._python_powershell_launcher_template,
+        output = python_ps_file,
+        substitutions = python_launcher_substitutions,
+        is_executable = False,
+    )
+    python_bat_file = ctx.actions.declare_file(ctx.label.name + ".python.bat")
+    ctx.actions.expand_template(
+        template = ctx.file._batch_runtime_template,
+        output = python_bat_file,
+        substitutions = _tokenize_template_substitutions({"ps_name": python_ps_file.basename}),
+        is_executable = True,
+    )
+
     # ------------------------------------------------------------------
     # Phase 5: Build runfiles set and choose platform-specific executable.
     # ------------------------------------------------------------------
@@ -864,22 +934,44 @@ def _uploader_impl(ctx):
         extra_files.append(ctx.file._schema_validator)
     runfiles = ctx.runfiles(
         files = [
-            ps_file,
-            bat_file,
-            context_manifest,
-            telemetry_facts_manifest,
-            expected_targets,
-            ctx.file._bep_artifact_stage_helper,
-            ctx.file._doctor_runtime,
-        ] + ctx.files.data + ([expected_targets_file] if expected_targets_file else []) + extra_files,
+                    ps_file,
+                    bat_file,
+                    python_bash_file,
+                    python_ps_file,
+                    python_bat_file,
+                    python_config,
+                    context_manifest,
+                    telemetry_facts_manifest,
+                    expected_targets,
+                    ctx.file._bep_artifact_stage_helper,
+                    ctx.file._doctor_runtime,
+                    ctx.file._python_main,
+                ] +
+                ctx.files.data +
+                ctx.files._python_runtime +
+                ([expected_targets_file] if expected_targets_file else []) +
+                extra_files,
     )
     log_debug(debug, "outputs", "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
     # Use target-platform constraints (ConstraintValueInfo) so executable
     # selection is analysis-time deterministic across host operating systems.
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
-    executable = bat_file if is_windows else bash_file
-    return [DefaultInfo(files = depset([bash_file, ps_file, bat_file]), executable = executable, runfiles = runfiles)]
+    legacy_executable = bat_file if is_windows else bash_file
+    python_executable = python_bat_file if is_windows else python_bash_file
+    executable = python_executable if ctx.attr.use_python_uploader else legacy_executable
+    return [DefaultInfo(
+        files = depset([
+            bash_file,
+            ps_file,
+            bat_file,
+            python_bash_file,
+            python_ps_file,
+            python_bat_file,
+        ]),
+        executable = executable,
+        runfiles = runfiles,
+    )]
 
 _dd_payload_uploader_rule = rule(
     implementation = _uploader_impl,
@@ -892,15 +984,22 @@ _dd_payload_uploader_rule = rule(
         "keep_payloads": attr.bool(default = False, doc = "Keep payload files after successful upload (env: DD_TEST_OPTIMIZATION_KEEP_PAYLOADS)"),
         "filter_prefix": attr.bool(default = False, doc = "Boolean gate: only upload files matching span_events_*.json or coverage_*.json; telemetry uploads are always eligible (env: DD_TEST_OPTIMIZATION_FILTER_PREFIX)"),
         "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TEST_OPTIMIZATION_GZIP)"),
+        "workers": attr.int(default = 8, doc = "Maximum number of independent payload-file workers (env: DD_TEST_OPTIMIZATION_WORKERS, CLI: --workers)"),
+        "use_python_uploader": attr.bool(default = True, doc = "Use the default cross-platform Python uploader; set False only for temporary rollback to the legacy platform runtime."),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
         "expected_targets": attr.string_list(default = [], doc = "Optional local labels whose current-invocation outputs the uploader must account for."),
         "expected_targets_file": attr.label(allow_single_file = True, doc = "Optional generated schema-v1 JSON file containing invocation-scoped expected targets."),
+        "runtime_selection": attr.bool(default = False, doc = "Require expected targets and keyed context files to be supplied at runtime."),
         # Schema + validator bundled for best-effort payload validation
         "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
         "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),
         "_bep_artifact_stage_helper": attr.label(default = "//tools/core:bep_artifact_stage_helper.py", allow_single_file = True),
         "_doctor_runtime": attr.label(default = "//tools/core:test_optimization_doctor.py", allow_single_file = True),
+        "_python_runtime": attr.label(default = "//tools/core:uploader_python_runtime", allow_files = True),
+        "_python_main": attr.label(default = "//tools/core:uploader_main.py", allow_single_file = True),
+        "_python_bash_launcher_template": attr.label(default = "//tools/core:uploader_python_launcher.sh.tpl", allow_single_file = True),
+        "_python_powershell_launcher_template": attr.label(default = "//tools/core:uploader_python_launcher.ps1.tpl", allow_single_file = True),
         # Runtime templates (kept as standalone files, not inline Starlark strings)
         "_bash_runtime_template": attr.label(default = "//tools/core:uploader_bash_runtime.sh.tpl", allow_single_file = True),
         "_powershell_runtime_template": attr.label(default = "//tools/core:uploader_powershell_runtime.ps1.tpl", allow_single_file = True),

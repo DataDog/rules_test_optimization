@@ -130,13 +130,13 @@ Every successful Go onboarding should end with these pieces:
   flags and required BEP freshness/artifact flags. Use
   `DD_TEST_OPTIMIZATION_*` environment variables only for single-invocation
   manual flows where one BEP file is sufficient.
-- CI wrappers write `doctor-report.json`, `uploader-dry-run-report.json`,
-  optional `uploader-upload-report.json`, and, when configured,
+- CI wrappers write `doctor-report.json`, one selected uploader report
+  (`uploader-dry-run-report.json` or `uploader-upload-report.json`), and
   `dd-test-optimization-support.zip` under a per-job report directory.
   Prefer the wrapper support bundle for full CI escalation; use the doctor-only
   support bundle for the simplest initial customer request. Keep individual
   reports for local inspection and manual fallback flows.
-- Real upload happens only after tests, doctor, and dry-run enrichment pass.
+- Real upload processes available fresh valid payloads after doctor and dry-run attempts, while preserving any earlier failure.
 
 For automatic managed Go/Python monorepos, the universal shape has these
 additional constraints:
@@ -189,7 +189,8 @@ Go wrapper, treat it as a consumer-specific integration:
 - Validate with fresh `bazel-testlogs/<target>/test.outputs/`, inspect
   `bazel_target_metadata.json` for
   `bazel.go.orchestrion.mode = "test_optimization"` on Go targets, then run
-  the doctor and uploader dry-run before any real upload.
+  the doctor and one enrichment-validating uploader pass; use dry-run only
+  when real upload is disabled.
 
 ## Branch And PR Hygiene
 

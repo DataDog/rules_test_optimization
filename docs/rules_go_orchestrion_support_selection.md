@@ -26,7 +26,8 @@ The default `rules_go_upstream` is currently `v0_60_0`, which preserves the
 existing `third_party/rgo/v0_60_0/base` path. When multiple upstream
 `rules_go` versions are supported, use `rules_go_upstream` to choose the upstream
 support line. Omitting `rules_go_upstream` preserves the repository default.
-The registry currently supports `v0_60_0`, `v0_61_1`, and `v0_62_0`.
+The registry currently supports `v0_60_0`, `v0_61_1`, `v0_62_0`, and
+`v0_63_0`.
 
 ## Selection Rule
 

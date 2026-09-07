@@ -85,11 +85,10 @@ Add these lines to the named config used by test, doctor, and uploader:
 
 ```text
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 ```
 
-`--config=test-optimization` is the only user-facing switch. Omitting it
-renders disabled metadata stubs and selects the local empty Orchestrion aliases.
+`--config=test-optimization` is the only user-facing metadata switch. The
+optimized target transition enables Orchestrion; no global flag is required.
 
 For a managed monorepo, declare one aggregate repository after the Rule
 dependency:
@@ -270,7 +269,7 @@ dd_topt_go_orchestrion_tool_repo(
     ],
     go_sdk_root = "@go_sdk//:ROOT",
     go_sdk_version = "<go-version>",
-    version = "v1.9.0",
+    version = "v1.12.0",
 )
 
 # Call the repository's existing go_rules_dependencies() wiring after the
@@ -285,6 +284,9 @@ dd_topt_go_workspace_sync_repositories(
     service = "<datadog-service>",
 )
 ```
+
+For Orchestrion `v1.12.0`, `go_sdk_version` and the registered Go toolchain
+must be Go `1.25.0` or newer.
 
 The public Go helper is config-gated by default. Do not add a second enable
 attribute to each repository or test target.
@@ -414,7 +416,6 @@ common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_SHA
 common:test-optimization --repo_env=DD_GIT_PR_BASE_BRANCH_HEAD_SHA
 common:test-optimization --repo_env=DD_PR_NUMBER
-build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 test:test-optimization --remote_download_minimal
 test:test-optimization --remote_download_regex=.*test[.]outputs.*
 test:test-optimization --zip_undeclared_test_outputs

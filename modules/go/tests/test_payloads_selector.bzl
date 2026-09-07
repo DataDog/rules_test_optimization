@@ -8,12 +8,13 @@
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load("@datadog-rules-test-optimization-go//:topt_go_infer.bzl", "topt_go_payloads_selector")
+load("@rules_go//go:def.bzl", "go_library")
 
 _COMMON_MODULE_GROUPS = [
     ":module_example_com_explicit_pkg",
     ":module_example_com_embed_pkg",
-    ":module_example_com_deps_pkg",
     ":module_example_com_fallback_pkg",
+    ":module_modules_go_tests_inferred_embed_library",
     ":module_custom_override",
 ]
 
@@ -52,20 +53,6 @@ _cache_payload = rule(
     implementation = _cache_payload_impl,
 )
 
-def _embed_source_impl(_ctx):
-    """Implement embed source impl behavior."""
-    return []
-
-_embed_source = rule(
-    implementation = _embed_source_impl,
-    attrs = {
-        # Keep attribute names aligned with what _importpath_aspect inspects.
-        "importpath": attr.string(),
-        "embed": attr.label_list(),
-        "deps": attr.label_list(),
-    },
-)
-
 def selector_payload_fixture_targets():
     """Shared marker and embed fixtures used by selector tests."""
     _payload_marker(
@@ -85,12 +72,12 @@ def selector_payload_fixture_targets():
         marker = "module:embed",
     )
     _payload_marker(
-        name = "module_example_com_deps_pkg",
-        marker = "module:deps",
-    )
-    _payload_marker(
         name = "module_example_com_fallback_pkg",
         marker = "module:fallback",
+    )
+    _payload_marker(
+        name = "module_modules_go_tests_inferred_embed_library",
+        marker = "module:inferred-embed",
     )
     _payload_marker(
         name = "module_custom_override",
@@ -99,21 +86,14 @@ def selector_payload_fixture_targets():
     _cache_payload(
         name = "module_example_com_cache_pkg",
     )
-    _embed_source(
-        name = "embed_leaf",
+    go_library(
+        name = "explicit_embed_library",
+        srcs = ["selector_fixture.go"],
         importpath = "example.com/embed/pkg",
     )
-    _embed_source(
-        name = "embed_wrapper",
-        embed = [":embed_leaf"],
-    )
-    _embed_source(
-        name = "deps_leaf",
-        importpath = "example.com/deps/pkg",
-    )
-    _embed_source(
-        name = "deps_wrapper",
-        deps = [":deps_leaf"],
+    go_library(
+        name = "inferred_embed_library",
+        srcs = ["selector_fixture.go"],
     )
 
 def selector_explicit_precedence_target(
@@ -125,7 +105,7 @@ def selector_explicit_precedence_target(
     topt_go_payloads_selector(
         name = name,
         explicit_importpath = "example.com/explicit/pkg",
-        embeds = [":embed_wrapper"],
+        embeds = [":explicit_embed_library"],
         fallback_importpath = "example.com/fallback/pkg",
         full_files = ":full_payload",
         module_group_names = module_group_names or [],
@@ -138,7 +118,7 @@ def selector_embed_precedence_target(name, tags = None):
     """embed-derived importpath wins when explicit_importpath is unset."""
     topt_go_payloads_selector(
         name = name,
-        embeds = [":embed_wrapper"],
+        embeds = [":explicit_embed_library"],
         fallback_importpath = "example.com/fallback/pkg",
         full_files = ":full_payload",
         module_groups = _COMMON_MODULE_GROUPS,
@@ -146,11 +126,11 @@ def selector_embed_precedence_target(name, tags = None):
         tags = tags,
     )
 
-def selector_deps_precedence_target(name, tags = None):
-    """deps-traversal importpath is used when embed chain has deps-only path."""
+def selector_inferred_embed_uses_fallback_target(name, tags = None):
+    """An inferred embed importpath does not override the go_test fallback."""
     topt_go_payloads_selector(
         name = name,
-        embeds = [":deps_wrapper"],
+        embeds = [":inferred_embed_library"],
         fallback_importpath = "example.com/fallback/pkg",
         full_files = ":full_payload",
         module_groups = _COMMON_MODULE_GROUPS,
@@ -200,7 +180,7 @@ def selector_include_disabled_target(name, tags = None):
     topt_go_payloads_selector(
         name = name,
         explicit_importpath = "example.com/explicit/pkg",
-        embeds = [":embed_wrapper"],
+        embeds = [":explicit_embed_library"],
         fallback_importpath = "example.com/fallback/pkg",
         full_files = ":full_payload",
         module_groups = _COMMON_MODULE_GROUPS,
@@ -319,11 +299,11 @@ def _selector_embed_precedence_test_impl(ctx):
     _assert_selected(env, target, "module_example_com_embed_pkg")
     return analysistest.end(env)
 
-def _selector_deps_precedence_test_impl(ctx):
-    """Implement selector deps precedence test impl behavior."""
+def _selector_inferred_embed_uses_fallback_test_impl(ctx):
+    """Assert rules_go-style inferred embeds use the target fallback."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
-    _assert_selected(env, target, "module_example_com_deps_pkg")
+    _assert_selected(env, target, "module_example_com_fallback_pkg")
     return analysistest.end(env)
 
 def _selector_fallback_test_impl(ctx):
@@ -397,8 +377,8 @@ selector_explicit_namespaced_test = analysistest.make(
 selector_embed_precedence_test = analysistest.make(
     _selector_embed_precedence_test_impl,
 )
-selector_deps_precedence_test = analysistest.make(
-    _selector_deps_precedence_test_impl,
+selector_inferred_embed_uses_fallback_test = analysistest.make(
+    _selector_inferred_embed_uses_fallback_test_impl,
 )
 selector_fallback_test = analysistest.make(
     _selector_fallback_test_impl,

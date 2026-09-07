@@ -143,18 +143,15 @@ class BootstrapSnippetTest(unittest.TestCase):
         self.assertIn("--build_event_json_file=\"$DD_TEST_OPTIMIZATION_BEP_JSON\" //app:explicit", snippet)
         self.assertNotIn("//app:expected", snippet)
 
-    def test_command_snippet_gates_real_upload_on_validation(self) -> None:
-        """Generated commands do not run the real upload after validation failures."""
+    def test_command_snippet_runs_one_validated_upload_after_doctor(self) -> None:
+        """Generated commands preserve failures while running one validated upload."""
         args = _args("--expected-target=//app:expected")
         snippet = main.render_command_snippet(args)
         self.assertIn("doctor_status=0", snippet)
-        self.assertIn('if [ "$doctor_status" -ne 0 ]; then', snippet)
-        self.assertIn("dry_run_status=0", snippet)
-        self.assertIn('if [ "$dry_run_status" -ne 0 ]; then', snippet)
-        self.assertLess(
-            snippet.index("--dry-run --validate-enrichment || dry_run_status=$?"),
-            snippet.index('DD_API_KEY="$DD_API_KEY"'),
-        )
+        self.assertIn("uploader_status=0", snippet)
+        self.assertIn('-- --validate-enrichment || uploader_status=$?', snippet)
+        self.assertNotIn("--dry-run", snippet)
+        self.assertLess(snippet.index(":dd_test_optimization_doctor"), snippet.index(":dd_upload_payloads"))
 
     def test_command_snippet_falls_back_to_expected_targets(self) -> None:
         """Expected targets are reused for commands when test targets are omitted."""

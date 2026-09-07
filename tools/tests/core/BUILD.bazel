@@ -112,6 +112,7 @@ load(
     "disabled_context_contract_test",
     "disabled_export_and_build_shape_test",
     "disabled_runtime_module_path_precedence_test",
+    "repository_state_and_runtime_module_rendering_test",
     "disabled_telemetry_contract_test",
     "enabled_false_values_test",
     "enabled_truthy_values_test",
@@ -221,6 +222,9 @@ load(
     "expected_targets_file_test",
     "expected_targets_test",
     "explicit_context_data_test",
+    "runtime_selection_mixed_source_failure_test",
+    "runtime_selection_mixed_source_target_rule",
+    "runtime_selection_test",
     "uploader_controlled_attr_failure_test",
     "uploader_controlled_attr_target_rule",
     "uploader_kwargs_test",
@@ -483,6 +487,11 @@ doctor_controlled_attr_target_rule(
 
 uploader_controlled_attr_target_rule(
     name = "uploader_controlled_attr_target",
+    tags = ["manual"],
+)
+
+runtime_selection_mixed_source_target_rule(
+    name = "runtime_selection_mixed_source_target",
     tags = ["manual"],
 )
 
@@ -752,6 +761,12 @@ explicit_context_data_test(
     timeout = "short",
 )
 
+runtime_selection_test(
+    name = "runtime_selection_test",
+    size = "small",
+    timeout = "short",
+)
+
 explicit_payload_labels_precede_static_fallback_test(
     name = "explicit_payload_labels_precede_static_fallback_test",
     size = "small",
@@ -800,6 +815,11 @@ doctor_controlled_attr_failure_test(
 uploader_controlled_attr_failure_test(
     name = "uploader_controlled_attr_failure_test",
     target_under_test = ":uploader_controlled_attr_target",
+)
+
+runtime_selection_mixed_source_failure_test(
+    name = "runtime_selection_mixed_source_failure_test",
+    target_under_test = ":runtime_selection_mixed_source_target",
 )
 
 legacy_context_direct_file_fallback_test(
@@ -874,6 +894,12 @@ disabled_telemetry_contract_test(
 
 disabled_export_and_build_shape_test(
     name = "disabled_export_and_build_shape_test",
+    size = "small",
+    timeout = "short",
+)
+
+repository_state_and_runtime_module_rendering_test(
+    name = "repository_state_and_runtime_module_rendering_test",
     size = "small",
     timeout = "short",
 )
@@ -1848,6 +1874,7 @@ test_suite(
         ":render_template_substitution_test",
         ":render_template_unescape_only_test",
         ":repository_environment_contains_bootstrap_inputs_test",
+        ":repository_state_and_runtime_module_rendering_test",
         ":required_git_metadata_missing_fields_test",
         ":resolve_dd_api_base_test",
         ":runfile_manifest_bash_resolution_test",
@@ -1855,6 +1882,8 @@ test_suite(
         ":runfile_manifest_parser_parity_test",
         ":runfile_manifest_powershell_resolution_test",
         ":runtime_module_path_from_environ_test",
+        ":runtime_selection_mixed_source_failure_test",
+        ":runtime_selection_test",
         ":sanitize_label_fragment_test",
         ":sanitize_repository_url_test",
         ":service_environment_resolution_test",

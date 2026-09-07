@@ -283,40 +283,6 @@ func absCCLinker(argList []string) (func(), error) {
 	return cleanup, nil
 }
 
-// absCCCompiler modifies CGO flags to workaround relative paths.
-// Because go is having its own sandbox, all CGO flags should use
-// absolute paths. However, CGO flags are embedded in the output
-// so we cannot use absolute paths directly. Instead, use a placeholder
-// for the absolute path and we replace CC with this builder so that
-// we can expand the placeholder later.
-func absCCCompiler(envNameList []string, argList []string) error {
-	err := os.Setenv("GO_CC", os.Getenv("CC"))
-	if err != nil {
-		return err
-	}
-	err = os.Setenv("GO_CC_ROOT", abs("."))
-	if err != nil {
-		return err
-	}
-	err = os.Setenv("CC", abs(os.Args[0])+" cc")
-	if err != nil {
-		return err
-	}
-	for _, envName := range envNameList {
-		splitedEnv := strings.Fields(os.Getenv(envName))
-		transformArgs(splitedEnv, argList, func(s string) string {
-			if filepath.IsAbs(s) {
-				return s
-			}
-			return cgoAbsPlaceholder + s
-		})
-		if err := os.Setenv(envName, strings.Join(splitedEnv, " ")); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func runAndLogCommand(cmd *exec.Cmd, verbose bool) error {
 	if verbose {
 		fmt.Fprintln(os.Stderr, formatCommand(cmd))

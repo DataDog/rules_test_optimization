@@ -7,8 +7,8 @@
 """Starlark helpers to infer Go importpath via rules_go providers.
 
 This file provides:
-- An aspect that walks the `embed` attribute to find a go_library's
-  computed importpath (matching rules_go's logic).
+- An aspect that reads an embedded go_library's explicit importpath
+  (matching rules_go's logic).
 - A rule that uses that aspect result to choose the correct per-module
   filegroup from the synced repository and expose those files as runfiles.
 
@@ -34,6 +34,10 @@ Maintenance notes:
   the safe full-bundle fallback.
 """
 
+load(
+    "@datadog-rules-test-optimization//tools/core:test_optimization_repository_state.bzl",
+    "TestOptimizationRepositoryStateInfo",
+)
 load(
     "@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl",
     "select_module_group_name",
@@ -73,6 +77,17 @@ def _resolve_payload_selection(ctx):
         ctx.attr.embeds,
         ctx.attr.fallback_importpath or "",
     )
+
+    if ctx.attr.repository_state:
+        state = ctx.attr.repository_state[TestOptimizationRepositoryStateInfo]
+        _validate_static_repository_state(ctx, state)
+        return struct(
+            importpath = ip,
+            importpath_source = importpath_source,
+            selected_name = "test_optimization_runtime_module" if state.runtime_module_included else "",
+            chosen = ctx.attr.runtime_module if state.runtime_module_included else None,
+            selection = "module" if state.runtime_module_included else "full_bundle_no_match",
+        )
 
     module_group_names = ctx.attr.module_group_names
     if module_group_names:
@@ -114,6 +129,22 @@ def _resolve_payload_selection(ctx):
         selection = selection,
     )
 
+def _validate_static_repository_state(ctx, state):
+    """Fail closed when a local descriptor disagrees with its sync repository."""
+    if not state.enabled:
+        reason = state.disabled_reason or "repository synchronization is disabled"
+        fail("topt_go_payloads_selector: selected Test Optimization repository %r is disabled: %s" % (state.repo_name, reason))
+    if state.repo_name != ctx.attr.expected_repo_name:
+        fail("topt_go_payloads_selector: repository identity mismatch: descriptor=%r repository=%r" % (ctx.attr.expected_repo_name, state.repo_name))
+    if state.service_name != ctx.attr.expected_service_name:
+        fail("topt_go_payloads_selector: service identity mismatch for repository %r: descriptor=%r repository=%r" % (state.repo_name, ctx.attr.expected_service_name, state.service_name))
+    if state.runtime_name != "go":
+        fail("topt_go_payloads_selector: repository %r has runtime %r; expected %r" % (state.repo_name, state.runtime_name, "go"))
+    if state.runtime_module_path != ctx.attr.expected_runtime_module_path:
+        fail("topt_go_payloads_selector: runtime module mismatch for repository %r: descriptor=%r repository=%r" % (state.repo_name, ctx.attr.expected_runtime_module_path, state.runtime_module_path))
+    if state.runtime_module_included and not ctx.attr.runtime_module:
+        fail("topt_go_payloads_selector: repository %r reports an included runtime module but exposes no stable runtime-module target" % state.repo_name)
+
 # Provider carrying the inferred importpath string
 ToptGoImportpathInfo = provider(
     doc = "Provider carrying the inferred Go package importpath from rules_go.",
@@ -132,14 +163,17 @@ def _importpath_aspect_impl(target, ctx):
     - If this target provides GoInfo (formerly GoLibrary), read its importpath.
     - Else, if this target provides GoArchive, read its importpath.
     - Else, if rule has an explicit importpath attribute, use it.
-    - Else, traverse children via `embed` and propagate first discovered value.
+    - Else, report no explicit embed importpath so the caller can use the
+      label-derived go_test fallback.
     """
 
-    # Prefer GoInfo provider (rules_go v0.51+, replaces GoLibrary)
+    # rules_go only inherits an embedded library's importpath when that path
+    # was explicit. Inferred embed paths are ignored and the go_test label is
+    # used instead.
     if GoInfo in target:
         info = target[GoInfo]
         ip = getattr(info, "importpath", None)
-        if type(ip) == type("") and ip:
+        if getattr(info, "pathtype", None) == "explicit" and type(ip) == type("") and ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
     # Fallback: GoArchive may carry importpath
@@ -152,7 +186,7 @@ def _importpath_aspect_impl(target, ctx):
             ip = getattr(arch.source, "importpath", None)
         if (not ip) and hasattr(arch, "library"):
             ip = getattr(arch.library, "importpath", None)
-        if type(ip) == type("") and ip:
+        if getattr(arch, "pathtype", None) == "explicit" and type(ip) == type("") and ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
     # Explicit attribute on some go_* rules
@@ -161,21 +195,11 @@ def _importpath_aspect_impl(target, ctx):
         if type(ip) == type("") and ip:
             return [ToptGoImportpathInfo(importpath = ip)]
 
-    # Propagate from transitive deps.
-    # Returning the first non-empty importpath preserves deterministic behavior.
-    for attr_name in ["embed", "deps"]:
-        for dep in getattr(ctx.rule.attr, attr_name, []):
-            if ToptGoImportpathInfo in dep:
-                ip = dep[ToptGoImportpathInfo].importpath
-                if type(ip) == type("") and ip:
-                    return [ToptGoImportpathInfo(importpath = ip)]
-
     # No information found at this node
     return []
 
 _importpath_aspect = aspect(
     implementation = _importpath_aspect_impl,
-    attr_aspects = ["embed", "deps"],
 )
 
 def _topt_go_payloads_selector_impl(ctx):
@@ -203,7 +227,11 @@ def _topt_go_payloads_selector_impl(ctx):
     )
     return [DefaultInfo(
         files = depset(payload.files),
-        runfiles = ctx.runfiles(files = payload.files, symlinks = payload.symlinks),
+        runfiles = ctx.runfiles(
+            files = payload.files,
+            root_symlinks = payload.root_symlinks,
+            symlinks = payload.symlinks,
+        ),
     )]
 
 def _topt_go_bazel_metadata_impl(ctx):
@@ -279,6 +307,14 @@ topt_go_payloads_selector = rule(
 
         # Optional override for the sanitized module label suffix
         "module_label_override": attr.string(),
+
+        # Static local descriptor state. Dynamic exports leave these empty and
+        # retain the existing per-module selection behavior above.
+        "repository_state": attr.label(providers = [TestOptimizationRepositoryStateInfo]),
+        "runtime_module": attr.label(),
+        "expected_repo_name": attr.string(),
+        "expected_service_name": attr.string(),
+        "expected_runtime_module_path": attr.string(),
     },
 )
 
@@ -292,6 +328,11 @@ topt_go_bazel_metadata = rule(
         "module_groups": attr.label_list(),
         "include_per_module": attr.bool(default = True),
         "module_label_override": attr.string(),
+        "repository_state": attr.label(providers = [TestOptimizationRepositoryStateInfo]),
+        "runtime_module": attr.label(),
+        "expected_repo_name": attr.string(),
+        "expected_service_name": attr.string(),
+        "expected_runtime_module_path": attr.string(),
         "orchestrion_mode": attr.string(default = "general", values = ["general", "test_optimization"]),
         "bazel_package": attr.string(mandatory = True),
         "bazel_target": attr.string(mandatory = True),
