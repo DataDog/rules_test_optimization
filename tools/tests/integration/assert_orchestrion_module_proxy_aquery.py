@@ -472,6 +472,39 @@ def _assert_shared_synthetic_testmain_helper_action(
         _require(name in action.environment, f"shared synthetic testmain helper action is missing {name}")
 
 
+def _assert_synthetic_testmain_cgo_wiring(
+    action: Action,
+    inputs: list[str],
+    stdlib_action: Action,
+) -> None:
+    """Require non-pure testmain helpers to use the stdlib's C toolchain."""
+
+    if action.environment.get("CGO_ENABLED") != "1":
+        return
+
+    for name in ("CGO_ENABLED", "CC", "CGO_CFLAGS", "CGO_LDFLAGS"):
+        _require(
+            name in action.environment,
+            f"non-pure synthetic testmain compile action is missing {name}",
+        )
+        _require(
+            action.environment[name] == stdlib_action.environment.get(name),
+            f"synthetic testmain compile action does not match GoStdlib {name}",
+        )
+
+    c_compiler = action.environment["CC"]
+    if not Path(c_compiler).is_absolute():
+        _require(
+            _contains_path_suffix(inputs, c_compiler),
+            "non-pure synthetic testmain compile action does not declare "
+            f"its C compiler input: {c_compiler}",
+        )
+    _require(
+        "supports-path-mapping" not in action.execution_info,
+        "non-pure synthetic testmain compile action incorrectly supports path mapping",
+    )
+
+
 def _assert_reduced_synthetic_testmain_link_inputs(
     action: Action,
     inputs: list[str],
@@ -837,6 +870,11 @@ def main() -> int:
             _require(
                 _contains_path_fragment(inputs, "stdlib_/synthetic_testmain_helpers"),
                 "synthetic testmain compile action is missing the shared helper bundle input",
+            )
+            _assert_synthetic_testmain_cgo_wiring(
+                action,
+                inputs,
+                orchestrion_stdlib_actions[0],
             )
     if args.require_reduced_synthetic_testmain_link_inputs:
         synthetic_testmain_link_actions = [
