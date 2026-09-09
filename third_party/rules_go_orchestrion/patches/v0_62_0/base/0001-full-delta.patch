@@ -4317,7 +4317,7 @@ index 809ede6..6751455 100644
  
  def _check_ternary(name, value):
 diff --git a/go/tools/builders/BUILD.bazel b/go/tools/builders/BUILD.bazel
-index a8834a1..64996d3 100644
+index a8834a1..2a060d5 100644
 --- a/go/tools/builders/BUILD.bazel
 +++ b/go/tools/builders/BUILD.bazel
 @@ -32,11 +32,8 @@ go_test(
@@ -4346,7 +4346,7 @@ index a8834a1..64996d3 100644
      ],
      data = ["@go_sdk//:files"],
      rundir = ".",
-@@ -83,9 +77,76 @@ go_test(
+@@ -83,9 +77,77 @@ go_test(
      name = "env_test",
      size = "small",
      srcs = [
@@ -4403,11 +4403,12 @@ index a8834a1..64996d3 100644
 +    name = "orchestrion_test",
 +    size = "small",
 +    srcs = [
++        "cc_test.go",
 +        "orchestrion_cache_test.go",
 +        "orchestrion_mode_test.go",
 +        "orchestrion_skip_test.go",
-+        "orchestrion_test_helpers_test.go",
 +        "orchestrion_test.go",
++        "orchestrion_test_helpers_test.go",
 +        "stdlib_test.go",
 +        ":builder_srcs",
 +    ],
@@ -4425,7 +4426,7 @@ index a8834a1..64996d3 100644
      ],
  )
  
-@@ -119,6 +180,7 @@ filegroup(
+@@ -119,6 +181,7 @@ filegroup(
          "edit.go",
          "embedcfg.go",
          "env.go",
@@ -4433,7 +4434,7 @@ index a8834a1..64996d3 100644
          "filter.go",
          "filter_buildid.go",
          "flags.go",
-@@ -126,12 +188,20 @@ filegroup(
+@@ -126,12 +189,20 @@ filegroup(
          "generate_test_main.go",
          "importcfg.go",
          "link.go",
@@ -4454,11 +4455,18 @@ index a8834a1..64996d3 100644
      ] + select({
          "@bazel_tools//src/conditions:windows": ["path_windows.go"],
          "//conditions:default": ["path.go"],
-@@ -155,6 +225,14 @@ go_source(
+@@ -145,6 +216,7 @@ go_source(
+         "constants.go",
+         "env.go",
+         "flags.go",
++        "module_proxy.go",
+         "nogo_fix.go",
+         "nogo_goversions_go117.go",
+         "nogo_goversions_go118.go",
+@@ -155,6 +227,13 @@ go_source(
          "nogo_typeparams_go118.go",
          "nogo_version.go",
          "nolint.go",
-+        "module_proxy.go",
 +        "orchestrion.go",
 +        "orchestrion_cache.go",
 +        "orchestrion_mode.go",
@@ -4469,7 +4477,7 @@ index a8834a1..64996d3 100644
      ],
      # //go/tools/builders:nogo_srcs is considered a different target by
      # Bazel's visibility check than
-@@ -176,6 +254,14 @@ go_binary(
+@@ -176,6 +255,14 @@ go_binary(
          "env.go",
          "flags.go",
          "go_path.go",
@@ -4484,7 +4492,7 @@ index a8834a1..64996d3 100644
      ],
      visibility = ["//visibility:public"],
  )
-@@ -192,6 +278,7 @@ go_binary(
+@@ -192,6 +279,7 @@ go_binary(
          "env.go",
          "flags.go",
          "info.go",
@@ -4492,7 +4500,7 @@ index a8834a1..64996d3 100644
      ],
      visibility = ["//visibility:public"],
  )
-@@ -209,6 +296,7 @@ go_binary(
+@@ -209,6 +297,7 @@ go_binary(
      srcs = [
          "env.go",
          "flags.go",
@@ -4726,18 +4734,22 @@ index fdeda2d..76d69b6 100644
  	}
  }
 diff --git a/go/tools/builders/cc.go b/go/tools/builders/cc.go
-index 6f67914..5451c67 100644
+index 6f67914..f7ba8b1 100644
 --- a/go/tools/builders/cc.go
 +++ b/go/tools/builders/cc.go
-@@ -2,6 +2,7 @@ package main
+@@ -1,7 +1,11 @@
+ package main
  
  import (
++	"crypto/sha256"
++	"encoding/hex"
  	"errors"
 +	"fmt"
++	"io"
  	"os"
  	"os/exec"
  	"path/filepath"
-@@ -10,6 +11,70 @@ import (
+@@ -10,6 +14,70 @@ import (
  	"syscall"
  )
  
@@ -4808,7 +4820,7 @@ index 6f67914..5451c67 100644
  func cc(args []string) error {
  	cc := os.Getenv("GO_CC")
  	if cc == "" {
-@@ -20,7 +85,13 @@ func cc(args []string) error {
+@@ -20,7 +88,13 @@ func cc(args []string) error {
  		return errors.New("GO_CC_ROOT environment variable not set")
  	}
  
@@ -4823,6 +4835,135 @@ index 6f67914..5451c67 100644
  	normalized = append(normalized, args...)
  	transformArgs(normalized, cgoAbsEnvFlags, func(s string) string {
  		if strings.HasPrefix(s, cgoAbsPlaceholder) {
+@@ -37,6 +111,11 @@ func cc(args []string) error {
+ 		}
+ 		return s
+ 	})
++	// The go command derives this seed from its action ID. That ID contains the
++	// absolute -toolexec path, so otherwise identical stdlib actions running in
++	// different Bazel sandboxes make the CGO archive outputs differ. Recompute
++	// the seed from the compiler command after replacing ephemeral roots.
++	normalizeCgoRandomSeed(normalized, ccroot)
+ 	if runtime.GOOS == "windows" {
+ 		cmd := exec.Command(normalized[0], normalized[1:]...)
+ 		cmd.Stdout = os.Stdout
+@@ -46,3 +125,60 @@ func cc(args []string) error {
+ 		return syscall.Exec(normalized[0], normalized, os.Environ())
+ 	}
+ }
++
++const cgoRandomSeedPrefix = "-frandom-seed="
++
++func normalizeCgoRandomSeed(args []string, execRoot string) {
++	hasRandomSeed := false
++	for _, arg := range args {
++		if strings.HasPrefix(arg, cgoRandomSeedPrefix) {
++			hasRandomSeed = true
++			break
++		}
++	}
++	if !hasRandomSeed {
++		return
++	}
++
++	workRoot := goBuildWorkRoot(args)
++	digest := sha256.New()
++	for _, arg := range args {
++		if strings.HasPrefix(arg, cgoRandomSeedPrefix) {
++			continue
++		}
++		normalized := arg
++		if workRoot != "" {
++			normalized = strings.ReplaceAll(normalized, workRoot, "$WORK")
++		}
++		if execRoot != "" {
++			normalized = strings.ReplaceAll(normalized, execRoot, "$EXECROOT")
++		}
++		_, _ = io.WriteString(digest, normalized)
++		_, _ = digest.Write([]byte{0})
++	}
++	seed := cgoRandomSeedPrefix + hex.EncodeToString(digest.Sum(nil))
++	for i, arg := range args {
++		if strings.HasPrefix(arg, cgoRandomSeedPrefix) {
++			args[i] = seed
++		}
++	}
++}
++
++func goBuildWorkRoot(args []string) string {
++	for i := 0; i+1 < len(args); i++ {
++		if args[i] != "-o" && args[i] != "-c" {
++			continue
++		}
++		for dir := filepath.Dir(args[i+1]); ; dir = filepath.Dir(dir) {
++			base := filepath.Base(dir)
++			if strings.HasPrefix(base, "go-build") {
++				return dir
++			}
++			parent := filepath.Dir(dir)
++			if parent == dir {
++				break
++			}
++		}
++	}
++	return ""
++}
+diff --git a/go/tools/builders/cc_test.go b/go/tools/builders/cc_test.go
+new file mode 100644
+index 0000000..f570843
+--- /dev/null
++++ b/go/tools/builders/cc_test.go
+@@ -0,0 +1,50 @@
++package main
++
++import (
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestNormalizeCgoRandomSeedIgnoresEphemeralRoots(t *testing.T) {
++	firstExecRoot := filepath.Join("tmp", "sandbox", "1", "execroot", "workspace")
++	secondExecRoot := filepath.Join("tmp", "sandbox", "2", "execroot", "workspace")
++	firstWorkRoot := filepath.Join("tmp", "go-build111")
++	secondWorkRoot := filepath.Join("tmp", "go-build222")
++
++	first := []string{
++		"clang",
++		"-I" + filepath.Join(firstExecRoot, "external", "sysroot", "include"),
++		"-frandom-seed=volatile-first",
++		"-o", filepath.Join(firstWorkRoot, "b001", "_x001.o"),
++		"-c", filepath.Join(firstWorkRoot, "b001", "_cgo_export.c"),
++	}
++	second := []string{
++		"clang",
++		"-I" + filepath.Join(secondExecRoot, "external", "sysroot", "include"),
++		"-frandom-seed=volatile-second",
++		"-o", filepath.Join(secondWorkRoot, "b001", "_x001.o"),
++		"-c", filepath.Join(secondWorkRoot, "b001", "_cgo_export.c"),
++	}
++
++	normalizeCgoRandomSeed(first, firstExecRoot)
++	normalizeCgoRandomSeed(second, secondExecRoot)
++	if got, want := randomSeedArg(first), randomSeedArg(second); got == "" || got != want {
++		t.Fatalf("normalized seeds differ:\nfirst:  %s\nsecond: %s", got, want)
++	}
++
++	second = append(second, "-DPROFILE=changed")
++	normalizeCgoRandomSeed(second, secondExecRoot)
++	if randomSeedArg(first) == randomSeedArg(second) {
++		t.Fatal("meaningful compiler arguments must affect the normalized seed")
++	}
++}
++
++func randomSeedArg(args []string) string {
++	for _, arg := range args {
++		if strings.HasPrefix(arg, "-frandom-seed=") {
++			return arg
++		}
++	}
++	return ""
++}
 diff --git a/go/tools/builders/compilepkg.go b/go/tools/builders/compilepkg.go
 index a1782d4..5d3ae22 100644
 --- a/go/tools/builders/compilepkg.go

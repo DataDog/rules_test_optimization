@@ -542,6 +542,53 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
             self.assertEqual(6, len(outputs))
             self.assertFalse(any("library.a" in path for path in outputs))
 
+    def test_reproducibility_flags_mirror_cgo_debug_builds(self) -> None:
+        """The replay preserves the CGO, debug, LLD, and cache-sensitive inputs."""
+        common = self.mod.cgo_reproducibility_flags("darwin")
+        self.assertIn("--@io_bazel_rules_go//go/config:pure=False", common)
+        self.assertIn("--incompatible_strict_action_env", common)
+        self.assertIn("--experimental_platform_in_output_dir", common)
+        self.assertIn("--copt=-g", common)
+        self.assertNotIn("--linkopt=-Wl,--threads=4", common)
+
+        linux = self.mod.cgo_reproducibility_flags("linux")
+        self.assertIn("--repo_env=CC=clang", linux)
+        self.assertIn("--linkopt=-fuse-ld=lld", linux)
+        self.assertIn("--linkopt=-Wl,--build-id=md5", linux)
+        self.assertIn("--linkopt=-Wl,--threads=4", linux)
+
+    def test_reproducibility_aquery_requires_requested_cgo_mode(self) -> None:
+        """Each isolated replay must expose its requested CGO stdlib mode."""
+        environment = [
+            {"key": "CGO_ENABLED", "value": "1"},
+            {"key": "CGO_CFLAGS", "value": "-O2 -g"},
+            {
+                "key": "CGO_LDFLAGS",
+                "value": "-fuse-ld=lld -Wl,--build-id=md5 -Wl,--threads=4",
+            },
+        ]
+        plain = {
+            "mnemonic": "GoStdlib",
+            "arguments": ["builder", "stdlib"],
+            "environmentVariables": environment,
+        }
+        instrumented = {
+            **plain,
+            "arguments": ["builder", "stdlib", "-orchestrion", "orchestrion"],
+        }
+        self.mod.assert_cgo_reproducibility_actions(
+            {"actions": [plain]}, "linux", expected_instrumented=False
+        )
+        self.mod.assert_cgo_reproducibility_actions(
+            {"actions": [instrumented]}, "linux", expected_instrumented=True
+        )
+        with self.assertRaisesRegex(ValueError, "plain CGO-enabled"):
+            self.mod.assert_cgo_reproducibility_actions(
+                {"actions": [instrumented]},
+                "linux",
+                expected_instrumented=False,
+            )
+
     def test_action_output_digest_is_independent_of_its_root(self) -> None:
         """Logical paths, modes, and bytes determine a declared output digest."""
         with tempfile.TemporaryDirectory() as raw_tmp:

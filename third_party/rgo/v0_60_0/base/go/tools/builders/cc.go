@@ -1,8 +1,11 @@
 package main
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -108,6 +111,11 @@ func cc(args []string) error {
 		}
 		return s
 	})
+	// The go command derives this seed from its action ID. That ID contains the
+	// absolute -toolexec path, so otherwise identical stdlib actions running in
+	// different Bazel sandboxes make the CGO archive outputs differ. Recompute
+	// the seed from the compiler command after replacing ephemeral roots.
+	normalizeCgoRandomSeed(normalized, ccroot)
 	if runtime.GOOS == "windows" {
 		cmd := exec.Command(normalized[0], normalized[1:]...)
 		cmd.Stdout = os.Stdout
@@ -116,4 +124,61 @@ func cc(args []string) error {
 	} else {
 		return syscall.Exec(normalized[0], normalized, os.Environ())
 	}
+}
+
+const cgoRandomSeedPrefix = "-frandom-seed="
+
+func normalizeCgoRandomSeed(args []string, execRoot string) {
+	hasRandomSeed := false
+	for _, arg := range args {
+		if strings.HasPrefix(arg, cgoRandomSeedPrefix) {
+			hasRandomSeed = true
+			break
+		}
+	}
+	if !hasRandomSeed {
+		return
+	}
+
+	workRoot := goBuildWorkRoot(args)
+	digest := sha256.New()
+	for _, arg := range args {
+		if strings.HasPrefix(arg, cgoRandomSeedPrefix) {
+			continue
+		}
+		normalized := arg
+		if workRoot != "" {
+			normalized = strings.ReplaceAll(normalized, workRoot, "$WORK")
+		}
+		if execRoot != "" {
+			normalized = strings.ReplaceAll(normalized, execRoot, "$EXECROOT")
+		}
+		_, _ = io.WriteString(digest, normalized)
+		_, _ = digest.Write([]byte{0})
+	}
+	seed := cgoRandomSeedPrefix + hex.EncodeToString(digest.Sum(nil))
+	for i, arg := range args {
+		if strings.HasPrefix(arg, cgoRandomSeedPrefix) {
+			args[i] = seed
+		}
+	}
+}
+
+func goBuildWorkRoot(args []string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] != "-o" && args[i] != "-c" {
+			continue
+		}
+		for dir := filepath.Dir(args[i+1]); ; dir = filepath.Dir(dir) {
+			base := filepath.Base(dir)
+			if strings.HasPrefix(base, "go-build") {
+				return dir
+			}
+			parent := filepath.Dir(dir)
+			if parent == dir {
+				break
+			}
+		}
+	}
+	return ""
 }

@@ -174,6 +174,7 @@ def verify_workspace_runtime_functional_smoke(
         "--@io_bazel_rules_go//go/private/orchestrion:enabled=true",
         "--@io_bazel_rules_go//go/private/orchestrion:mode=test_optimization",
     ]
+    reproducibility_flags = cgo_reproducibility_flags(sys.platform)
     isolated_cache_flags = [
         "--disk_cache=",
         "--remote_cache=",
@@ -185,12 +186,12 @@ def verify_workspace_runtime_functional_smoke(
         ["build", *common_flags, "@go_sdk//:builder"],
         private_safe_patterns=private_safe_patterns,
     )
-    first_plain = run_stdlib_inventory(
+    first_plain = run_plain_reproducibility_snapshot(
         bazel,
         bazel_output_user_root,
         workspace,
         command="build",
-        mode_flags=[*common_flags, *isolated_cache_flags],
+        mode_flags=[*common_flags, *reproducibility_flags, *isolated_cache_flags],
         target="//app:hello_test",
         private_safe_patterns=private_safe_patterns,
     )
@@ -199,7 +200,12 @@ def verify_workspace_runtime_functional_smoke(
         bazel_output_user_root,
         workspace,
         command="test",
-        mode_flags=[*orchestrion_flags, *isolated_cache_flags, "--test_output=errors"],
+        mode_flags=[
+            *orchestrion_flags,
+            *reproducibility_flags,
+            *isolated_cache_flags,
+            "--test_output=errors",
+        ],
         target="//app:hello_test",
         private_safe_patterns=private_safe_patterns,
     )
@@ -207,18 +213,23 @@ def verify_workspace_runtime_functional_smoke(
         bazel,
         bazel_output_user_root,
         workspace,
-        ["aquery", *orchestrion_flags, 'mnemonic("GoCompilePkg", //app:hello_test)'],
+        [
+            "aquery",
+            *orchestrion_flags,
+            *reproducibility_flags,
+            'mnemonic("GoCompilePkg", //app:hello_test)',
+        ],
         private_safe_patterns=private_safe_patterns,
     )
     assert_aquery_contains(aquery.stdout, patch)
 
     replay_output_user_root = work_root / "bazel_output_user_root_replay"
-    second_plain = run_stdlib_inventory(
+    second_plain = run_plain_reproducibility_snapshot(
         bazel,
         replay_output_user_root,
         workspace,
         command="build",
-        mode_flags=[*common_flags, *isolated_cache_flags],
+        mode_flags=[*common_flags, *reproducibility_flags, *isolated_cache_flags],
         target="//app:hello_test",
         private_safe_patterns=private_safe_patterns,
     )
@@ -227,18 +238,51 @@ def verify_workspace_runtime_functional_smoke(
         replay_output_user_root,
         workspace,
         command="test",
-        mode_flags=[*orchestrion_flags, *isolated_cache_flags, "--test_output=errors"],
+        mode_flags=[
+            *orchestrion_flags,
+            *reproducibility_flags,
+            *isolated_cache_flags,
+            "--test_output=errors",
+        ],
         target="//app:hello_test",
         private_safe_patterns=private_safe_patterns,
     )
-    assert_plain_stdlib_cache(first_plain, patch)
-    assert_plain_stdlib_cache(second_plain, patch)
+    assert_plain_stdlib_cache(first_plain.stdlib_cache, patch)
+    assert_plain_stdlib_cache(second_plain.stdlib_cache, patch)
     assert_orchestrion_stdlib_cache(first_orchestrion.stdlib_cache, patch)
     assert_orchestrion_stdlib_cache(second_orchestrion.stdlib_cache, patch)
-    if first_plain != second_plain:
+    if first_plain.stdlib_cache != second_plain.stdlib_cache:
         raise ValueError(
             "plain stdlib cache inventories differ for %s: %s"
-            % (patch, describe_snapshot_difference(first_plain, second_plain))
+            % (
+                patch,
+                describe_snapshot_difference(
+                    first_plain.stdlib_cache,
+                    second_plain.stdlib_cache,
+                ),
+            )
+        )
+    if first_plain.action_keys != second_plain.action_keys:
+        raise ValueError(
+            "plain GoStdlib action keys differ for %s: %s"
+            % (
+                patch,
+                describe_mapping_difference(
+                    first_plain.action_keys,
+                    second_plain.action_keys,
+                ),
+            )
+        )
+    if first_plain.outputs != second_plain.outputs:
+        raise ValueError(
+            "plain GoStdlib outputs differ for %s: %s"
+            % (
+                patch,
+                describe_mapping_difference(
+                    first_plain.outputs,
+                    second_plain.outputs,
+                ),
+            )
         )
     if first_orchestrion.stdlib_cache != second_orchestrion.stdlib_cache:
         raise ValueError(
@@ -273,6 +317,32 @@ def verify_workspace_runtime_functional_smoke(
                 ),
             )
         )
+
+
+def cgo_reproducibility_flags(platform_name: str) -> list[str]:
+    """Mirror the CGO/debug conditions that exposed cross-worker drift."""
+    flags = [
+        "--compilation_mode=fastbuild",
+        "--incompatible_strict_action_env",
+        "--experimental_exec_configuration_distinguisher=diff_to_affected",
+        "--experimental_platform_in_output_dir",
+        "--@io_bazel_rules_go//go/config:pure=False",
+        "--strip=never",
+        "--copt=-O2",
+        "--copt=-fno-omit-frame-pointer",
+        "--copt=-g",
+        "--copt=-UNDEBUG",
+    ]
+    if platform_name.startswith("linux"):
+        flags.extend(
+            [
+                "--repo_env=CC=clang",
+                "--linkopt=-fuse-ld=lld",
+                "--linkopt=-Wl,--build-id=md5",
+                "--linkopt=-Wl,--threads=4",
+            ]
+        )
+    return flags
 
 
 def describe_snapshot_difference(
@@ -432,11 +502,65 @@ class StdlibCacheSnapshot:
 
 @dataclass(frozen=True)
 class ReproducibilitySnapshot:
-    """Cache contents, action keys, and outputs from one instrumented build."""
+    """Cache contents, action keys, and outputs from one isolated build."""
 
     stdlib_cache: StdlibCacheSnapshot
     action_keys: dict[str, str]
     outputs: dict[str, str]
+
+
+def run_plain_reproducibility_snapshot(
+    bazel: Path,
+    output_user_root: Path,
+    workspace: Path,
+    *,
+    command: str,
+    mode_flags: list[str],
+    target: str,
+    private_safe_patterns: list[str] | None = None,
+) -> ReproducibilitySnapshot:
+    """Build once and capture the ordinary CGO stdlib action and bytes."""
+    stdlib_cache = run_stdlib_inventory(
+        bazel,
+        output_user_root,
+        workspace,
+        command=command,
+        mode_flags=mode_flags,
+        target=target,
+        private_safe_patterns=private_safe_patterns,
+    )
+    aquery = run_bazel(
+        bazel,
+        output_user_root,
+        workspace,
+        [
+            "aquery",
+            *mode_flags,
+            "--output=jsonproto",
+            'mnemonic("GoStdlib", deps(%s))' % target,
+        ],
+        private_safe_patterns=private_safe_patterns,
+    )
+    aquery_data = json.loads(aquery.stdout)
+    assert_cgo_reproducibility_actions(
+        aquery_data,
+        sys.platform,
+        expected_instrumented=False,
+    )
+    action_keys, outputs = action_snapshot_from_aquery(
+        aquery_data,
+        workspace=workspace,
+        target_label=target,
+    )
+    if not action_keys:
+        raise ValueError(
+            "plain reproducibility aquery for %s is missing GoStdlib" % target
+        )
+    return ReproducibilitySnapshot(
+        stdlib_cache=stdlib_cache,
+        action_keys=action_keys,
+        outputs=outputs,
+    )
 
 
 def run_orchestrion_reproducibility_snapshot(
@@ -472,8 +596,14 @@ def run_orchestrion_reproducibility_snapshot(
         ],
         private_safe_patterns=private_safe_patterns,
     )
+    aquery_data = json.loads(aquery.stdout)
+    assert_cgo_reproducibility_actions(
+        aquery_data,
+        sys.platform,
+        expected_instrumented=True,
+    )
     action_keys, outputs = action_snapshot_from_aquery(
-        json.loads(aquery.stdout),
+        aquery_data,
         workspace=workspace,
         target_label=target,
     )
@@ -560,6 +690,41 @@ def action_snapshot_from_aquery(
                     raise ValueError("duplicate reproducibility output: %s" % identity)
                 outputs[identity] = digest
     return action_keys, outputs
+
+
+def assert_cgo_reproducibility_actions(
+    data: dict[str, object],
+    platform_name: str,
+    *,
+    expected_instrumented: bool,
+) -> None:
+    """Require the replay to cover the expected CGO/debug stdlib mode."""
+    matching = []
+    for action in data.get("actions", []):
+        if action.get("mnemonic") != "GoStdlib":
+            continue
+        arguments = [str(arg) for arg in action.get("arguments", [])]
+        environment = {
+            str(item.get("key", item.get("name", ""))): str(item.get("value", ""))
+            for item in action.get("environmentVariables", [])
+        }
+        if environment.get("CGO_ENABLED") != "1":
+            continue
+        if "-g" not in environment.get("CGO_CFLAGS", "").split():
+            continue
+        if platform_name.startswith("linux"):
+            ldflags = environment.get("CGO_LDFLAGS", "")
+            required = ["-fuse-ld=lld", "--build-id=md5", "--threads=4"]
+            if any(flag not in ldflags for flag in required):
+                continue
+        if ("-orchestrion" in arguments) == expected_instrumented:
+            matching.append(action)
+    if not matching:
+        mode = "instrumented" if expected_instrumented else "plain"
+        raise ValueError(
+            "reproducibility aquery must contain a %s CGO-enabled "
+            "GoStdlib action with debug flags" % mode
+        )
 
 
 def resolve_path_fragment(

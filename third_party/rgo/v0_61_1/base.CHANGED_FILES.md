@@ -12,9 +12,9 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `56`
+- Total changed paths: `57`
 - Modified files: `32`
-- Added files: `24`
+- Added files: `25`
 - Removed files: `0`
 
 ## Modified files
@@ -58,6 +58,7 @@ This file is generated. Do not edit by hand.
 - `go/private/orchestrion/BUILD`
 - `go/private/orchestrion/extensions.bzl`
 - `go/private/orchestrion/pin_files.bzl`
+- `go/tools/builders/cc_test.go`
 - `go/tools/builders/compilepkg_test.go`
 - `go/tools/builders/env_orchestrion.go`
 - `go/tools/builders/importcfg_test.go`
