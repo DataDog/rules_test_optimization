@@ -194,7 +194,7 @@ def verify_workspace_runtime_functional_smoke(
         target="//app:hello_test",
         private_safe_patterns=private_safe_patterns,
     )
-    first_orchestrion = run_stdlib_inventory(
+    first_orchestrion = run_orchestrion_reproducibility_snapshot(
         bazel,
         bazel_output_user_root,
         workspace,
@@ -222,7 +222,7 @@ def verify_workspace_runtime_functional_smoke(
         target="//app:hello_test",
         private_safe_patterns=private_safe_patterns,
     )
-    second_orchestrion = run_stdlib_inventory(
+    second_orchestrion = run_orchestrion_reproducibility_snapshot(
         bazel,
         replay_output_user_root,
         workspace,
@@ -233,19 +233,44 @@ def verify_workspace_runtime_functional_smoke(
     )
     assert_plain_stdlib_cache(first_plain, patch)
     assert_plain_stdlib_cache(second_plain, patch)
-    assert_orchestrion_stdlib_cache(first_orchestrion, patch)
-    assert_orchestrion_stdlib_cache(second_orchestrion, patch)
+    assert_orchestrion_stdlib_cache(first_orchestrion.stdlib_cache, patch)
+    assert_orchestrion_stdlib_cache(second_orchestrion.stdlib_cache, patch)
     if first_plain != second_plain:
         raise ValueError(
             "plain stdlib cache inventories differ for %s: %s"
             % (patch, describe_snapshot_difference(first_plain, second_plain))
         )
-    if first_orchestrion != second_orchestrion:
+    if first_orchestrion.stdlib_cache != second_orchestrion.stdlib_cache:
         raise ValueError(
             "Test Optimization stdlib cache inventories differ for %s: %s"
             % (
                 patch,
-                describe_snapshot_difference(first_orchestrion, second_orchestrion),
+                describe_snapshot_difference(
+                    first_orchestrion.stdlib_cache,
+                    second_orchestrion.stdlib_cache,
+                ),
+            )
+        )
+    if first_orchestrion.action_keys != second_orchestrion.action_keys:
+        raise ValueError(
+            "Test Optimization action keys differ for %s: %s"
+            % (
+                patch,
+                describe_mapping_difference(
+                    first_orchestrion.action_keys,
+                    second_orchestrion.action_keys,
+                ),
+            )
+        )
+    if first_orchestrion.outputs != second_orchestrion.outputs:
+        raise ValueError(
+            "Test Optimization action outputs differ for %s: %s"
+            % (
+                patch,
+                describe_mapping_difference(
+                    first_orchestrion.outputs,
+                    second_orchestrion.outputs,
+                ),
             )
         )
 
@@ -262,6 +287,19 @@ def describe_snapshot_difference(
             differences.append("%s=(%s != %s)" % (relative, first_value, second_value))
     if first.manifest != second.manifest:
         differences.append("manifest contents differ")
+    return ", ".join(differences) or "snapshot metadata differs"
+
+
+def describe_mapping_difference(first: dict[str, str], second: dict[str, str]) -> str:
+    """Describe a bounded set of differing action keys or output digests."""
+    differences = []
+    for key in sorted(set(first) | set(second)):
+        first_value = first.get(key, "missing")
+        second_value = second.get(key, "missing")
+        if first_value != second_value:
+            differences.append("%s=(%s != %s)" % (key, first_value, second_value))
+    if len(differences) > 20:
+        differences = [*differences[:20], "... and %d more" % (len(differences) - 20)]
     return ", ".join(differences) or "snapshot metadata differs"
 
 
@@ -390,6 +428,232 @@ class StdlibCacheSnapshot:
 
     inventory: dict[str, str]
     manifest: str | None
+
+
+@dataclass(frozen=True)
+class ReproducibilitySnapshot:
+    """Cache contents, action keys, and outputs from one instrumented build."""
+
+    stdlib_cache: StdlibCacheSnapshot
+    action_keys: dict[str, str]
+    outputs: dict[str, str]
+
+
+def run_orchestrion_reproducibility_snapshot(
+    bazel: Path,
+    output_user_root: Path,
+    workspace: Path,
+    *,
+    command: str,
+    mode_flags: list[str],
+    target: str,
+    private_safe_patterns: list[str] | None = None,
+) -> ReproducibilitySnapshot:
+    """Build once and capture the cache-critical Test Optimization actions."""
+    stdlib_cache = run_stdlib_inventory(
+        bazel,
+        output_user_root,
+        workspace,
+        command=command,
+        mode_flags=mode_flags,
+        target=target,
+        private_safe_patterns=private_safe_patterns,
+    )
+    aquery = run_bazel(
+        bazel,
+        output_user_root,
+        workspace,
+        [
+            "aquery",
+            *mode_flags,
+            "--output=jsonproto",
+            'mnemonic("(GoStdlib|GoSyntheticTestmainHelpers|GoCompilePkg|GoLink)", deps(%s))'
+            % target,
+        ],
+        private_safe_patterns=private_safe_patterns,
+    )
+    action_keys, outputs = action_snapshot_from_aquery(
+        json.loads(aquery.stdout),
+        workspace=workspace,
+        target_label=target,
+    )
+    required = {
+        "GoCompilePkg",
+        "GoLink",
+        "GoStdlib",
+        "GoSyntheticTestmainHelpers",
+    }
+    found = {identity.split(" ", 1)[0] for identity in action_keys}
+    missing = sorted(required - found)
+    if missing:
+        raise ValueError(
+            "reproducibility aquery for %s is missing actions: %s"
+            % (target, ", ".join(missing))
+        )
+    return ReproducibilitySnapshot(
+        stdlib_cache=stdlib_cache,
+        action_keys=action_keys,
+        outputs=outputs,
+    )
+
+
+def action_snapshot_from_aquery(
+    data: dict[str, object],
+    *,
+    workspace: Path,
+    target_label: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return stable identities, action keys, and output digests from aquery JSON."""
+    path_fragments = {
+        int(fragment["id"]): fragment
+        for fragment in data.get("pathFragments", [])
+    }
+    artifacts = {
+        int(artifact["id"]): resolve_path_fragment(
+            int(artifact["pathFragmentId"]), path_fragments
+        )
+        for artifact in data.get("artifacts", [])
+    }
+    targets = {
+        int(target["id"]): str(target.get("label", ""))
+        for target in data.get("targets", [])
+    }
+    configurations = {
+        int(configuration["id"]): str(configuration.get("mnemonic", ""))
+        for configuration in data.get("configuration", [])
+    }
+
+    action_keys: dict[str, str] = {}
+    outputs: dict[str, str] = {}
+    for action in data.get("actions", []):
+        mnemonic = str(action.get("mnemonic", ""))
+        output_paths = sorted(
+            artifacts[int(output_id)] for output_id in action.get("outputIds", [])
+        )
+        action_target = targets.get(int(action.get("targetId", 0)), "")
+        if not is_reproducibility_action(
+            mnemonic=mnemonic,
+            target=action_target,
+            outputs=output_paths,
+            requested_target=target_label,
+        ):
+            continue
+
+        configuration = configurations.get(int(action.get("configurationId", 0)), "")
+        identity = "%s %s [%s] -> %s" % (
+            mnemonic,
+            action_target,
+            configuration,
+            ",".join(output_paths),
+        )
+        if identity in action_keys:
+            raise ValueError("duplicate reproducibility action identity: %s" % identity)
+        action_keys[identity] = str(action.get("actionKey", ""))
+        if not action_keys[identity]:
+            raise ValueError("reproducibility action has no action key: %s" % identity)
+        for output_path in output_paths:
+            for relative, digest in canonical_artifact_inventory(
+                workspace / output_path
+            ).items():
+                identity = output_path if not relative else output_path + "/" + relative
+                if identity in outputs:
+                    raise ValueError("duplicate reproducibility output: %s" % identity)
+                outputs[identity] = digest
+    return action_keys, outputs
+
+
+def resolve_path_fragment(
+    fragment_id: int, fragments: dict[int, dict[str, object]]
+) -> str:
+    """Resolve one aquery path-fragment chain without host path assumptions."""
+    labels = []
+    seen = set()
+    while fragment_id:
+        if fragment_id in seen:
+            raise ValueError("cycle in aquery path fragments at id %d" % fragment_id)
+        seen.add(fragment_id)
+        fragment = fragments.get(fragment_id)
+        if fragment is None:
+            raise ValueError("unknown aquery path fragment id %d" % fragment_id)
+        labels.append(str(fragment.get("label", "")))
+        fragment_id = int(fragment.get("parentId", 0))
+    return PurePosixPath(*reversed(labels)).as_posix()
+
+
+def is_reproducibility_action(
+    *,
+    mnemonic: str,
+    target: str,
+    outputs: list[str],
+    requested_target: str,
+) -> bool:
+    """Select the four actions whose stability controls instrumented test caching."""
+    if mnemonic in {"GoStdlib", "GoSyntheticTestmainHelpers"}:
+        return True
+    if target != requested_target:
+        return False
+    if mnemonic == "GoCompilePkg":
+        return any("~testmain.a" in output for output in outputs)
+    return mnemonic == "GoLink"
+
+
+def canonical_artifact_digest(path: Path) -> str:
+    """Hash a declared file, symlink, or TreeArtifact including logical paths."""
+    digest = hashlib.sha256()
+    if path.is_symlink():
+        digest.update(b"symlink\0")
+        digest.update(os.readlink(path).encode("utf-8"))
+        return digest.hexdigest()
+    if path.is_file():
+        digest.update(b"file\0")
+        digest.update(b"executable\0" if path.stat().st_mode & 0o111 else b"regular\0")
+        update_digest_from_file(digest, path)
+        return digest.hexdigest()
+    if not path.is_dir():
+        raise ValueError("declared action output does not exist: %s" % path)
+
+    digest.update(b"tree\0")
+    for child in sorted(path.rglob("*")):
+        relative = child.relative_to(path).as_posix().encode("utf-8")
+        digest.update(relative)
+        digest.update(b"\0")
+        if child.is_symlink():
+            digest.update(b"symlink\0")
+            digest.update(os.readlink(child).encode("utf-8"))
+        elif child.is_dir():
+            digest.update(b"directory\0")
+        elif child.is_file():
+            digest.update(b"file\0")
+            digest.update(
+                b"executable\0" if child.stat().st_mode & 0o111 else b"regular\0"
+            )
+            update_digest_from_file(digest, child)
+        else:
+            raise ValueError("unsupported action output entry: %s" % child)
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def canonical_artifact_inventory(path: Path) -> dict[str, str]:
+    """Expand a declared tree so failures identify the exact unstable entry."""
+    if path.is_symlink() or not path.is_dir():
+        return {"": canonical_artifact_digest(path)}
+
+    inventory = {"": "tree"}
+    for child in sorted(path.rglob("*")):
+        relative = child.relative_to(path).as_posix()
+        if child.is_dir() and not child.is_symlink():
+            inventory[relative] = "directory"
+        else:
+            inventory[relative] = canonical_artifact_digest(child)
+    return inventory
+
+
+def update_digest_from_file(digest, path: Path) -> None:
+    """Hash a file without retaining large archives in memory."""
+    with path.open("rb") as handle:
+        while chunk := handle.read(1024 * 1024):
+            digest.update(chunk)
 
 
 def run_stdlib_inventory(

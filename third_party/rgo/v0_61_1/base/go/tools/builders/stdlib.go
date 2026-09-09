@@ -270,6 +270,11 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 		}
 	}
 	installArgs := goenv.goCmd("install", "-toolexec", toolexec)
+	if *orchestrion != "" {
+		// Helper module exports use Go's reproducible build mode. Compile the
+		// woven stdlib with the same flag so imported package fingerprints match.
+		installArgs = append(installArgs, "-trimpath")
+	}
 	if len(build.Default.BuildTags) > 0 {
 		installArgs = append(installArgs, "-tags", strings.Join(build.Default.BuildTags, ","))
 	}

@@ -210,7 +210,7 @@ func publishSyntheticTestmainPackagefiles(data []byte, outputDir string) ([]byte
 			}
 			published[publishedPath] = true
 		}
-		lines[index] = "packagefile " + packagePath + "=" + publishedPath
+		lines[index] = "packagefile " + packagePath + "=" + execrootRelativePath(publishedPath)
 	}
 	return []byte(strings.Join(lines, "\n")), nil
 }
@@ -768,7 +768,7 @@ func compileArchive(
 		}
 		for i, sSrc := range srcs.sSrcs {
 			obj := filepath.Join(workDir, fmt.Sprintf("s%d.o", i))
-			if err := asmFile(goenv, sSrc.filename, packagePath, asmFlags, obj); err != nil {
+			if err := asmFile(goenv, sSrc.filename, packagePath, asmFlags, "", obj); err != nil {
 				return err
 			}
 			objFiles = append(objFiles, obj)
@@ -1351,7 +1351,7 @@ func modulePackageCommandEnv(goenv *env, exportRoot string) ([]string, error) {
 	env = setEnv(env, "GIT_CONFIG_GLOBAL", os.DevNull)
 	env = setEnv(env, "GIT_CONFIG_NOSYSTEM", "1")
 	env = setEnv(env, "GIT_TERMINAL_PROMPT", "0")
-	env = ensureGoFlagsModMode(env)
+	env = ensureSyntheticModuleGoFlags(env)
 	if getEnv(env, "HOME") == "" {
 		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
 		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -1921,13 +1921,17 @@ func writeSharedSyntheticTestmainHelperBundle(outputDir string, compiled map[str
 		if published := publishedPaths[source]; published != "" {
 			return published, nil
 		}
-		digest, err := fullDigestFile(source)
+		data, err := os.ReadFile(source)
 		if err != nil {
-			return "", fmt.Errorf("digest shared synthetic helper archive %s: %w", source, err)
+			return "", fmt.Errorf("read shared synthetic helper archive %s: %w", source, err)
 		}
+		if err := normalizePublishedGoArchiveBuildID(data); err != nil {
+			return "", fmt.Errorf("normalize shared synthetic helper archive %s: %w", source, err)
+		}
+		digest := fmt.Sprintf("%x", sha256.Sum256(data))
 		destination := filepath.Join(outputDir, "archives", digest+".a")
 		if _, err := os.Stat(destination); errors.Is(err, os.ErrNotExist) {
-			if err := copyArchiveFile(source, destination); err != nil {
+			if err := os.WriteFile(destination, data, 0o644); err != nil {
 				return "", fmt.Errorf("publish shared synthetic helper archive %s: %w", source, err)
 			}
 		} else if err != nil {
@@ -1966,6 +1970,49 @@ func writeSharedSyntheticTestmainHelperBundle(outputDir string, compiled map[str
 	manifest.OrchestrionMode = effectiveOrchestrionMode(orchestrionMode)
 	manifest.ExportRoot = ""
 	return writeJSONAtomically(filepath.Join(outputDir, cacheManifestFileName), manifest)
+}
+
+// normalizePublishedGoArchiveBuildID removes execroot-specific action IDs from
+// a copied helper archive. The Go cache keeps the original archive and build ID;
+// only the declared Bazel output receives the stable content/content form.
+func normalizePublishedGoArchiveBuildID(data []byte) error {
+	if !bytes.HasPrefix(data, []byte("!<arch>\n")) {
+		return nil
+	}
+	header := data
+	if len(header) > 1024 {
+		header = header[:1024]
+	}
+	const marker = "\nbuild id \""
+	start := bytes.Index(header, []byte(marker))
+	if start < 0 {
+		return nil
+	}
+	start += len(marker)
+	end := bytes.IndexByte(header[start:], '"')
+	if end < 0 {
+		return errors.New("unterminated Go archive build ID")
+	}
+	end += start
+	buildID := string(header[start:end])
+	if buildID == "" {
+		return nil
+	}
+	parts := strings.Split(buildID, "/")
+	if len(parts) != 2 || len(parts[0]) != len(parts[1]) {
+		return fmt.Errorf("unexpected Go archive build ID %q", buildID)
+	}
+	stableBuildID := parts[1] + "/" + parts[1]
+	for offset := 0; ; {
+		index := bytes.Index(data[offset:], []byte(buildID))
+		if index < 0 {
+			break
+		}
+		index += offset
+		copy(data[index:index+len(buildID)], stableBuildID)
+		offset = index + len(buildID)
+	}
+	return nil
 }
 
 // reusableSharedSyntheticTestmainHelperBundle returns the declared shared
@@ -2356,7 +2403,7 @@ func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir,
 	stem := fmt.Sprintf("%x", sha256.Sum256([]byte(meta.ImportPath)))[:16]
 	outLinkobjPath := filepath.Join(archiveDir, stem+".a")
 	outInterfacePath := filepath.Join(archiveDir, stem+".iface.a")
-	trimPath, err := createTrimPath()
+	trimPath, err := syntheticSourceTrimPath(meta.Dir, meta.ImportPath)
 	if err != nil {
 		return "", "", fmt.Errorf("create trimpath for %s: %w", pkg, err)
 	}
@@ -2399,7 +2446,7 @@ func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir,
 		}
 		for i, sSrc := range filteredSrcs.sSrcs {
 			obj := filepath.Join(packageWorkDir, fmt.Sprintf("s%d.o", i))
-			if err := asmFile(goenv, sSrc.filename, meta.ImportPath, asmFlags, obj); err != nil {
+			if err := asmFile(goenv, sSrc.filename, meta.ImportPath, asmFlags, trimPath, obj); err != nil {
 				return "", "", fmt.Errorf("assemble synthetic helper %s: %w", pkg, err)
 			}
 			objFiles = append(objFiles, obj)
@@ -2425,6 +2472,21 @@ func compileSyntheticTestmainSourcePackage(goenv *env, pack, workDir, moduleDir,
 	}
 	compiled[pkg] = result
 	return result.compilePath, result.linkPath, nil
+}
+
+// syntheticSourceTrimPath gives module sources a stable logical prefix. The
+// physical GOMODCACHE belongs to the action sandbox and must not reach archives
+// that Bazel may publish to a shared cache.
+func syntheticSourceTrimPath(sourceDir, importPath string) (string, error) {
+	trimPath, err := createTrimPath()
+	if err != nil {
+		return "", err
+	}
+	sourceDir = strings.TrimSpace(sourceDir)
+	if sourceDir == "" {
+		return trimPath, nil
+	}
+	return trimPath + ";" + abs(sourceDir) + "=>" + strings.TrimSpace(importPath), nil
 }
 
 func shouldSkipOrchestrionForImportPath(importPath string) bool {

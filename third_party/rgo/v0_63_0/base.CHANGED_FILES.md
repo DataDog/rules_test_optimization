@@ -12,8 +12,8 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `54`
-- Modified files: `30`
+- Total changed paths: `55`
+- Modified files: `31`
 - Added files: `24`
 - Removed files: `0`
 
@@ -36,6 +36,7 @@ This file is generated. Do not edit by hand.
 - `go/private/rules/transition.bzl`
 - `go/tools/builders/BUILD.bazel`
 - `go/tools/builders/ar.go`
+- `go/tools/builders/asm.go`
 - `go/tools/builders/builder.go`
 - `go/tools/builders/cc.go`
 - `go/tools/builders/compilepkg.go`

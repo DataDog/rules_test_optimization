@@ -87,16 +87,19 @@ func buildSymabisFile(goenv *env, packagePath string, sFiles, hFiles []fileInfo,
 	return symabisName, err
 }
 
-func asmFile(goenv *env, srcPath, packagePath string, asmFlags []string, outPath string) error {
+func asmFile(goenv *env, srcPath, packagePath string, asmFlags []string, trimPath, outPath string) error {
 	args := goenv.goTool("asm")
 	args = append(args, asmFlags...)
 	if packagePath != "" {
 		args = append(args, "-p", packagePath)
 	}
 	args = append(args, ASM_DEFINES...)
-	args = append(args, "-trimpath", ".")
+	if trimPath == "" {
+		trimPath = abs(".")
+	}
+	args = append(args, "-trimpath", trimPath)
 	args = append(args, "-o", outPath)
 	args = append(args, "--", srcPath)
-	absArgs(args, []string{"-I", "-o", "-trimpath"})
+	absArgs(args, []string{"-I", "-o"})
 	return goenv.runCommand(args)
 }

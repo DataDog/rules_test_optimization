@@ -228,7 +228,10 @@ This product includes software developed at Datadog
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)
-  - global fork drift checks plus one consumer patch-profile shard per supported `rules_go` upstream
+  - global fork drift checks plus x86-64 and ARM64 consumer patch-profile shards
+    for every supported `rules_go` upstream; each profile shard rebuilds the
+    cache-critical Test Optimization actions twice from isolated output roots
+    and requires identical action keys and output bytes
   - shell scripts, PowerShell, Buildifier, gofmt, schema sync checks, fixture JSON checks, and Python tooling tests
 - Workflow dependency pinning:
   - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.

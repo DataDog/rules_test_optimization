@@ -450,6 +450,113 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                 "runtime/internal/sys=cc/runtime-internal-d\n",
             )
 
+    def test_action_snapshot_covers_cache_critical_instrumented_actions(self) -> None:
+        """The replay snapshot covers stdlib, helpers, testmain compile, and link."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            workspace = Path(raw_tmp)
+            paths = {
+                1: {"id": 1, "label": "bazel-out"},
+                2: {"id": 2, "label": "arm64-fastbuild", "parentId": 1},
+                3: {"id": 3, "label": "bin", "parentId": 2},
+                4: {"id": 4, "label": "external", "parentId": 3},
+                5: {"id": 5, "label": "io_bazel_rules_go", "parentId": 4},
+                6: {"id": 6, "label": "stdlib_", "parentId": 5},
+                7: {"id": 7, "label": "synthetic_helpers", "parentId": 5},
+                8: {"id": 8, "label": "app", "parentId": 3},
+                9: {"id": 9, "label": "hello_test~testmain.a", "parentId": 8},
+                10: {"id": 10, "label": "hello_test", "parentId": 8},
+                11: {"id": 11, "label": "library.a", "parentId": 8},
+            }
+            artifacts = [
+                {"id": 101, "pathFragmentId": 6},
+                {"id": 102, "pathFragmentId": 7},
+                {"id": 103, "pathFragmentId": 9},
+                {"id": 104, "pathFragmentId": 10},
+                {"id": 105, "pathFragmentId": 11},
+            ]
+            for relative, content in {
+                "bazel-out/arm64-fastbuild/bin/external/io_bazel_rules_go/stdlib_/fmt.a": "stdlib",
+                "bazel-out/arm64-fastbuild/bin/external/io_bazel_rules_go/synthetic_helpers/testing.a": "helpers",
+                "bazel-out/arm64-fastbuild/bin/app/hello_test~testmain.a": "testmain",
+                "bazel-out/arm64-fastbuild/bin/app/hello_test": "binary",
+                "bazel-out/arm64-fastbuild/bin/app/library.a": "library",
+            }.items():
+                _write(workspace / relative, content)
+
+            action_keys, outputs = self.mod.action_snapshot_from_aquery(
+                {
+                    "pathFragments": list(paths.values()),
+                    "artifacts": artifacts,
+                    "targets": [
+                        {"id": 1, "label": "@@io_bazel_rules_go//:stdlib"},
+                        {"id": 2, "label": "//app:hello_test"},
+                    ],
+                    "configuration": [{"id": 1, "mnemonic": "arm64-fastbuild"}],
+                    "actions": [
+                        {
+                            "mnemonic": "GoStdlib",
+                            "targetId": 1,
+                            "configurationId": 1,
+                            "outputIds": [101],
+                            "actionKey": "stdlib-key",
+                        },
+                        {
+                            "mnemonic": "GoSyntheticTestmainHelpers",
+                            "targetId": 1,
+                            "configurationId": 1,
+                            "outputIds": [102],
+                            "actionKey": "helpers-key",
+                        },
+                        {
+                            "mnemonic": "GoCompilePkg",
+                            "targetId": 2,
+                            "configurationId": 1,
+                            "outputIds": [103],
+                            "actionKey": "testmain-key",
+                        },
+                        {
+                            "mnemonic": "GoCompilePkg",
+                            "targetId": 2,
+                            "configurationId": 1,
+                            "outputIds": [105],
+                            "actionKey": "ordinary-library-key",
+                        },
+                        {
+                            "mnemonic": "GoLink",
+                            "targetId": 2,
+                            "configurationId": 1,
+                            "outputIds": [104],
+                            "actionKey": "link-key",
+                        },
+                    ],
+                },
+                workspace=workspace,
+                target_label="//app:hello_test",
+            )
+
+            self.assertEqual(4, len(action_keys))
+            self.assertEqual(
+                {"GoCompilePkg", "GoLink", "GoStdlib", "GoSyntheticTestmainHelpers"},
+                {identity.split(" ", 1)[0] for identity in action_keys},
+            )
+            self.assertEqual(6, len(outputs))
+            self.assertFalse(any("library.a" in path for path in outputs))
+
+    def test_action_output_digest_is_independent_of_its_root(self) -> None:
+        """Logical paths, modes, and bytes determine a declared output digest."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            first = root / "first"
+            second = root / "second"
+            _write(first / "nested" / "archive.a", "same bytes")
+            _write(second / "nested" / "archive.a", "same bytes")
+
+            first_digest = self.mod.canonical_artifact_digest(first)
+            self.assertEqual(first_digest, self.mod.canonical_artifact_digest(second))
+
+            _write(second / "nested" / "archive.a", "different bytes")
+            self.assertNotEqual(first_digest, self.mod.canonical_artifact_digest(second))
+
     def test_stdlib_cache_snapshot_rejects_unmanifested_entries(self) -> None:
         """Action indexes and other unmanifested files fail verification."""
         with tempfile.TemporaryDirectory() as raw_tmp:

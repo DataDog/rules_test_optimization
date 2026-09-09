@@ -140,6 +140,51 @@ func TestSharedSyntheticTestmainHelperBundleRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSharedSyntheticTestmainHelperBundleNormalizesGoBuildIDs(t *testing.T) {
+	const contentID = "cccccccccccccccccccc"
+	archive := func(actionID string) []byte {
+		buildID := actionID + "/" + contentID
+		return []byte("!<arch>\narchive header\ngo object test\nbuild id \"" + buildID + "\"\npayload build id \"" + buildID + "\"\n")
+	}
+
+	sourceDir := t.TempDir()
+	firstSource := filepath.Join(sourceDir, "first.a")
+	secondSource := filepath.Join(sourceDir, "second.a")
+	if err := os.WriteFile(firstSource, archive("aaaaaaaaaaaaaaaaaaaa"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secondSource, archive("bbbbbbbbbbbbbbbbbbbb"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bundleDir := filepath.Join(t.TempDir(), "shared-helpers")
+	compiled := map[string]compiledModuleArchive{
+		"example.com/first":  {compilePath: firstSource, linkPath: firstSource},
+		"example.com/second": {compilePath: secondSource, linkPath: secondSource},
+	}
+	if err := writeSharedSyntheticTestmainHelperBundle(bundleDir, compiled, orchestrionModeTestOptimization); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := readSyntheticTestmainHelperManifest(bundleDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPath := manifest.Packages["example.com/first"].CompilePath
+	secondPath := manifest.Packages["example.com/second"].CompilePath
+	if firstPath != secondPath {
+		t.Fatalf("equivalent archives published at different paths: %q != %q", firstPath, secondPath)
+	}
+	published, err := os.ReadFile(filepath.Join(bundleDir, firstPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBuildID := contentID + "/" + contentID
+	if got := strings.Count(string(published), wantBuildID); got != 2 {
+		t.Fatalf("normalized build ID occurs %d times, want 2", got)
+	}
+}
+
 func TestSharedSyntheticTestmainHelperBundleFallsBackOnTargetOverlap(t *testing.T) {
 	rootPackage := syntheticTestmainRootPackagesTestOptimization[0].packagePath
 	sourceDir := t.TempDir()
@@ -536,6 +581,39 @@ func TestSyntheticTestmainHelperModuleCacheRootIsStable(t *testing.T) {
 	want := filepath.Join(cacheRoot, "synthetic-testmain-helper-module-cache", stableDigestParts("configured_versions=abc", "sdk=def"))
 	if got != want {
 		t.Fatalf("syntheticTestmainHelperModuleCacheRoot = %q, want %q", got, want)
+	}
+}
+
+func TestSyntheticModuleGoFlagsRequireTrimpath(t *testing.T) {
+	tests := []struct {
+		name  string
+		flags string
+		want  string
+	}{
+		{name: "empty", want: "-mod=mod -trimpath"},
+		{name: "preserve module mode", flags: "-mod=readonly", want: "-mod=readonly -trimpath"},
+		{name: "preserve trimpath", flags: "-trimpath -mod=vendor", want: "-trimpath -mod=vendor"},
+		{name: "override disabled trimpath", flags: "-trimpath=false", want: "-mod=mod -trimpath=false -trimpath"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			env := ensureSyntheticModuleGoFlags([]string{"GOFLAGS=" + test.flags})
+			if got := getEnv(env, "GOFLAGS"); got != test.want {
+				t.Fatalf("GOFLAGS = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestSyntheticSourceTrimPathReplacesModuleCacheRoot(t *testing.T) {
+	sourceDir := filepath.Join(t.TempDir(), "pkg", "mod", "example.com", "helper@v1.0.0")
+	got, err := syntheticSourceTrimPath(sourceDir, "example.com/helper")
+	if err != nil {
+		t.Fatalf("syntheticSourceTrimPath error: %v", err)
+	}
+	want := abs(sourceDir) + "=>example.com/helper"
+	if !strings.Contains(got, want) {
+		t.Fatalf("syntheticSourceTrimPath = %q, want mapping %q", got, want)
 	}
 }
 

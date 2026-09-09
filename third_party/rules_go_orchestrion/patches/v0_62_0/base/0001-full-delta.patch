@@ -4644,6 +4644,35 @@ index d2de6b9..ffbf778 100644
 +	}
 +	return "."
 +}
+diff --git a/go/tools/builders/asm.go b/go/tools/builders/asm.go
+index 6704be7..5e7d340 100644
+--- a/go/tools/builders/asm.go
++++ b/go/tools/builders/asm.go
+@@ -111,7 +111,7 @@ func buildSymabisFile(goenv *env, packagePath string, sFiles, hFiles []fileInfo,
+ 	return symabisName, err
+ }
+ 
+-func asmFile(goenv *env, srcPath, packagePath string, asmFlags []string, outPath string) error {
++func asmFile(goenv *env, srcPath, packagePath string, asmFlags []string, trimPath, outPath string) error {
+ 	args := goenv.goTool("asm")
+ 	args = append(args, asmFlags...)
+ 	// The package path has to be specified as of Go 1.19 or the resulting
+@@ -121,10 +121,13 @@ func asmFile(goenv *env, srcPath, packagePath string, asmFlags []string, outPath
+ 		args = append(args, "-p", packagePath)
+ 	}
+ 	args = append(args, ASM_DEFINES...)
+-	args = append(args, "-trimpath", ".")
++	if trimPath == "" {
++		trimPath = abs(".")
++	}
++	args = append(args, "-trimpath", trimPath)
+ 	args = append(args, "-o", outPath)
+ 	args = append(args, "--", srcPath)
+-	absArgs(args, []string{"-I", "-o", "-trimpath"})
++	absArgs(args, []string{"-I", "-o"})
+ 	return goenv.runCommand(args)
+ }
+ 
 diff --git a/go/tools/builders/builder.go b/go/tools/builders/builder.go
 index fdeda2d..76d69b6 100644
 --- a/go/tools/builders/builder.go
@@ -4795,7 +4824,7 @@ index 6f67914..5451c67 100644
  	transformArgs(normalized, cgoAbsEnvFlags, func(s string) string {
  		if strings.HasPrefix(s, cgoAbsPlaceholder) {
 diff --git a/go/tools/builders/compilepkg.go b/go/tools/builders/compilepkg.go
-index a1782d4..8004cd0 100644
+index a1782d4..5d3ae22 100644
 --- a/go/tools/builders/compilepkg.go
 +++ b/go/tools/builders/compilepkg.go
 @@ -17,17 +17,252 @@
@@ -4995,7 +5024,7 @@ index a1782d4..8004cd0 100644
 +			}
 +			published[publishedPath] = true
 +		}
-+		lines[index] = "packagefile " + packagePath + "=" + publishedPath
++		lines[index] = "packagefile " + packagePath + "=" + execrootRelativePath(publishedPath)
 +	}
 +	return []byte(strings.Join(lines, "\n")), nil
 +}
@@ -5247,7 +5276,16 @@ index a1782d4..8004cd0 100644
  
  	// Compile the .s files with Go's assembler, if this is not a cgo package.
  	// Cgo is assembled by cc above.
-@@ -487,100 +791,1895 @@ func compileArchive(
+@@ -464,7 +768,7 @@ func compileArchive(
+ 		}
+ 		for i, sSrc := range srcs.sSrcs {
+ 			obj := filepath.Join(workDir, fmt.Sprintf("s%d.o", i))
+-			if err := asmFile(goenv, sSrc.filename, packagePath, asmFlags, obj); err != nil {
++			if err := asmFile(goenv, sSrc.filename, packagePath, asmFlags, "", obj); err != nil {
+ 				return err
+ 			}
+ 			objFiles = append(objFiles, obj)
+@@ -487,100 +791,1957 @@ func compileArchive(
  	return nil
  }
  
@@ -5879,7 +5917,7 @@ index a1782d4..8004cd0 100644
 +	env = setEnv(env, "GIT_CONFIG_GLOBAL", os.DevNull)
 +	env = setEnv(env, "GIT_CONFIG_NOSYSTEM", "1")
 +	env = setEnv(env, "GIT_TERMINAL_PROMPT", "0")
-+	env = ensureGoFlagsModMode(env)
++	env = ensureSyntheticModuleGoFlags(env)
 +	if getEnv(env, "HOME") == "" {
 +		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
 +		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -6449,13 +6487,17 @@ index a1782d4..8004cd0 100644
 +		if published := publishedPaths[source]; published != "" {
 +			return published, nil
 +		}
-+		digest, err := fullDigestFile(source)
++		data, err := os.ReadFile(source)
 +		if err != nil {
-+			return "", fmt.Errorf("digest shared synthetic helper archive %s: %w", source, err)
++			return "", fmt.Errorf("read shared synthetic helper archive %s: %w", source, err)
 +		}
++		if err := normalizePublishedGoArchiveBuildID(data); err != nil {
++			return "", fmt.Errorf("normalize shared synthetic helper archive %s: %w", source, err)
++		}
++		digest := fmt.Sprintf("%x", sha256.Sum256(data))
 +		destination := filepath.Join(outputDir, "archives", digest+".a")
 +		if _, err := os.Stat(destination); errors.Is(err, os.ErrNotExist) {
-+			if err := copyArchiveFile(source, destination); err != nil {
++			if err := os.WriteFile(destination, data, 0o644); err != nil {
 +				return "", fmt.Errorf("publish shared synthetic helper archive %s: %w", source, err)
 +			}
 +		} else if err != nil {
@@ -6494,6 +6536,49 @@ index a1782d4..8004cd0 100644
 +	manifest.OrchestrionMode = effectiveOrchestrionMode(orchestrionMode)
 +	manifest.ExportRoot = ""
 +	return writeJSONAtomically(filepath.Join(outputDir, cacheManifestFileName), manifest)
++}
++
++// normalizePublishedGoArchiveBuildID removes execroot-specific action IDs from
++// a copied helper archive. The Go cache keeps the original archive and build ID;
++// only the declared Bazel output receives the stable content/content form.
++func normalizePublishedGoArchiveBuildID(data []byte) error {
++	if !bytes.HasPrefix(data, []byte("!<arch>\n")) {
++		return nil
++	}
++	header := data
++	if len(header) > 1024 {
++		header = header[:1024]
++	}
++	const marker = "\nbuild id \""
++	start := bytes.Index(header, []byte(marker))
++	if start < 0 {
++		return nil
++	}
++	start += len(marker)
++	end := bytes.IndexByte(header[start:], '"')
++	if end < 0 {
++		return errors.New("unterminated Go archive build ID")
++	}
++	end += start
++	buildID := string(header[start:end])
++	if buildID == "" {
++		return nil
++	}
++	parts := strings.Split(buildID, "/")
++	if len(parts) != 2 || len(parts[0]) != len(parts[1]) {
++		return fmt.Errorf("unexpected Go archive build ID %q", buildID)
++	}
++	stableBuildID := parts[1] + "/" + parts[1]
++	for offset := 0; ; {
++		index := bytes.Index(data[offset:], []byte(buildID))
++		if index < 0 {
++			break
++		}
++		index += offset
++		copy(data[index:index+len(buildID)], stableBuildID)
++		offset = index + len(buildID)
++	}
++	return nil
 +}
 +
 +// reusableSharedSyntheticTestmainHelperBundle returns the declared shared
@@ -6884,7 +6969,7 @@ index a1782d4..8004cd0 100644
 +	stem := fmt.Sprintf("%x", sha256.Sum256([]byte(meta.ImportPath)))[:16]
 +	outLinkobjPath := filepath.Join(archiveDir, stem+".a")
 +	outInterfacePath := filepath.Join(archiveDir, stem+".iface.a")
-+	trimPath, err := createTrimPath()
++	trimPath, err := syntheticSourceTrimPath(meta.Dir, meta.ImportPath)
 +	if err != nil {
 +		return "", "", fmt.Errorf("create trimpath for %s: %w", pkg, err)
 +	}
@@ -6927,7 +7012,7 @@ index a1782d4..8004cd0 100644
 +		}
 +		for i, sSrc := range filteredSrcs.sSrcs {
 +			obj := filepath.Join(packageWorkDir, fmt.Sprintf("s%d.o", i))
-+			if err := asmFile(goenv, sSrc.filename, meta.ImportPath, asmFlags, obj); err != nil {
++			if err := asmFile(goenv, sSrc.filename, meta.ImportPath, asmFlags, trimPath, obj); err != nil {
 +				return "", "", fmt.Errorf("assemble synthetic helper %s: %w", pkg, err)
 +			}
 +			objFiles = append(objFiles, obj)
@@ -6953,6 +7038,21 @@ index a1782d4..8004cd0 100644
 +	}
 +	compiled[pkg] = result
 +	return result.compilePath, result.linkPath, nil
++}
++
++// syntheticSourceTrimPath gives module sources a stable logical prefix. The
++// physical GOMODCACHE belongs to the action sandbox and must not reach archives
++// that Bazel may publish to a shared cache.
++func syntheticSourceTrimPath(sourceDir, importPath string) (string, error) {
++	trimPath, err := createTrimPath()
++	if err != nil {
++		return "", err
++	}
++	sourceDir = strings.TrimSpace(sourceDir)
++	if sourceDir == "" {
++		return trimPath, nil
++	}
++	return trimPath + ";" + abs(sourceDir) + "=>" + strings.TrimSpace(importPath), nil
 +}
 +
 +func shouldSkipOrchestrionForImportPath(importPath string) bool {
@@ -7213,10 +7313,10 @@ index a1782d4..8004cd0 100644
 +}
 diff --git a/go/tools/builders/compilepkg_test.go b/go/tools/builders/compilepkg_test.go
 new file mode 100644
-index 0000000..320fb66
+index 0000000..91065d6
 --- /dev/null
 +++ b/go/tools/builders/compilepkg_test.go
-@@ -0,0 +1,837 @@
+@@ -0,0 +1,915 @@
 +package main
 +
 +import (
@@ -7356,6 +7456,51 @@ index 0000000..320fb66
 +		if _, err := os.Stat(path); err != nil {
 +			t.Fatalf("published bundle archive %s: %v", path, err)
 +		}
++	}
++}
++
++func TestSharedSyntheticTestmainHelperBundleNormalizesGoBuildIDs(t *testing.T) {
++	const contentID = "cccccccccccccccccccc"
++	archive := func(actionID string) []byte {
++		buildID := actionID + "/" + contentID
++		return []byte("!<arch>\narchive header\ngo object test\nbuild id \"" + buildID + "\"\npayload build id \"" + buildID + "\"\n")
++	}
++
++	sourceDir := t.TempDir()
++	firstSource := filepath.Join(sourceDir, "first.a")
++	secondSource := filepath.Join(sourceDir, "second.a")
++	if err := os.WriteFile(firstSource, archive("aaaaaaaaaaaaaaaaaaaa"), 0o644); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(secondSource, archive("bbbbbbbbbbbbbbbbbbbb"), 0o644); err != nil {
++		t.Fatal(err)
++	}
++
++	bundleDir := filepath.Join(t.TempDir(), "shared-helpers")
++	compiled := map[string]compiledModuleArchive{
++		"example.com/first":  {compilePath: firstSource, linkPath: firstSource},
++		"example.com/second": {compilePath: secondSource, linkPath: secondSource},
++	}
++	if err := writeSharedSyntheticTestmainHelperBundle(bundleDir, compiled, orchestrionModeTestOptimization); err != nil {
++		t.Fatal(err)
++	}
++
++	manifest, err := readSyntheticTestmainHelperManifest(bundleDir)
++	if err != nil {
++		t.Fatal(err)
++	}
++	firstPath := manifest.Packages["example.com/first"].CompilePath
++	secondPath := manifest.Packages["example.com/second"].CompilePath
++	if firstPath != secondPath {
++		t.Fatalf("equivalent archives published at different paths: %q != %q", firstPath, secondPath)
++	}
++	published, err := os.ReadFile(filepath.Join(bundleDir, firstPath))
++	if err != nil {
++		t.Fatal(err)
++	}
++	wantBuildID := contentID + "/" + contentID
++	if got := strings.Count(string(published), wantBuildID); got != 2 {
++		t.Fatalf("normalized build ID occurs %d times, want 2", got)
 +	}
 +}
 +
@@ -7755,6 +7900,39 @@ index 0000000..320fb66
 +	want := filepath.Join(cacheRoot, "synthetic-testmain-helper-module-cache", stableDigestParts("configured_versions=abc", "sdk=def"))
 +	if got != want {
 +		t.Fatalf("syntheticTestmainHelperModuleCacheRoot = %q, want %q", got, want)
++	}
++}
++
++func TestSyntheticModuleGoFlagsRequireTrimpath(t *testing.T) {
++	tests := []struct {
++		name  string
++		flags string
++		want  string
++	}{
++		{name: "empty", want: "-mod=mod -trimpath"},
++		{name: "preserve module mode", flags: "-mod=readonly", want: "-mod=readonly -trimpath"},
++		{name: "preserve trimpath", flags: "-trimpath -mod=vendor", want: "-trimpath -mod=vendor"},
++		{name: "override disabled trimpath", flags: "-trimpath=false", want: "-mod=mod -trimpath=false -trimpath"},
++	}
++	for _, test := range tests {
++		t.Run(test.name, func(t *testing.T) {
++			env := ensureSyntheticModuleGoFlags([]string{"GOFLAGS=" + test.flags})
++			if got := getEnv(env, "GOFLAGS"); got != test.want {
++				t.Fatalf("GOFLAGS = %q, want %q", got, test.want)
++			}
++		})
++	}
++}
++
++func TestSyntheticSourceTrimPathReplacesModuleCacheRoot(t *testing.T) {
++	sourceDir := filepath.Join(t.TempDir(), "pkg", "mod", "example.com", "helper@v1.0.0")
++	got, err := syntheticSourceTrimPath(sourceDir, "example.com/helper")
++	if err != nil {
++		t.Fatalf("syntheticSourceTrimPath error: %v", err)
++	}
++	want := abs(sourceDir) + "=>example.com/helper"
++	if !strings.Contains(got, want) {
++		t.Fatalf("syntheticSourceTrimPath = %q, want mapping %q", got, want)
 +	}
 +}
 +
@@ -8742,7 +8920,7 @@ index 893a0f6..16955a7 100644
 +	return ""
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
-index c25763a..b6298e6 100644
+index c25763a..7c19d36 100644
 --- a/go/tools/builders/importcfg.go
 +++ b/go/tools/builders/importcfg.go
 @@ -17,21 +17,94 @@ package main
@@ -9345,7 +9523,7 @@ index c25763a..b6298e6 100644
 +	if err != nil {
 +		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 +	}
-+	cmd.Env = ensureGoFlagsModMode(cmd.Env)
++	cmd.Env = ensureSyntheticModuleGoFlags(cmd.Env)
 +	if getEnv(cmd.Env, "HOME") == "" {
 +		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
 +		if err := os.MkdirAll(homePath, 0o755); err != nil {
@@ -12020,10 +12198,10 @@ index 11dc0ab..610af53 100644
  	if *buildmode == "c-archive" {
 diff --git a/go/tools/builders/module_proxy.go b/go/tools/builders/module_proxy.go
 new file mode 100644
-index 0000000..b44c0f3
+index 0000000..91b0ba4
 --- /dev/null
 +++ b/go/tools/builders/module_proxy.go
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,298 @@
 +package main
 +
 +import (
@@ -12109,15 +12287,22 @@ index 0000000..b44c0f3
 +	return env, nil
 +}
 +
-+func ensureGoFlagsModMode(env []string) []string {
++// ensureSyntheticModuleGoFlags keeps helper module builds offline-compatible
++// and removes their temporary module-cache roots from compiled archives.
++func ensureSyntheticModuleGoFlags(env []string) []string {
 +	goFlags := strings.TrimSpace(getEnv(env, "GOFLAGS"))
-+	if strings.Contains(goFlags, "-mod=") {
-+		return env
++	if !strings.Contains(goFlags, "-mod=") {
++		goFlags = strings.TrimSpace("-mod=mod " + goFlags)
 +	}
-+	if goFlags == "" {
-+		goFlags = "-mod=mod"
-+	} else {
-+		goFlags = "-mod=mod " + goFlags
++	trimPathEnabled := false
++	for _, flag := range strings.Fields(goFlags) {
++		if flag == "-trimpath" || flag == "-trimpath=true" {
++			trimPathEnabled = true
++			break
++		}
++	}
++	if !trimPathEnabled {
++		goFlags += " -trimpath"
 +	}
 +	return setEnv(env, "GOFLAGS", goFlags)
 +}
@@ -14288,10 +14473,10 @@ index 0000000..fbb5712
 +}
 diff --git a/go/tools/builders/orchestrion_skip_test.go b/go/tools/builders/orchestrion_skip_test.go
 new file mode 100644
-index 0000000..32c0cf4
+index 0000000..00d37c1
 --- /dev/null
 +++ b/go/tools/builders/orchestrion_skip_test.go
-@@ -0,0 +1,383 @@
+@@ -0,0 +1,392 @@
 +package main
 +
 +import (
@@ -14588,6 +14773,14 @@ index 0000000..32c0cf4
 +
 +func TestSyntheticTestmainManifestPublishesExternalArchives(t *testing.T) {
 +	execroot := t.TempDir()
++	previousDir, err := os.Getwd()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Chdir(execroot); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.Chdir(previousDir) })
 +	externalArchive := filepath.Join(t.TempDir(), "helper.a")
 +	if err := os.WriteFile(externalArchive, []byte("helper archive"), 0o644); err != nil {
 +		t.Fatal(err)
@@ -14630,7 +14823,8 @@ index 0000000..32c0cf4
 +		t.Fatalf("published helper archive count = %d, want 1", len(entries))
 +	}
 +	publishedArchive := filepath.Join(helperOutputDir, entries[0].Name())
-+	if !strings.Contains(gotManifest, "packagefile example.com/helper="+publishedArchive) {
++	publishedRelative := execrootRelativePath(publishedArchive)
++	if !strings.Contains(gotManifest, "packagefile example.com/helper="+publishedRelative) {
 +		t.Fatalf("manifest does not reference published helper %q:\n%s", publishedArchive, gotManifest)
 +	}
 +	publishedData, err := os.ReadFile(publishedArchive)
@@ -16559,7 +16753,7 @@ index 0000000..9edae16
 +	}
 +}
 diff --git a/go/tools/builders/stdlib.go b/go/tools/builders/stdlib.go
-index cfcb991..65244aa 100644
+index cfcb991..8ea6331 100644
 --- a/go/tools/builders/stdlib.go
 +++ b/go/tools/builders/stdlib.go
 @@ -21,15 +21,29 @@ import (
@@ -16681,7 +16875,7 @@ index cfcb991..65244aa 100644
  
  	// Build the commands needed to build the std library in the right mode
  	// NOTE: the go command stamps compiled .a files with build ids, which are
-@@ -121,7 +164,112 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -121,7 +164,117 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	// creating reproducible builds because the build ids are hashed from
  	// CGO_CFLAGS, which frequently contains absolute paths. As a workaround,
  	// we strip the build ids, since they won't be used after this.
@@ -16792,10 +16986,15 @@ index cfcb991..65244aa 100644
 +		}
 +	}
 +	installArgs := goenv.goCmd("install", "-toolexec", toolexec)
++	if *orchestrion != "" {
++		// Helper module exports use Go's reproducible build mode. Compile the
++		// woven stdlib with the same flag so imported package fingerprints match.
++		installArgs = append(installArgs, "-trimpath")
++	}
  	if len(build.Default.BuildTags) > 0 {
  		installArgs = append(installArgs, "-tags", strings.Join(build.Default.BuildTags, ","))
  	}
-@@ -135,7 +283,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -135,7 +288,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  		installArgs = append(installArgs, "-msan")
  	}
  	if *pgoprofile != "" {
@@ -16804,7 +17003,7 @@ index cfcb991..65244aa 100644
  	}
  	if *shared {
  		gcflags = append(gcflags, "-shared")
-@@ -167,8 +315,393 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -167,8 +320,393 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	}
  
  	installArgs = append(installArgs, packages...)

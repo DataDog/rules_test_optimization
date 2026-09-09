@@ -787,7 +787,7 @@ func resolveModuleExportsForPackagesWithRoot(goenv *env, packages []string, orch
 	if err != nil {
 		return nil, fmt.Errorf("prepare module resolution env: %w", err)
 	}
-	cmd.Env = ensureGoFlagsModMode(cmd.Env)
+	cmd.Env = ensureSyntheticModuleGoFlags(cmd.Env)
 	if getEnv(cmd.Env, "HOME") == "" {
 		homePath := filepath.Join(os.TempDir(), "datadog-orchestrion-home")
 		if err := os.MkdirAll(homePath, 0o755); err != nil {
