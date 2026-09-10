@@ -1,10 +1,50 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestAbsCCCompilerPreservesInitialExecRoot(t *testing.T) {
+	initialExecRoot := filepath.Join(t.TempDir(), "execroot", "workspace")
+	orchestrionWorkDir := filepath.Join(t.TempDir(), "orchestrion-module")
+	if err := os.MkdirAll(orchestrionWorkDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	previousBaseDir := moduleProxyResolutionBaseDir
+	moduleProxyResolutionBaseDir = initialExecRoot
+	t.Cleanup(func() { moduleProxyResolutionBaseDir = previousBaseDir })
+	previousWorkDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(orchestrionWorkDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousWorkDir) })
+
+	t.Setenv("CC", filepath.Join("external", "llvm_toolchain", "bin", "cc_wrapper.sh"))
+	t.Setenv("GO_CC", "")
+	t.Setenv("GO_CC_ROOT", "")
+	t.Setenv("BAZEL_DD_SANDBOX_EXEC_ROOT", "")
+	if err := absCCCompiler(cgoEnvVars, cgoAbsEnvFlags); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := os.Getenv("GO_CC_ROOT"); got != initialExecRoot {
+		t.Fatalf("GO_CC_ROOT = %q, want initial execroot %q", got, initialExecRoot)
+	}
+	if got := os.Getenv("BAZEL_DD_SANDBOX_EXEC_ROOT"); got != initialExecRoot {
+		t.Fatalf("BAZEL_DD_SANDBOX_EXEC_ROOT = %q, want initial execroot %q", got, initialExecRoot)
+	}
+	wantCompiler := filepath.Join(initialExecRoot, "external", "llvm_toolchain", "bin", "cc_wrapper.sh")
+	if got := os.Getenv("GO_CC"); got != wantCompiler {
+		t.Fatalf("GO_CC = %q, want %q", got, wantCompiler)
+	}
+}
 
 func TestNormalizeCgoRandomSeedIgnoresEphemeralRoots(t *testing.T) {
 	firstCCRoot := filepath.Join("tmp", "source", "first", "workspace")

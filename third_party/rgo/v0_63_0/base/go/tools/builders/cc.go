@@ -21,8 +21,14 @@ import (
 // for the absolute path and we replace CC with this builder so that
 // we can expand the placeholder later.
 func absCCCompiler(envNameList []string, argList []string) error {
-	wrapped := cgoCompilerWrapperEnv(os.Environ(), envNameList, argList, abs("."), abs(os.Args[0]))
-	for _, envName := range append([]string{"GO_CC", "GO_CC_ROOT", "CC"}, envNameList...) {
+	wrapped := cgoCompilerWrapperEnv(
+		os.Environ(),
+		envNameList,
+		argList,
+		moduleProxyResolutionBaseDir,
+		absolutePathFromBase(os.Args[0], moduleProxyResolutionBaseDir),
+	)
+	for _, envName := range append([]string{"GO_CC", "GO_CC_ROOT", "CC", "BAZEL_DD_SANDBOX_EXEC_ROOT"}, envNameList...) {
 		if err := os.Setenv(envName, getEnv(wrapped, envName)); err != nil {
 			return err
 		}
@@ -52,6 +58,12 @@ func normalizeGoSubprocessCompilerEnv(environ []string) []string {
 // anchored to the original execroot.
 func cgoCompilerWrapperEnv(environ []string, envNameList, argList []string, root, builder string) []string {
 	env := append([]string{}, environ...)
+	// Go invokes CC from a package-specific temporary directory. Datadog's LLVM
+	// wrapper uses this value to keep its final debug-prefix mapping anchored to
+	// the Bazel execroot rather than that temporary directory.
+	if getEnv(env, "BAZEL_DD_SANDBOX_EXEC_ROOT") == "" {
+		env = setEnv(env, "BAZEL_DD_SANDBOX_EXEC_ROOT", root)
+	}
 	if goCC := strings.TrimSpace(getEnv(env, "GO_CC")); goCC != "" && getEnv(env, "GO_CC_ROOT") != "" {
 		// GoStdlib already installed the wrapper in the parent process. Keep it
 		// idempotent, but normalize the wrapped compiler for nested go commands.

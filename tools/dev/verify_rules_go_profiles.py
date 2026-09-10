@@ -673,10 +673,6 @@ def select_reproducibility_actions(
 
         if action.identity in selected:
             raise ValueError("duplicate compact-log action identity: %s" % (action.identity,))
-        if not action.action_key:
-            raise ValueError(
-                "compact-log action has no cache digest: %s" % (action.identity,)
-            )
         if not action.actual_outputs:
             raise ValueError(
                 "compact-log action has no output digests: %s" % (action.identity,)
@@ -692,7 +688,7 @@ def bazel_labels_match(actual: str, expected: str) -> bool:
 
 @dataclass(frozen=True)
 class ReproducibilityFinding:
-    """One actionable cell from Reprise's action-key/output classifier."""
+    """One output or action-set difference between independent builds."""
 
     action: CompactAction
     kind: str
@@ -703,11 +699,24 @@ def actionable_reproducibility_findings(
     first: dict[tuple[str, str, tuple[str, ...]], CompactAction],
     second: dict[tuple[str, str, tuple[str, ...]], CompactAction],
 ) -> list[ReproducibilityFinding]:
-    """Apply Reprise's 2x2 classifier and return output-changing findings."""
+    """Return output-changing findings, even when cache digests are absent."""
     findings = []
-    for identity in sorted(set(first) & set(second)):
-        left = first[identity]
-        right = second[identity]
+    for identity in sorted(set(first) | set(second)):
+        left = first.get(identity)
+        right = second.get(identity)
+        if left is None or right is None:
+            action = left or right
+            if action is None:
+                continue
+            outputs = tuple(path for path, _ in action.actual_outputs)
+            findings.append(
+                ReproducibilityFinding(
+                    action=action,
+                    kind="action_set_changed",
+                    differing_outputs=outputs or action.listed_outputs,
+                )
+            )
+            continue
         if left.actual_outputs == right.actual_outputs:
             # A changed action key with identical bytes is Reprise's
             # non-actionable wasted_rebuild case.
@@ -722,11 +731,16 @@ def actionable_reproducibility_findings(
         differing += tuple(
             path for path, _ in right.actual_outputs if path not in left_paths
         )
-        keys_match = bool(left.action_key) and left.action_key == right.action_key
+        if not left.action_key or not right.action_key:
+            kind = "output_drift_without_action_key"
+        elif left.action_key == right.action_key:
+            kind = "tool_nondeterminism"
+        else:
+            kind = "input_driven"
         findings.append(
             ReproducibilityFinding(
                 action=left,
-                kind="tool_nondeterminism" if keys_match else "input_driven",
+                kind=kind,
                 differing_outputs=differing,
             )
         )
@@ -1186,7 +1200,10 @@ def smoke_bazel_env(output_user_root: Path) -> dict[str, str]:
         "PATH": os.pathsep.join(dict.fromkeys(path_entries)),
         "TMPDIR": smoke_tmp.as_posix(),
         "USER": "rules_go_smoke",
-        "USE_BAZEL_VERSION": (REPO_ROOT / ".bazelversion").read_text().strip(),
+        "USE_BAZEL_VERSION": os.environ.get(
+            "USE_BAZEL_VERSION",
+            (REPO_ROOT / ".bazelversion").read_text().strip(),
+        ),
     }
     for key in ("JAVA_HOME", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
         if key in os.environ:

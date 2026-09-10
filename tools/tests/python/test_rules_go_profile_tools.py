@@ -21,6 +21,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 def _runfile(rel_path: str) -> Path:
@@ -446,6 +447,14 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                     private_safe_patterns=["DENYLIST_SENTINEL"],
                 )
 
+    def test_smoke_environment_honors_explicit_bazel_version(self) -> None:
+        """Consumer reproductions may select a Bazel version without editing the repo."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            with mock.patch.dict(os.environ, {"USE_BAZEL_VERSION": "8.8.0"}):
+                env = self.mod.smoke_bazel_env(Path(raw_tmp) / "output-user-root")
+
+        self.assertEqual("8.8.0", env["USE_BAZEL_VERSION"])
+
     def test_stdlib_cache_snapshot_accepts_manifested_data_entries(self) -> None:
         """The determinism verifier accepts only sorted manifested data entries."""
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -675,6 +684,53 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
             {identity: baseline}, {identity: action("key-b", "output-b")}
         )
         self.assertEqual(["input_driven"], [item.kind for item in input_finding])
+
+        missing_key_finding = self.mod.actionable_reproducibility_findings(
+            {identity: action("", "output-a")},
+            {identity: action("", "output-b")},
+        )
+        self.assertEqual(
+            ["output_drift_without_action_key"],
+            [item.kind for item in missing_key_finding],
+        )
+
+    def test_reprise_classifier_rejects_action_set_drift(self) -> None:
+        """An action missing from either cold run makes the comparison incomplete."""
+        action = self.mod.CompactAction(
+            target_label="//app:test.topt__raw_go_test",
+            mnemonic="GoLink",
+            command_args=(),
+            environment_variables=(),
+            listed_outputs=("bazel-out/app/test",),
+            action_key="",
+            actual_outputs=(("bazel-out/app/test", "output"),),
+        )
+
+        findings = self.mod.actionable_reproducibility_findings(
+            {action.identity: action},
+            {},
+        )
+
+        self.assertEqual(["action_set_changed"], [item.kind for item in findings])
+
+    def test_reproducibility_action_allows_missing_cache_digest(self) -> None:
+        """Cache-off Reprise logs still prove determinism from output digests."""
+        action = self.mod.CompactAction(
+            target_label="//app:test.topt__raw_go_test",
+            mnemonic="GoLink",
+            command_args=(),
+            environment_variables=(),
+            listed_outputs=("bazel-out/app/test",),
+            action_key="",
+            actual_outputs=(("bazel-out/app/test", "output"),),
+        )
+
+        selected = self.mod.select_reproducibility_actions(
+            [action],
+            raw_target="//app:test.topt__raw_go_test",
+        )
+
+        self.assertEqual({action.identity: action}, selected)
 
     def test_reproducibility_action_requires_output_digests(self) -> None:
         """A selected action without observed bytes cannot prove determinism."""

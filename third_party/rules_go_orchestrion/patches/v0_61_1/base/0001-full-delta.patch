@@ -4751,7 +4751,7 @@ index fdeda2d..76d69b6 100644
  	}
  }
 diff --git a/go/tools/builders/cc.go b/go/tools/builders/cc.go
-index 6f67914..967f869 100644
+index 6f67914..687ec3f 100644
 --- a/go/tools/builders/cc.go
 +++ b/go/tools/builders/cc.go
 @@ -1,7 +1,11 @@
@@ -4766,7 +4766,7 @@ index 6f67914..967f869 100644
  	"os"
  	"os/exec"
  	"path/filepath"
-@@ -10,6 +14,70 @@ import (
+@@ -10,6 +14,82 @@ import (
  	"syscall"
  )
  
@@ -4777,8 +4777,14 @@ index 6f67914..967f869 100644
 +// for the absolute path and we replace CC with this builder so that
 +// we can expand the placeholder later.
 +func absCCCompiler(envNameList []string, argList []string) error {
-+	wrapped := cgoCompilerWrapperEnv(os.Environ(), envNameList, argList, abs("."), abs(os.Args[0]))
-+	for _, envName := range append([]string{"GO_CC", "GO_CC_ROOT", "CC"}, envNameList...) {
++	wrapped := cgoCompilerWrapperEnv(
++		os.Environ(),
++		envNameList,
++		argList,
++		moduleProxyResolutionBaseDir,
++		absolutePathFromBase(os.Args[0], moduleProxyResolutionBaseDir),
++	)
++	for _, envName := range append([]string{"GO_CC", "GO_CC_ROOT", "CC", "BAZEL_DD_SANDBOX_EXEC_ROOT"}, envNameList...) {
 +		if err := os.Setenv(envName, getEnv(wrapped, envName)); err != nil {
 +			return err
 +		}
@@ -4808,6 +4814,12 @@ index 6f67914..967f869 100644
 +// anchored to the original execroot.
 +func cgoCompilerWrapperEnv(environ []string, envNameList, argList []string, root, builder string) []string {
 +	env := append([]string{}, environ...)
++	// Go invokes CC from a package-specific temporary directory. Datadog's LLVM
++	// wrapper uses this value to keep its final debug-prefix mapping anchored to
++	// the Bazel execroot rather than that temporary directory.
++	if getEnv(env, "BAZEL_DD_SANDBOX_EXEC_ROOT") == "" {
++		env = setEnv(env, "BAZEL_DD_SANDBOX_EXEC_ROOT", root)
++	}
 +	if goCC := strings.TrimSpace(getEnv(env, "GO_CC")); goCC != "" && getEnv(env, "GO_CC_ROOT") != "" {
 +		// GoStdlib already installed the wrapper in the parent process. Keep it
 +		// idempotent, but normalize the wrapped compiler for nested go commands.
@@ -4837,7 +4849,7 @@ index 6f67914..967f869 100644
  func cc(args []string) error {
  	cc := os.Getenv("GO_CC")
  	if cc == "" {
-@@ -20,7 +88,13 @@ func cc(args []string) error {
+@@ -20,7 +100,13 @@ func cc(args []string) error {
  		return errors.New("GO_CC_ROOT environment variable not set")
  	}
  
@@ -4852,7 +4864,7 @@ index 6f67914..967f869 100644
  	normalized = append(normalized, args...)
  	transformArgs(normalized, cgoAbsEnvFlags, func(s string) string {
  		if strings.HasPrefix(s, cgoAbsPlaceholder) {
-@@ -37,6 +111,11 @@ func cc(args []string) error {
+@@ -37,6 +123,11 @@ func cc(args []string) error {
  		}
  		return s
  	})
@@ -4864,7 +4876,7 @@ index 6f67914..967f869 100644
  	if runtime.GOOS == "windows" {
  		cmd := exec.Command(normalized[0], normalized[1:]...)
  		cmd.Stdout = os.Stdout
-@@ -46,3 +125,105 @@ func cc(args []string) error {
+@@ -46,3 +137,105 @@ func cc(args []string) error {
  		return syscall.Exec(normalized[0], normalized, os.Environ())
  	}
  }
@@ -4972,17 +4984,57 @@ index 6f67914..967f869 100644
 +}
 diff --git a/go/tools/builders/cc_test.go b/go/tools/builders/cc_test.go
 new file mode 100644
-index 0000000..b8b4865
+index 0000000..f81dc31
 --- /dev/null
 +++ b/go/tools/builders/cc_test.go
-@@ -0,0 +1,74 @@
+@@ -0,0 +1,114 @@
 +package main
 +
 +import (
++	"os"
 +	"path/filepath"
 +	"strings"
 +	"testing"
 +)
++
++func TestAbsCCCompilerPreservesInitialExecRoot(t *testing.T) {
++	initialExecRoot := filepath.Join(t.TempDir(), "execroot", "workspace")
++	orchestrionWorkDir := filepath.Join(t.TempDir(), "orchestrion-module")
++	if err := os.MkdirAll(orchestrionWorkDir, 0o755); err != nil {
++		t.Fatal(err)
++	}
++
++	previousBaseDir := moduleProxyResolutionBaseDir
++	moduleProxyResolutionBaseDir = initialExecRoot
++	t.Cleanup(func() { moduleProxyResolutionBaseDir = previousBaseDir })
++	previousWorkDir, err := os.Getwd()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Chdir(orchestrionWorkDir); err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(func() { _ = os.Chdir(previousWorkDir) })
++
++	t.Setenv("CC", filepath.Join("external", "llvm_toolchain", "bin", "cc_wrapper.sh"))
++	t.Setenv("GO_CC", "")
++	t.Setenv("GO_CC_ROOT", "")
++	t.Setenv("BAZEL_DD_SANDBOX_EXEC_ROOT", "")
++	if err := absCCCompiler(cgoEnvVars, cgoAbsEnvFlags); err != nil {
++		t.Fatal(err)
++	}
++
++	if got := os.Getenv("GO_CC_ROOT"); got != initialExecRoot {
++		t.Fatalf("GO_CC_ROOT = %q, want initial execroot %q", got, initialExecRoot)
++	}
++	if got := os.Getenv("BAZEL_DD_SANDBOX_EXEC_ROOT"); got != initialExecRoot {
++		t.Fatalf("BAZEL_DD_SANDBOX_EXEC_ROOT = %q, want initial execroot %q", got, initialExecRoot)
++	}
++	wantCompiler := filepath.Join(initialExecRoot, "external", "llvm_toolchain", "bin", "cc_wrapper.sh")
++	if got := os.Getenv("GO_CC"); got != wantCompiler {
++		t.Fatalf("GO_CC = %q, want %q", got, wantCompiler)
++	}
++}
 +
 +func TestNormalizeCgoRandomSeedIgnoresEphemeralRoots(t *testing.T) {
 +	firstCCRoot := filepath.Join("tmp", "source", "first", "workspace")
