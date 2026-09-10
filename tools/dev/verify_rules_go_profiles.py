@@ -23,6 +23,7 @@ import sys
 import tempfile
 
 try:
+    from tools.dev.compact_execution_log import CompactAction, read_compact_actions
     from tools.dev.generate_rules_go_consumer_patch import (
         DEFAULT_PROFILE_ROOT,
         REPO_ROOT,
@@ -38,6 +39,7 @@ try:
     from tools.dev.rules_go_fork_registry import DEFAULT_REGISTRY, ForkSelection, load_registry
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+    from tools.dev.compact_execution_log import CompactAction, read_compact_actions
     from tools.dev.generate_rules_go_consumer_patch import (
         DEFAULT_PROFILE_ROOT,
         REPO_ROOT,
@@ -82,7 +84,6 @@ def verify_profiles(
             )
         upstream_ids = [upstream]
     with temporary_smoke_root() as smoke_root:
-        bazel_output_user_root = smoke_root / "bazel_output_user_root"
         for upstream_id in upstream_ids:
             selection = registry.resolve(upstream_id, "base")
             patch = output_dir / ("%s-%s.patch" % (upstream_id, profile))
@@ -113,7 +114,6 @@ def verify_profiles(
                     selection=selection,
                     patch=patch,
                     work_root=smoke_root / upstream_id,
-                    bazel_output_user_root=bazel_output_user_root,
                     bazel=bazel,
                     go_version=go_version,
                     orchestrion_version=orchestrion_version,
@@ -122,7 +122,6 @@ def verify_profiles(
                 )
             generated_paths.extend([patch, manifest])
             print("verified %s" % patch)
-        _bazel_shutdown(bazel, bazel_output_user_root, private_safe_patterns)
     if public_denylist is not None or private_blocklist_file is not None:
         verify_private_safe(
             paths=generated_paths,
@@ -142,111 +141,85 @@ def verify_workspace_runtime_functional_smoke(
     selection: ForkSelection,
     patch: Path,
     work_root: Path,
-    bazel_output_user_root: Path,
     bazel: Path,
     go_version: str,
     orchestrion_version: str,
     dd_trace_go_version: str,
     private_safe_patterns: list[str],
 ) -> None:
-    """Verify a generated workspace_runtime patch is usable without the base tree."""
+    """Verify a generated patch in two independent consumer-style builds."""
     upstream_source = download_upstream(selection, work_root / "download")
-    rules_go_root = work_root / "rules_go_patched"
-    workspace = work_root / "workspace"
-    copy_filtered_tree(upstream_source, rules_go_root)
-    run_private_safe(
-        ["git", "-C", rules_go_root.as_posix(), "apply", "--binary", "-p1", patch.as_posix()],
-        private_safe_patterns=private_safe_patterns,
-    )
-    write_smoke_workspace(
-        workspace=workspace,
-        rules_go_root=rules_go_root,
-        go_version=go_version,
-        orchestrion_version=orchestrion_version,
-        dd_trace_go_version=dd_trace_go_version,
-    )
-
     common_flags = [
         "--noenable_bzlmod",
         "--enable_workspace",
     ]
-    orchestrion_flags = common_flags + [
-        "--@io_bazel_rules_go//go/private/orchestrion:enabled=true",
-        "--@io_bazel_rules_go//go/private/orchestrion:mode=test_optimization",
-    ]
-    reproducibility_flags = cgo_reproducibility_flags(sys.platform)
-    isolated_cache_flags = [
-        "--disk_cache=",
-        "--remote_cache=",
-    ]
-    run_bazel(
-        bazel,
-        bazel_output_user_root,
-        workspace,
-        ["build", *common_flags, "@go_sdk//:builder"],
-        private_safe_patterns=private_safe_patterns,
-    )
-    first_plain = run_plain_reproducibility_snapshot(
-        bazel,
-        bazel_output_user_root,
-        workspace,
-        command="build",
-        mode_flags=[*common_flags, *reproducibility_flags, *isolated_cache_flags],
-        target="//app:hello_test",
-        private_safe_patterns=private_safe_patterns,
-    )
-    first_orchestrion = run_orchestrion_reproducibility_snapshot(
-        bazel,
-        bazel_output_user_root,
-        workspace,
-        command="test",
-        mode_flags=[
-            *orchestrion_flags,
-            *reproducibility_flags,
-            *isolated_cache_flags,
-            "--test_output=errors",
-        ],
-        target="//app:hello_test",
-        private_safe_patterns=private_safe_patterns,
-    )
-    aquery = run_bazel(
-        bazel,
-        bazel_output_user_root,
-        workspace,
-        [
-            "aquery",
-            *orchestrion_flags,
-            *reproducibility_flags,
-            'mnemonic("GoCompilePkg", //app:hello_test)',
-        ],
-        private_safe_patterns=private_safe_patterns,
-    )
-    assert_aquery_contains(aquery.stdout, patch)
+    consumer_flags = cgo_reproducibility_flags()
+    plain_snapshots = []
+    optimized_snapshots = []
+    for run_name in ("first", "second"):
+        run_root = work_root / run_name
+        rules_go_root = run_root / "rules_go_patched"
+        workspace = run_root / "workspace"
+        output_user_root = run_root / "bazel_output_user_root"
+        copy_filtered_tree(upstream_source, rules_go_root)
+        run_private_safe(
+            [
+                "git",
+                "-C",
+                rules_go_root.as_posix(),
+                "apply",
+                "--binary",
+                "-p1",
+                patch.as_posix(),
+            ],
+            private_safe_patterns=private_safe_patterns,
+        )
+        write_smoke_workspace(
+            workspace=workspace,
+            rules_go_root=rules_go_root,
+            go_version=go_version,
+            orchestrion_version=orchestrion_version,
+            dd_trace_go_version=dd_trace_go_version,
+        )
+        isolated_cache_flags = [
+            "--disk_cache=%s" % (run_root / "disk_cache").as_posix(),
+            "--remote_cache=",
+        ]
+        mode_flags = [*common_flags, *consumer_flags, *isolated_cache_flags]
+        run_bazel(
+            bazel,
+            output_user_root,
+            workspace,
+            ["build", *common_flags, "@go_sdk//:builder"],
+            private_safe_patterns=private_safe_patterns,
+        )
+        optimized_snapshots.append(
+            run_orchestrion_reproducibility_snapshot(
+                bazel,
+                output_user_root,
+                workspace,
+                command="test",
+                mode_flags=mode_flags,
+                target="//app:hello_test.topt",
+                raw_target="//app:hello_test.topt__raw_go_test",
+                execution_log=run_root / "execution.compact.zst",
+                private_safe_patterns=private_safe_patterns,
+            )
+        )
+        plain_snapshots.append(
+            run_plain_reproducibility_snapshot(
+                bazel,
+                output_user_root,
+                workspace,
+                command="build",
+                mode_flags=mode_flags,
+                target="//app:hello_test",
+                private_safe_patterns=private_safe_patterns,
+            )
+        )
 
-    replay_output_user_root = work_root / "bazel_output_user_root_replay"
-    second_plain = run_plain_reproducibility_snapshot(
-        bazel,
-        replay_output_user_root,
-        workspace,
-        command="build",
-        mode_flags=[*common_flags, *reproducibility_flags, *isolated_cache_flags],
-        target="//app:hello_test",
-        private_safe_patterns=private_safe_patterns,
-    )
-    second_orchestrion = run_orchestrion_reproducibility_snapshot(
-        bazel,
-        replay_output_user_root,
-        workspace,
-        command="test",
-        mode_flags=[
-            *orchestrion_flags,
-            *reproducibility_flags,
-            *isolated_cache_flags,
-            "--test_output=errors",
-        ],
-        target="//app:hello_test",
-        private_safe_patterns=private_safe_patterns,
-    )
+    first_plain, second_plain = plain_snapshots
+    first_orchestrion, second_orchestrion = optimized_snapshots
     assert_plain_stdlib_cache(first_plain.stdlib_cache, patch)
     assert_plain_stdlib_cache(second_plain.stdlib_cache, patch)
     assert_orchestrion_stdlib_cache(first_orchestrion.stdlib_cache, patch)
@@ -295,54 +268,27 @@ def verify_workspace_runtime_functional_smoke(
                 ),
             )
         )
-    if first_orchestrion.action_keys != second_orchestrion.action_keys:
-        raise ValueError(
-            "Test Optimization action keys differ for %s: %s"
-            % (
-                patch,
-                describe_mapping_difference(
-                    first_orchestrion.action_keys,
-                    second_orchestrion.action_keys,
-                ),
-            )
-        )
-    if first_orchestrion.outputs != second_orchestrion.outputs:
-        raise ValueError(
-            "Test Optimization action outputs differ for %s: %s"
-            % (
-                patch,
-                describe_mapping_difference(
-                    first_orchestrion.outputs,
-                    second_orchestrion.outputs,
-                ),
-            )
-        )
+    assert_no_actionable_reproducibility_findings(
+        first_orchestrion.actions,
+        second_orchestrion.actions,
+        patch,
+    )
 
 
-def cgo_reproducibility_flags(platform_name: str) -> list[str]:
-    """Mirror the CGO/debug conditions that exposed cross-worker drift."""
-    flags = [
+def cgo_reproducibility_flags() -> list[str]:
+    """Mirror consumer CGO/debug flags without adding deterministic policy."""
+    return [
         "--compilation_mode=fastbuild",
         "--incompatible_strict_action_env",
         "--experimental_exec_configuration_distinguisher=diff_to_affected",
         "--experimental_platform_in_output_dir",
         "--@io_bazel_rules_go//go/config:pure=False",
+        "--@io_bazel_rules_go//go/config:linkmode=normal",
         "--strip=never",
-        "--copt=-O2",
         "--copt=-fno-omit-frame-pointer",
         "--copt=-g",
         "--copt=-UNDEBUG",
     ]
-    if platform_name.startswith("linux"):
-        flags.extend(
-            [
-                "--repo_env=CC=clang",
-                "--linkopt=-fuse-ld=lld",
-                "--linkopt=-Wl,--build-id=md5",
-                "--linkopt=-Wl,--threads=4",
-            ]
-        )
-    return flags
 
 
 def describe_snapshot_difference(
@@ -381,15 +327,35 @@ def write_smoke_workspace(
     orchestrion_version: str,
     dd_trace_go_version: str,
 ) -> None:
-    """Create a minimal WORKSPACE-mode Go project for generated profile smoke."""
+    """Create a WORKSPACE-mode CGO project with a real .topt transition."""
     app = workspace / "app"
+    transition_repo = workspace / "transition_rule"
     app.mkdir(parents=True, exist_ok=True)
+    transition_repo.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(
+        REPO_ROOT / "modules/go/topt_go_orchestrion.bzl",
+        transition_repo / "topt_go_orchestrion.bzl",
+    )
+    transition_repo.joinpath("WORKSPACE").write_text(
+        'workspace(name = "datadog_go_transition")\n',
+        encoding="utf-8",
+    )
+    transition_repo.joinpath("BUILD.bazel").write_text(
+        'exports_files(["topt_go_orchestrion.bzl"])\n',
+        encoding="utf-8",
+    )
     workspace.joinpath("WORKSPACE").write_text(
         """workspace(name = "profile_smoke")
 
 local_repository(
     name = "io_bazel_rules_go",
     path = "%s",
+)
+
+local_repository(
+    name = "datadog_go_transition",
+    path = "%s",
+    repo_mapping = {"@rules_go": "@io_bazel_rules_go"},
 )
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
@@ -420,6 +386,7 @@ go_orchestrion_tool_repo(
 """
         % (
             rules_go_root.as_posix(),
+            transition_repo.as_posix(),
             go_version,
             orchestrion_version,
             dd_trace_go_version,
@@ -428,11 +395,15 @@ go_orchestrion_tool_repo(
         encoding="utf-8",
     )
     app.joinpath("BUILD.bazel").write_text(
-        """load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+        """load("@datadog_go_transition//:topt_go_orchestrion.bzl", "orch_go_test")
+load("@io_bazel_rules_go//go:def.bzl", "go_library", "go_test")
+
+exports_files(["metadata.json"])
 
 go_library(
     name = "hello_lib",
-    srcs = ["hello.go"],
+    srcs = ["hello.go", "hello_cgo.go"],
+    cgo = True,
     importpath = "example.com/profile_smoke/app",
 )
 
@@ -441,17 +412,50 @@ go_test(
     srcs = ["hello_test.go"],
     embed = [":hello_lib"],
 )
+
+go_test(
+    name = "hello_test.topt__raw_go_test",
+    srcs = ["hello_test.go"],
+    embed = [":hello_lib"],
+    tags = ["manual"],
+)
+
+orch_go_test(
+    name = "hello_test.topt",
+    actual = ":hello_test.topt__raw_go_test",
+    metadata = ":metadata.json",
+    orchestrion_mode = "test_optimization",
+)
 """,
         encoding="utf-8",
     )
     app.joinpath("hello.go").write_text(
-        'package app\n\nfunc Greeting() string { return "hello" }\n',
+        'package app\n\nfunc Greeting() string { return CgoGreeting() }\n',
+        encoding="utf-8",
+    )
+    app.joinpath("hello_cgo.go").write_text(
+        '''package app
+
+/*
+#include <stdlib.h>
+static int profile_smoke_value(void) { return 42; }
+*/
+import "C"
+
+func CgoGreeting() string {
+	if C.profile_smoke_value() == 42 {
+		return "hello"
+	}
+	return "bad"
+}
+''',
         encoding="utf-8",
     )
     app.joinpath("hello_test.go").write_text(
         'package app\n\nimport "testing"\n\nfunc TestGreeting(t *testing.T) { if Greeting() != "hello" { t.Fatal("bad") } }\n',
         encoding="utf-8",
     )
+    app.joinpath("metadata.json").write_text("{}\n", encoding="utf-8")
 
 
 def run_bazel(
@@ -502,11 +506,19 @@ class StdlibCacheSnapshot:
 
 @dataclass(frozen=True)
 class ReproducibilitySnapshot:
-    """Cache contents, action keys, and outputs from one isolated build."""
+    """Ordinary stdlib cache, action keys, and outputs from one build."""
 
     stdlib_cache: StdlibCacheSnapshot
     action_keys: dict[str, str]
     outputs: dict[str, str]
+
+
+@dataclass(frozen=True)
+class OptimizedReproducibilitySnapshot:
+    """Instrumented cache and Reprise-compatible actions from one cold build."""
+
+    stdlib_cache: StdlibCacheSnapshot
+    actions: dict[tuple[str, str, tuple[str, ...]], CompactAction]
 
 
 def run_plain_reproducibility_snapshot(
@@ -520,13 +532,11 @@ def run_plain_reproducibility_snapshot(
     private_safe_patterns: list[str] | None = None,
 ) -> ReproducibilitySnapshot:
     """Build once and capture the ordinary CGO stdlib action and bytes."""
-    stdlib_cache = run_stdlib_inventory(
+    run_bazel(
         bazel,
         output_user_root,
         workspace,
-        command=command,
-        mode_flags=mode_flags,
-        target=target,
+        [command, *mode_flags, target],
         private_safe_patterns=private_safe_patterns,
     )
     aquery = run_bazel(
@@ -542,11 +552,11 @@ def run_plain_reproducibility_snapshot(
         private_safe_patterns=private_safe_patterns,
     )
     aquery_data = json.loads(aquery.stdout)
-    assert_cgo_reproducibility_actions(
+    assert_cgo_aquery_actions(
         aquery_data,
-        sys.platform,
         expected_instrumented=False,
     )
+    stdlib_cache = plain_stdlib_cache_from_aquery(aquery_data, workspace)
     action_keys, outputs = action_snapshot_from_aquery(
         aquery_data,
         workspace=workspace,
@@ -563,6 +573,39 @@ def run_plain_reproducibility_snapshot(
     )
 
 
+def plain_stdlib_cache_from_aquery(
+    data: dict[str, object], workspace: Path
+) -> StdlibCacheSnapshot:
+    """Inspect only gocache outputs declared by ordinary GoStdlib actions."""
+    path_fragments = {
+        int(fragment["id"]): fragment for fragment in data.get("pathFragments", [])
+    }
+    artifacts = {
+        int(artifact["id"]): resolve_path_fragment(
+            int(artifact["pathFragmentId"]), path_fragments
+        )
+        for artifact in data.get("artifacts", [])
+    }
+    cache_paths = set()
+    for action in data.get("actions", []):
+        if action.get("mnemonic") != "GoStdlib":
+            continue
+        for output_id in action.get("outputIds", []):
+            relative = artifacts[int(output_id)]
+            if PurePosixPath(relative).name == "gocache":
+                cache_paths.add(relative)
+    if not cache_paths:
+        raise ValueError("plain reproducibility aquery has no GoStdlib gocache")
+    for relative in sorted(cache_paths):
+        snapshot = canonical_tree_inventory(workspace / relative)
+        if snapshot.inventory or snapshot.manifest is not None:
+            raise ValueError(
+                "ordinary GoStdlib gocache is not empty: %s contains %s"
+                % (relative, sorted(snapshot.inventory))
+            )
+    return StdlibCacheSnapshot(inventory={}, manifest=None)
+
+
 def run_orchestrion_reproducibility_snapshot(
     bazel: Path,
     output_user_root: Path,
@@ -571,9 +614,11 @@ def run_orchestrion_reproducibility_snapshot(
     command: str,
     mode_flags: list[str],
     target: str,
+    raw_target: str,
+    execution_log: Path,
     private_safe_patterns: list[str] | None = None,
-) -> ReproducibilitySnapshot:
-    """Build once and capture the cache-critical Test Optimization actions."""
+) -> OptimizedReproducibilitySnapshot:
+    """Run one real .topt target and read its compact execution log."""
     stdlib_cache = run_stdlib_inventory(
         bazel,
         output_user_root,
@@ -581,49 +626,139 @@ def run_orchestrion_reproducibility_snapshot(
         command=command,
         mode_flags=mode_flags,
         target=target,
+        execution_log=execution_log,
         private_safe_patterns=private_safe_patterns,
     )
-    aquery = run_bazel(
-        bazel,
-        output_user_root,
-        workspace,
-        [
-            "aquery",
-            *mode_flags,
-            "--output=jsonproto",
-            'mnemonic("(GoStdlib|GoSyntheticTestmainHelpers|GoCompilePkg|GoLink)", deps(%s))'
-            % target,
-        ],
-        private_safe_patterns=private_safe_patterns,
+    if not execution_log.is_file() or execution_log.stat().st_size == 0:
+        raise ValueError("Bazel did not write compact execution log %s" % execution_log)
+    actions = select_reproducibility_actions(
+        read_compact_actions(execution_log),
+        raw_target=raw_target,
     )
-    aquery_data = json.loads(aquery.stdout)
-    assert_cgo_reproducibility_actions(
-        aquery_data,
-        sys.platform,
-        expected_instrumented=True,
-    )
-    action_keys, outputs = action_snapshot_from_aquery(
-        aquery_data,
-        workspace=workspace,
-        target_label=target,
-    )
+    assert_cgo_reproducibility_actions(actions.values(), expected_instrumented=True)
     required = {
         "GoCompilePkg",
         "GoLink",
         "GoStdlib",
         "GoSyntheticTestmainHelpers",
     }
-    found = {identity.split(" ", 1)[0] for identity in action_keys}
+    found = {action.mnemonic for action in actions.values()}
     missing = sorted(required - found)
     if missing:
         raise ValueError(
-            "reproducibility aquery for %s is missing actions: %s"
+            "compact execution log for %s is missing actions: %s"
             % (target, ", ".join(missing))
         )
-    return ReproducibilitySnapshot(
+    return OptimizedReproducibilitySnapshot(
         stdlib_cache=stdlib_cache,
-        action_keys=action_keys,
-        outputs=outputs,
+        actions=actions,
+    )
+
+
+def select_reproducibility_actions(
+    actions: list[CompactAction], *, raw_target: str
+) -> dict[tuple[str, str, tuple[str, ...]], CompactAction]:
+    """Select the four action families whose outputs feed a .topt binary."""
+    selected = {}
+    for action in actions:
+        if action.mnemonic in {"GoStdlib", "GoSyntheticTestmainHelpers"}:
+            pass
+        elif not bazel_labels_match(action.target_label, raw_target):
+            continue
+        elif action.mnemonic == "GoCompilePkg":
+            if not any("~testmain.a" in path for path in action.listed_outputs):
+                continue
+        elif action.mnemonic != "GoLink":
+            continue
+
+        if action.identity in selected:
+            raise ValueError("duplicate compact-log action identity: %s" % (action.identity,))
+        if not action.action_key:
+            raise ValueError(
+                "compact-log action has no cache digest: %s" % (action.identity,)
+            )
+        if not action.actual_outputs:
+            raise ValueError(
+                "compact-log action has no output digests: %s" % (action.identity,)
+            )
+        selected[action.identity] = action
+    return selected
+
+
+def bazel_labels_match(actual: str, expected: str) -> bool:
+    """Compare main-repository labels across canonical-label spellings."""
+    return actual.lstrip("@") == expected
+
+
+@dataclass(frozen=True)
+class ReproducibilityFinding:
+    """One actionable cell from Reprise's action-key/output classifier."""
+
+    action: CompactAction
+    kind: str
+    differing_outputs: tuple[str, ...]
+
+
+def actionable_reproducibility_findings(
+    first: dict[tuple[str, str, tuple[str, ...]], CompactAction],
+    second: dict[tuple[str, str, tuple[str, ...]], CompactAction],
+) -> list[ReproducibilityFinding]:
+    """Apply Reprise's 2x2 classifier and return output-changing findings."""
+    findings = []
+    for identity in sorted(set(first) & set(second)):
+        left = first[identity]
+        right = second[identity]
+        if left.actual_outputs == right.actual_outputs:
+            # A changed action key with identical bytes is Reprise's
+            # non-actionable wasted_rebuild case.
+            continue
+        right_outputs = dict(right.actual_outputs)
+        differing = tuple(
+            path
+            for path, digest in left.actual_outputs
+            if right_outputs.get(path) != digest
+        )
+        left_paths = {path for path, _ in left.actual_outputs}
+        differing += tuple(
+            path for path, _ in right.actual_outputs if path not in left_paths
+        )
+        keys_match = bool(left.action_key) and left.action_key == right.action_key
+        findings.append(
+            ReproducibilityFinding(
+                action=left,
+                kind="tool_nondeterminism" if keys_match else "input_driven",
+                differing_outputs=differing,
+            )
+        )
+    return findings
+
+
+def assert_no_actionable_reproducibility_findings(
+    first: dict[tuple[str, str, tuple[str, ...]], CompactAction],
+    second: dict[tuple[str, str, tuple[str, ...]], CompactAction],
+    patch: Path,
+) -> None:
+    """Fail when Reprise would report an output-changing selected action."""
+    findings = actionable_reproducibility_findings(first, second)
+    if not findings:
+        return
+    details = []
+    for finding in findings:
+        outputs = ", ".join(finding.differing_outputs[:5])
+        if len(finding.differing_outputs) > 5:
+            outputs += ", ... and %d more" % (len(finding.differing_outputs) - 5)
+        details.append(
+            "%s %s [%s]: %s"
+            % (
+                finding.action.mnemonic,
+                finding.action.target_label,
+                finding.kind,
+                outputs,
+            )
+        )
+    raise ValueError(
+        "Test Optimization actions are not reproducible for %s: %s"
+        % (patch, "; ".join(details))
     )
 
 
@@ -692,13 +827,12 @@ def action_snapshot_from_aquery(
     return action_keys, outputs
 
 
-def assert_cgo_reproducibility_actions(
+def assert_cgo_aquery_actions(
     data: dict[str, object],
-    platform_name: str,
     *,
     expected_instrumented: bool,
 ) -> None:
-    """Require the replay to cover the expected CGO/debug stdlib mode."""
+    """Require an aquery to cover the expected CGO/debug stdlib mode."""
     matching = []
     for action in data.get("actions", []):
         if action.get("mnemonic") != "GoStdlib":
@@ -712,11 +846,6 @@ def assert_cgo_reproducibility_actions(
             continue
         if "-g" not in environment.get("CGO_CFLAGS", "").split():
             continue
-        if platform_name.startswith("linux"):
-            ldflags = environment.get("CGO_LDFLAGS", "")
-            required = ["-fuse-ld=lld", "--build-id=md5", "--threads=4"]
-            if any(flag not in ldflags for flag in required):
-                continue
         if ("-orchestrion" in arguments) == expected_instrumented:
             matching.append(action)
     if not matching:
@@ -725,6 +854,33 @@ def assert_cgo_reproducibility_actions(
             "reproducibility aquery must contain a %s CGO-enabled "
             "GoStdlib action with debug flags" % mode
         )
+
+
+def assert_cgo_reproducibility_actions(
+    actions, *, expected_instrumented: bool
+) -> None:
+    """Require a compact log to contain the requested CGO stdlib mode."""
+    for action in actions:
+        if action.mnemonic != "GoStdlib":
+            continue
+        environment = dict(action.environment_variables)
+        if environment.get("CGO_ENABLED") != "1":
+            continue
+        if "-g" not in environment.get("CGO_CFLAGS", "").split():
+            continue
+        instrumented = (
+            "-orchestrion" in action.command_args
+            and "-orchestrion_mode" in action.command_args
+            and "test_optimization" in action.command_args
+            and any("rules_go_orchestrion_tool" in arg for arg in action.command_args)
+        )
+        if instrumented == expected_instrumented:
+            return
+    mode = "instrumented" if expected_instrumented else "plain"
+    raise ValueError(
+        "compact execution log must contain a %s CGO-enabled "
+        "GoStdlib action with debug flags" % mode
+    )
 
 
 def resolve_path_fragment(
@@ -829,14 +985,21 @@ def run_stdlib_inventory(
     command: str,
     mode_flags: list[str],
     target: str,
+    execution_log: Path | None = None,
     private_safe_patterns: list[str] | None = None,
 ) -> StdlibCacheSnapshot:
     """Execute one stdlib action and inventory its declared cache TreeArtifact."""
+    execution_log_flags = []
+    if execution_log is not None:
+        execution_log.parent.mkdir(parents=True, exist_ok=True)
+        execution_log_flags = [
+            "--execution_log_compact_file=%s" % execution_log.as_posix(),
+        ]
     run_bazel(
         bazel,
         output_user_root,
         workspace,
-        [command, *mode_flags, target],
+        [command, *mode_flags, *execution_log_flags, target],
         private_safe_patterns=private_safe_patterns,
     )
     output_path_result = run_bazel(
@@ -1054,21 +1217,6 @@ def run_private_safe(
     return result
 
 
-def assert_aquery_contains(aquery_output: str, patch: Path) -> None:
-    """Assert the generated-patch smoke actually used Orchestrion test mode."""
-    required = [
-        "-orchestrion_mode",
-        "test_optimization",
-        "rules_go_orchestrion_tool",
-    ]
-    missing = [needle for needle in required if needle not in aquery_output]
-    if missing:
-        raise ValueError(
-            "functional smoke for %s did not prove Orchestrion test mode; missing %s"
-            % (patch, ", ".join(missing))
-        )
-
-
 def modified_tracked_files(private_blocklist_file: Path | None) -> list[Path]:
     """Return modified tracked repository files when a private scan is requested."""
     if private_blocklist_file is None:
@@ -1092,24 +1240,6 @@ def modified_tracked_files(private_blocklist_file: Path | None) -> list[Path]:
             if path.is_file():
                 paths.add(path)
     return sorted(paths)
-
-
-def _bazel_shutdown(
-    bazel: Path,
-    output_user_root: Path,
-    private_safe_patterns: list[str] | None = None,
-) -> None:
-    """Best-effort shutdown for the smoke workspace Bazel server."""
-    try:
-        run_bazel(
-            bazel,
-            output_user_root,
-            REPO_ROOT,
-            ["shutdown"],
-            private_safe_patterns=private_safe_patterns,
-        )
-    except (OSError, RuntimeError):
-        return
 
 
 def main(argv: list[str] | None = None) -> int:

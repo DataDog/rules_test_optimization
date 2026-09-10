@@ -128,7 +128,7 @@ func cc(args []string) error {
 
 const cgoRandomSeedPrefix = "-frandom-seed="
 
-func normalizeCgoRandomSeed(args []string, execRoot string) {
+func normalizeCgoRandomSeed(args []string, cgoRoot string) {
 	hasRandomSeed := false
 	for _, arg := range args {
 		if strings.HasPrefix(arg, cgoRandomSeedPrefix) {
@@ -150,9 +150,10 @@ func normalizeCgoRandomSeed(args []string, execRoot string) {
 		if workRoot != "" {
 			normalized = strings.ReplaceAll(normalized, workRoot, "$WORK")
 		}
-		if execRoot != "" {
-			normalized = strings.ReplaceAll(normalized, execRoot, "$EXECROOT")
+		if cgoRoot != "" {
+			normalized = strings.ReplaceAll(normalized, cgoRoot, "$EXECROOT")
 		}
+		normalized = normalizeBazelExecRoots(normalized)
 		_, _ = io.WriteString(digest, normalized)
 		_, _ = digest.Write([]byte{0})
 	}
@@ -162,6 +163,50 @@ func normalizeCgoRandomSeed(args []string, execRoot string) {
 			args[i] = seed
 		}
 	}
+}
+
+// normalizeBazelExecRoots removes sandbox-specific prefixes from absolute
+// paths that Bazel passes to the C compiler. Orchestrion may run `go install`
+// from a source directory, so GO_CC_ROOT does not necessarily name the
+// compiler's action execroot.
+func normalizeBazelExecRoots(arg string) string {
+	for _, separator := range []byte{'/', '\\'} {
+		marker := string(separator) + "execroot" + string(separator)
+		for searchFrom := 0; searchFrom < len(arg); {
+			markerOffset := strings.Index(arg[searchFrom:], marker)
+			if markerOffset < 0 {
+				break
+			}
+			markerOffset += searchFrom
+			workspaceStart := markerOffset + len(marker)
+			workspaceEnd := workspaceStart
+			for workspaceEnd < len(arg) && arg[workspaceEnd] != separator {
+				workspaceEnd++
+			}
+			if workspaceEnd == workspaceStart {
+				searchFrom = workspaceStart
+				continue
+			}
+
+			pathStart := bazelAbsolutePathStart(arg, markerOffset, separator)
+			arg = arg[:pathStart] + "$EXECROOT" + arg[workspaceEnd:]
+			searchFrom = pathStart + len("$EXECROOT")
+		}
+	}
+	return arg
+}
+
+func bazelAbsolutePathStart(arg string, markerOffset int, separator byte) int {
+	segmentStart := strings.LastIndexAny(arg[:markerOffset], "=,") + 1
+	pathOffset := strings.IndexByte(arg[segmentStart:markerOffset], separator)
+	if pathOffset < 0 {
+		return segmentStart
+	}
+	pathStart := segmentStart + pathOffset
+	if pathStart >= segmentStart+2 && arg[pathStart-1] == ':' {
+		return pathStart - 2
+	}
+	return pathStart
 }
 
 func goBuildWorkRoot(args []string) string {

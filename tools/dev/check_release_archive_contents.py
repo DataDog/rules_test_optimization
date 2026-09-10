@@ -60,6 +60,7 @@ def required_archive_paths(registry: ForkRegistry) -> set[str]:
     required = {
         ".bazelignore",
         "tools/dev/check_release_archive_contents.py",
+        "tools/dev/compact_execution_log.py",
         "tools/dev/generate_rules_go_consumer_patch.py",
         "tools/dev/generate_rules_go_fork_maps.py",
         "tools/dev/materialize_rules_go_fork.py",

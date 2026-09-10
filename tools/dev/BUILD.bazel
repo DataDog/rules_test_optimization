@@ -12,6 +12,7 @@ exports_files(
         "check_bazelversion_sync.py",
         "check_module_versions.py",
         "check_release_archive_contents.py",
+        "compact_execution_log.py",
         "diff_rules_go_fork.py",
         "dotnet_bootstrap.bzl",
         "generate_rules_go_consumer_patch.py",

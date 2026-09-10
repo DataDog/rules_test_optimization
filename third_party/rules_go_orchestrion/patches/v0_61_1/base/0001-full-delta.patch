@@ -4751,7 +4751,7 @@ index fdeda2d..76d69b6 100644
  	}
  }
 diff --git a/go/tools/builders/cc.go b/go/tools/builders/cc.go
-index 6f67914..f7ba8b1 100644
+index 6f67914..967f869 100644
 --- a/go/tools/builders/cc.go
 +++ b/go/tools/builders/cc.go
 @@ -1,7 +1,11 @@
@@ -4864,14 +4864,14 @@ index 6f67914..f7ba8b1 100644
  	if runtime.GOOS == "windows" {
  		cmd := exec.Command(normalized[0], normalized[1:]...)
  		cmd.Stdout = os.Stdout
-@@ -46,3 +125,60 @@ func cc(args []string) error {
+@@ -46,3 +125,105 @@ func cc(args []string) error {
  		return syscall.Exec(normalized[0], normalized, os.Environ())
  	}
  }
 +
 +const cgoRandomSeedPrefix = "-frandom-seed="
 +
-+func normalizeCgoRandomSeed(args []string, execRoot string) {
++func normalizeCgoRandomSeed(args []string, cgoRoot string) {
 +	hasRandomSeed := false
 +	for _, arg := range args {
 +		if strings.HasPrefix(arg, cgoRandomSeedPrefix) {
@@ -4893,9 +4893,10 @@ index 6f67914..f7ba8b1 100644
 +		if workRoot != "" {
 +			normalized = strings.ReplaceAll(normalized, workRoot, "$WORK")
 +		}
-+		if execRoot != "" {
-+			normalized = strings.ReplaceAll(normalized, execRoot, "$EXECROOT")
++		if cgoRoot != "" {
++			normalized = strings.ReplaceAll(normalized, cgoRoot, "$EXECROOT")
 +		}
++		normalized = normalizeBazelExecRoots(normalized)
 +		_, _ = io.WriteString(digest, normalized)
 +		_, _ = digest.Write([]byte{0})
 +	}
@@ -4905,6 +4906,50 @@ index 6f67914..f7ba8b1 100644
 +			args[i] = seed
 +		}
 +	}
++}
++
++// normalizeBazelExecRoots removes sandbox-specific prefixes from absolute
++// paths that Bazel passes to the C compiler. Orchestrion may run `go install`
++// from a source directory, so GO_CC_ROOT does not necessarily name the
++// compiler's action execroot.
++func normalizeBazelExecRoots(arg string) string {
++	for _, separator := range []byte{'/', '\\'} {
++		marker := string(separator) + "execroot" + string(separator)
++		for searchFrom := 0; searchFrom < len(arg); {
++			markerOffset := strings.Index(arg[searchFrom:], marker)
++			if markerOffset < 0 {
++				break
++			}
++			markerOffset += searchFrom
++			workspaceStart := markerOffset + len(marker)
++			workspaceEnd := workspaceStart
++			for workspaceEnd < len(arg) && arg[workspaceEnd] != separator {
++				workspaceEnd++
++			}
++			if workspaceEnd == workspaceStart {
++				searchFrom = workspaceStart
++				continue
++			}
++
++			pathStart := bazelAbsolutePathStart(arg, markerOffset, separator)
++			arg = arg[:pathStart] + "$EXECROOT" + arg[workspaceEnd:]
++			searchFrom = pathStart + len("$EXECROOT")
++		}
++	}
++	return arg
++}
++
++func bazelAbsolutePathStart(arg string, markerOffset int, separator byte) int {
++	segmentStart := strings.LastIndexAny(arg[:markerOffset], "=,") + 1
++	pathOffset := strings.IndexByte(arg[segmentStart:markerOffset], separator)
++	if pathOffset < 0 {
++		return segmentStart
++	}
++	pathStart := segmentStart + pathOffset
++	if pathStart >= segmentStart+2 && arg[pathStart-1] == ':' {
++		return pathStart - 2
++	}
++	return pathStart
 +}
 +
 +func goBuildWorkRoot(args []string) string {
@@ -4927,10 +4972,10 @@ index 6f67914..f7ba8b1 100644
 +}
 diff --git a/go/tools/builders/cc_test.go b/go/tools/builders/cc_test.go
 new file mode 100644
-index 0000000..f570843
+index 0000000..b8b4865
 --- /dev/null
 +++ b/go/tools/builders/cc_test.go
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,74 @@
 +package main
 +
 +import (
@@ -4940,6 +4985,8 @@ index 0000000..f570843
 +)
 +
 +func TestNormalizeCgoRandomSeedIgnoresEphemeralRoots(t *testing.T) {
++	firstCCRoot := filepath.Join("tmp", "source", "first", "workspace")
++	secondCCRoot := filepath.Join("tmp", "source", "second", "workspace")
 +	firstExecRoot := filepath.Join("tmp", "sandbox", "1", "execroot", "workspace")
 +	secondExecRoot := filepath.Join("tmp", "sandbox", "2", "execroot", "workspace")
 +	firstWorkRoot := filepath.Join("tmp", "go-build111")
@@ -4960,16 +5007,38 @@ index 0000000..f570843
 +		"-c", filepath.Join(secondWorkRoot, "b001", "_cgo_export.c"),
 +	}
 +
-+	normalizeCgoRandomSeed(first, firstExecRoot)
-+	normalizeCgoRandomSeed(second, secondExecRoot)
++	// Orchestrion runs `go install` from the resolved module directory, while
++	// Bazel's C compiler remains rooted in the action execroot. The wrapper must
++	// normalize both independent roots even though GO_CC_ROOT only names the
++	// former.
++	normalizeCgoRandomSeed(first, firstCCRoot)
++	normalizeCgoRandomSeed(second, secondCCRoot)
 +	if got, want := randomSeedArg(first), randomSeedArg(second); got == "" || got != want {
 +		t.Fatalf("normalized seeds differ:\nfirst:  %s\nsecond: %s", got, want)
 +	}
 +
 +	second = append(second, "-DPROFILE=changed")
-+	normalizeCgoRandomSeed(second, secondExecRoot)
++	normalizeCgoRandomSeed(second, secondCCRoot)
 +	if randomSeedArg(first) == randomSeedArg(second) {
 +		t.Fatal("meaningful compiler arguments must affect the normalized seed")
++	}
++}
++
++func TestNormalizeBazelExecRoots(t *testing.T) {
++	tests := map[string]string{
++		"/tmp/sandbox/1/execroot/workspace/external/cc":                       "$EXECROOT/external/cc",
++		"-I/tmp/sandbox/1/execroot/workspace/include":                         "-I$EXECROOT/include",
++		"--sysroot=/tmp/one/execroot/ws/sysroot":                              "--sysroot=$EXECROOT/sysroot",
++		"-ffile-prefix-map=/tmp/one/execroot/ws/src=/tmp/two/execroot/ws/src": "-ffile-prefix-map=$EXECROOT/src=$EXECROOT/src",
++		`C:\tmp\one\execroot\ws\external\cc.exe`:                              `$EXECROOT\external\cc.exe`,
++		`-IC:\tmp\one\execroot\ws\include`:                                    `-I$EXECROOT\include`,
++		`C:/tmp/one/execroot/ws/external/cc.exe`:                              `$EXECROOT/external/cc.exe`,
++		`-IC:/tmp/one/execroot/ws/include`:                                    `-I$EXECROOT/include`,
++	}
++	for input, want := range tests {
++		if got := normalizeBazelExecRoots(input); got != want {
++			t.Errorf("normalizeBazelExecRoots(%q) = %q, want %q", input, got, want)
++		}
 +	}
 +}
 +

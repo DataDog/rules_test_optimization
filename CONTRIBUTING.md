@@ -70,6 +70,7 @@ This product includes software developed at Datadog
   - `shellcheck` (shell lint lane)
   - `buildifier` (Starlark formatting lane)
   - `jq` (integration harness payload/CODEOWNERS checks)
+  - `zstd` (rules_go compact execution-log verification)
 - Optional pre-commit setup:
   - `python3 -m pip install pre-commit && pre-commit install`
 - Optional Python syntax smoke check when editing tooling:
