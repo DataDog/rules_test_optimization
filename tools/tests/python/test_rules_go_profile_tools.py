@@ -21,6 +21,7 @@ import sys
 import tempfile
 import types
 import unittest
+from unittest import mock
 
 
 def _runfile(rel_path: str) -> Path:
@@ -82,6 +83,23 @@ def _write(path: Path, content: str, mode: int = 0o644) -> None:
 def _copy_tree(src: Path, dst: Path) -> None:
     """Copy a fixture tree preserving symlinks and metadata."""
     shutil.copytree(src, dst, symlinks=True)
+
+
+def _proto_varint(value: int) -> bytes:
+    encoded = bytearray()
+    while value > 0x7F:
+        encoded.append((value & 0x7F) | 0x80)
+        value >>= 7
+    encoded.append(value)
+    return bytes(encoded)
+
+
+def _proto_field(number: int, value: int | bytes | str) -> bytes:
+    if isinstance(value, int):
+        return _proto_varint(number << 3) + _proto_varint(value)
+    if isinstance(value, str):
+        value = value.encode("utf-8")
+    return _proto_varint((number << 3) | 2) + _proto_varint(len(value)) + value
 
 
 class RulesGoProfileToolTests(unittest.TestCase):
@@ -402,8 +420,13 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
             )
 
             workspace_text = (workspace / "WORKSPACE").read_text(encoding="utf-8")
+            build_text = (workspace / "app/BUILD.bazel").read_text(encoding="utf-8")
             self.assertIn('go_sdk_root = "@go_sdk//:ROOT"', workspace_text)
             self.assertIn('go_sdk_version = "1.25.0"', workspace_text)
+            self.assertIn('name = "hello_test.topt"', build_text)
+            self.assertIn('orchestrion_mode = "test_optimization"', build_text)
+            self.assertIn("cgo = True", build_text)
+            self.assertTrue((workspace / "app/hello_cgo.go").is_file())
 
     def test_run_bazel_scans_captured_output_before_failure_details(self) -> None:
         """Verifier command wrappers must not leak denylisted command output."""
@@ -423,6 +446,14 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                     ["version"],
                     private_safe_patterns=["DENYLIST_SENTINEL"],
                 )
+
+    def test_smoke_environment_honors_explicit_bazel_version(self) -> None:
+        """Consumer reproductions may select a Bazel version without editing the repo."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            with mock.patch.dict(os.environ, {"USE_BAZEL_VERSION": "8.8.0"}):
+                env = self.mod.smoke_bazel_env(Path(raw_tmp) / "output-user-root")
+
+        self.assertEqual("8.8.0", env["USE_BAZEL_VERSION"])
 
     def test_stdlib_cache_snapshot_accepts_manifested_data_entries(self) -> None:
         """The determinism verifier accepts only sorted manifested data entries."""
@@ -450,6 +481,289 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                 "runtime/internal/sys=cc/runtime-internal-d\n",
             )
 
+    def test_action_snapshot_covers_cache_critical_instrumented_actions(self) -> None:
+        """The replay snapshot covers stdlib, helpers, testmain compile, and link."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            workspace = Path(raw_tmp)
+            paths = {
+                1: {"id": 1, "label": "bazel-out"},
+                2: {"id": 2, "label": "arm64-fastbuild", "parentId": 1},
+                3: {"id": 3, "label": "bin", "parentId": 2},
+                4: {"id": 4, "label": "external", "parentId": 3},
+                5: {"id": 5, "label": "io_bazel_rules_go", "parentId": 4},
+                6: {"id": 6, "label": "stdlib_", "parentId": 5},
+                7: {"id": 7, "label": "synthetic_helpers", "parentId": 5},
+                8: {"id": 8, "label": "app", "parentId": 3},
+                9: {"id": 9, "label": "hello_test~testmain.a", "parentId": 8},
+                10: {"id": 10, "label": "hello_test", "parentId": 8},
+                11: {"id": 11, "label": "library.a", "parentId": 8},
+            }
+            artifacts = [
+                {"id": 101, "pathFragmentId": 6},
+                {"id": 102, "pathFragmentId": 7},
+                {"id": 103, "pathFragmentId": 9},
+                {"id": 104, "pathFragmentId": 10},
+                {"id": 105, "pathFragmentId": 11},
+            ]
+            for relative, content in {
+                "bazel-out/arm64-fastbuild/bin/external/io_bazel_rules_go/stdlib_/fmt.a": "stdlib",
+                "bazel-out/arm64-fastbuild/bin/external/io_bazel_rules_go/synthetic_helpers/testing.a": "helpers",
+                "bazel-out/arm64-fastbuild/bin/app/hello_test~testmain.a": "testmain",
+                "bazel-out/arm64-fastbuild/bin/app/hello_test": "binary",
+                "bazel-out/arm64-fastbuild/bin/app/library.a": "library",
+            }.items():
+                _write(workspace / relative, content)
+
+            action_keys, outputs = self.mod.action_snapshot_from_aquery(
+                {
+                    "pathFragments": list(paths.values()),
+                    "artifacts": artifacts,
+                    "targets": [
+                        {"id": 1, "label": "@@io_bazel_rules_go//:stdlib"},
+                        {"id": 2, "label": "//app:hello_test"},
+                    ],
+                    "configuration": [{"id": 1, "mnemonic": "arm64-fastbuild"}],
+                    "actions": [
+                        {
+                            "mnemonic": "GoStdlib",
+                            "targetId": 1,
+                            "configurationId": 1,
+                            "outputIds": [101],
+                            "actionKey": "stdlib-key",
+                        },
+                        {
+                            "mnemonic": "GoSyntheticTestmainHelpers",
+                            "targetId": 1,
+                            "configurationId": 1,
+                            "outputIds": [102],
+                            "actionKey": "helpers-key",
+                        },
+                        {
+                            "mnemonic": "GoCompilePkg",
+                            "targetId": 2,
+                            "configurationId": 1,
+                            "outputIds": [103],
+                            "actionKey": "testmain-key",
+                        },
+                        {
+                            "mnemonic": "GoCompilePkg",
+                            "targetId": 2,
+                            "configurationId": 1,
+                            "outputIds": [105],
+                            "actionKey": "ordinary-library-key",
+                        },
+                        {
+                            "mnemonic": "GoLink",
+                            "targetId": 2,
+                            "configurationId": 1,
+                            "outputIds": [104],
+                            "actionKey": "link-key",
+                        },
+                    ],
+                },
+                workspace=workspace,
+                target_label="//app:hello_test",
+            )
+
+            self.assertEqual(4, len(action_keys))
+            self.assertEqual(
+                {"GoCompilePkg", "GoLink", "GoStdlib", "GoSyntheticTestmainHelpers"},
+                {identity.split(" ", 1)[0] for identity in action_keys},
+            )
+            self.assertEqual(6, len(outputs))
+            self.assertFalse(any("library.a" in path for path in outputs))
+
+    def test_reproducibility_flags_mirror_cgo_debug_builds(self) -> None:
+        """The replay mirrors consumer flags without adding compiler policy."""
+        common = self.mod.cgo_reproducibility_flags()
+        self.assertIn("--@io_bazel_rules_go//go/config:pure=False", common)
+        self.assertIn("--@io_bazel_rules_go//go/config:linkmode=normal", common)
+        self.assertIn("--incompatible_strict_action_env", common)
+        self.assertIn("--experimental_platform_in_output_dir", common)
+        self.assertIn("--copt=-g", common)
+        self.assertFalse(any(flag.startswith("--repo_env=CC=") for flag in common))
+        self.assertFalse(any(flag.startswith("--linkopt=") for flag in common))
+        self.assertNotIn("--copt=-O2", common)
+
+    def test_reproducibility_aquery_requires_requested_cgo_mode(self) -> None:
+        """Each isolated replay must expose its requested CGO stdlib mode."""
+        environment = [
+            {"key": "CGO_ENABLED", "value": "1"},
+            {"key": "CGO_CFLAGS", "value": "-O2 -g"},
+            {
+                "key": "CGO_LDFLAGS",
+                "value": "-fuse-ld=lld -Wl,--build-id=md5 -Wl,--threads=4",
+            },
+        ]
+        plain = {
+            "mnemonic": "GoStdlib",
+            "arguments": ["builder", "stdlib"],
+            "environmentVariables": environment,
+        }
+        instrumented = {
+            **plain,
+            "arguments": ["builder", "stdlib", "-orchestrion", "orchestrion"],
+        }
+        self.mod.assert_cgo_aquery_actions(
+            {"actions": [plain]}, expected_instrumented=False
+        )
+        self.mod.assert_cgo_aquery_actions(
+            {"actions": [instrumented]}, expected_instrumented=True
+        )
+        with self.assertRaisesRegex(ValueError, "plain CGO-enabled"):
+            self.mod.assert_cgo_aquery_actions(
+                {"actions": [instrumented]},
+                expected_instrumented=False,
+            )
+
+    def test_compact_log_requires_test_optimization_transition(self) -> None:
+        """The compact-log gate rejects global or incomplete instrumentation."""
+        def action(*arguments: str):
+            return self.mod.CompactAction(
+                target_label="@@io_bazel_rules_go//:stdlib",
+                mnemonic="GoStdlib",
+                command_args=arguments,
+                environment_variables=(
+                    ("CGO_ENABLED", "1"),
+                    ("CGO_CFLAGS", "-g"),
+                ),
+                listed_outputs=("bazel-out/stdlib/gocache",),
+                action_key="key",
+                actual_outputs=(("bazel-out/stdlib/gocache/net.a", "digest"),),
+            )
+
+        valid = action(
+            "builder",
+            "-orchestrion",
+            "external/rules_go_orchestrion_tool/orchestrion",
+            "-orchestrion_mode",
+            "test_optimization",
+        )
+        self.mod.assert_cgo_reproducibility_actions(
+            [valid], expected_instrumented=True
+        )
+        with self.assertRaisesRegex(ValueError, "instrumented CGO-enabled"):
+            self.mod.assert_cgo_reproducibility_actions(
+                [action("builder", "-orchestrion", "tool")],
+                expected_instrumented=True,
+            )
+
+    def test_reprise_classifier_only_returns_output_changing_actions(self) -> None:
+        """The verifier uses the same actionable cells as Reprise's 2x2 table."""
+
+        def action(key: str, output: str):
+            return self.mod.CompactAction(
+                target_label="//app:test.topt__raw_go_test",
+                mnemonic="GoLink",
+                command_args=(),
+                environment_variables=(),
+                listed_outputs=("bazel-out/app/test",),
+                action_key=key,
+                actual_outputs=(("bazel-out/app/test", output),),
+            )
+
+        baseline = action("key-a", "output-a")
+        identity = baseline.identity
+        self.assertEqual(
+            [],
+            self.mod.actionable_reproducibility_findings(
+                {identity: baseline}, {identity: action("key-a", "output-a")}
+            ),
+        )
+        self.assertEqual(
+            [],
+            self.mod.actionable_reproducibility_findings(
+                {identity: baseline}, {identity: action("key-b", "output-a")}
+            ),
+        )
+        tool_finding = self.mod.actionable_reproducibility_findings(
+            {identity: baseline}, {identity: action("key-a", "output-b")}
+        )
+        self.assertEqual(["tool_nondeterminism"], [item.kind for item in tool_finding])
+        input_finding = self.mod.actionable_reproducibility_findings(
+            {identity: baseline}, {identity: action("key-b", "output-b")}
+        )
+        self.assertEqual(["input_driven"], [item.kind for item in input_finding])
+
+        missing_key_finding = self.mod.actionable_reproducibility_findings(
+            {identity: action("", "output-a")},
+            {identity: action("", "output-b")},
+        )
+        self.assertEqual(
+            ["output_drift_without_action_key"],
+            [item.kind for item in missing_key_finding],
+        )
+
+    def test_reprise_classifier_rejects_action_set_drift(self) -> None:
+        """An action missing from either cold run makes the comparison incomplete."""
+        action = self.mod.CompactAction(
+            target_label="//app:test.topt__raw_go_test",
+            mnemonic="GoLink",
+            command_args=(),
+            environment_variables=(),
+            listed_outputs=("bazel-out/app/test",),
+            action_key="",
+            actual_outputs=(("bazel-out/app/test", "output"),),
+        )
+
+        findings = self.mod.actionable_reproducibility_findings(
+            {action.identity: action},
+            {},
+        )
+
+        self.assertEqual(["action_set_changed"], [item.kind for item in findings])
+
+    def test_reproducibility_action_allows_missing_cache_digest(self) -> None:
+        """Cache-off Reprise logs still prove determinism from output digests."""
+        action = self.mod.CompactAction(
+            target_label="//app:test.topt__raw_go_test",
+            mnemonic="GoLink",
+            command_args=(),
+            environment_variables=(),
+            listed_outputs=("bazel-out/app/test",),
+            action_key="",
+            actual_outputs=(("bazel-out/app/test", "output"),),
+        )
+
+        selected = self.mod.select_reproducibility_actions(
+            [action],
+            raw_target="//app:test.topt__raw_go_test",
+        )
+
+        self.assertEqual({action.identity: action}, selected)
+
+    def test_reproducibility_action_requires_output_digests(self) -> None:
+        """A selected action without observed bytes cannot prove determinism."""
+        action = self.mod.CompactAction(
+            target_label="//app:test.topt__raw_go_test",
+            mnemonic="GoLink",
+            command_args=(),
+            environment_variables=(),
+            listed_outputs=("bazel-out/app/test",),
+            action_key="key",
+            actual_outputs=(),
+        )
+        with self.assertRaisesRegex(ValueError, "has no output digests"):
+            self.mod.select_reproducibility_actions(
+                [action],
+                raw_target="//app:test.topt__raw_go_test",
+            )
+
+    def test_action_output_digest_is_independent_of_its_root(self) -> None:
+        """Logical paths, modes, and bytes determine a declared output digest."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            first = root / "first"
+            second = root / "second"
+            _write(first / "nested" / "archive.a", "same bytes")
+            _write(second / "nested" / "archive.a", "same bytes")
+
+            first_digest = self.mod.canonical_artifact_digest(first)
+            self.assertEqual(first_digest, self.mod.canonical_artifact_digest(second))
+
+            _write(second / "nested" / "archive.a", "different bytes")
+            self.assertNotEqual(first_digest, self.mod.canonical_artifact_digest(second))
+
     def test_stdlib_cache_snapshot_rejects_unmanifested_entries(self) -> None:
         """Action indexes and other unmanifested files fail verification."""
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -475,6 +789,82 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
             nonempty = self.mod.canonical_tree_inventory(root)
             with self.assertRaisesRegex(ValueError, "is not empty"):
                 self.mod.assert_plain_stdlib_cache(nonempty, Path("profile.patch"))
+
+
+class CompactExecutionLogTests(unittest.TestCase):
+    """Validate the dependency-free projection of Bazel compact logs."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.mod = _load_module(
+            "compact_execution_log",
+            "tools/dev/compact_execution_log.py",
+        )
+
+    def test_tree_artifact_outputs_expand_like_bazel_json_logs(self) -> None:
+        """A compact directory output becomes sorted path/digest pairs."""
+        digest_a = _proto_field(1, "digest-a")
+        digest_b = _proto_field(1, "digest-b")
+        file_a = _proto_field(1, "a.a") + _proto_field(2, digest_a)
+        file_b = _proto_field(1, "b.a") + _proto_field(2, digest_b)
+        directory = (
+            _proto_field(1, "bazel-out/stdlib")
+            + _proto_field(2, file_b)
+            + _proto_field(2, file_a)
+        )
+        directory_entry = _proto_field(1, 1) + _proto_field(4, directory)
+        output = _proto_field(5, 1)
+        environment = _proto_field(1, "CGO_ENABLED") + _proto_field(2, "1")
+        action_digest = _proto_field(1, "action-key")
+        spawn = (
+            _proto_field(1, "builder")
+            + _proto_field(2, environment)
+            + _proto_field(6, output)
+            + _proto_field(7, "@@rules_go//:stdlib")
+            + _proto_field(8, "GoStdlib")
+            + _proto_field(16, action_digest)
+        )
+        spawn_entry = _proto_field(7, spawn)
+        stream = (
+            _proto_varint(len(directory_entry))
+            + directory_entry
+            + _proto_varint(len(spawn_entry))
+            + spawn_entry
+        )
+
+        actions = list(self.mod._decode_entries(stream))
+
+        self.assertEqual(1, len(actions))
+        self.assertEqual("action-key", actions[0].action_key)
+        self.assertEqual(("bazel-out/stdlib",), actions[0].listed_outputs)
+        self.assertEqual(
+            (
+                ("bazel-out/stdlib/a.a", "digest-a"),
+                ("bazel-out/stdlib/b.a", "digest-b"),
+            ),
+            actions[0].actual_outputs,
+        )
+
+    def test_truncated_entry_reports_an_actionable_error(self) -> None:
+        """A declared entry length cannot extend beyond the compact stream."""
+        with self.assertRaisesRegex(
+            self.mod.CompactExecutionLogError,
+            "truncated ExecLogEntry",
+        ):
+            list(self.mod._decode_entries(_proto_varint(2) + b"\x08"))
+
+    def test_unknown_spawn_output_reports_an_actionable_error(self) -> None:
+        """A spawn cannot reference an output absent from the compact stream."""
+        output = _proto_field(5, 99)
+        spawn = _proto_field(6, output)
+        spawn_entry = _proto_field(7, spawn)
+        stream = _proto_varint(len(spawn_entry)) + spawn_entry
+
+        with self.assertRaisesRegex(
+            self.mod.CompactExecutionLogError,
+            "unknown output id 99",
+        ):
+            list(self.mod._decode_entries(stream))
 
 
 if __name__ == "__main__":

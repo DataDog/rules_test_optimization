@@ -115,6 +115,13 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
     //...
 ```
 
+This command starts one cross-platform Python 3.10+ uploader. Its coordinator
+prepares shared CODEOWNERS and context data once, then gives each source file to
+one of eight workers by default. A worker handles enrichment, validation,
+preventive splitting, retries, and cleanup for test, coverage, or telemetry
+data. The command without `--upload` uses dry-run enrichment, makes no backend
+requests, deletes no payloads, and still prints the final statistics.
+
 ## Automatic managed Go/Python monorepos
 
 This path is separate from the static recipes below. It is appropriate when a

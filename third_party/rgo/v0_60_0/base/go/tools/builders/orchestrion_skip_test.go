@@ -294,6 +294,14 @@ func TestSyntheticHelperManifestKeepsExternalAbsoluteDependencies(t *testing.T) 
 
 func TestSyntheticTestmainManifestPublishesExternalArchives(t *testing.T) {
 	execroot := t.TempDir()
+	previousDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(execroot); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousDir) })
 	externalArchive := filepath.Join(t.TempDir(), "helper.a")
 	if err := os.WriteFile(externalArchive, []byte("helper archive"), 0o644); err != nil {
 		t.Fatal(err)
@@ -336,7 +344,8 @@ func TestSyntheticTestmainManifestPublishesExternalArchives(t *testing.T) {
 		t.Fatalf("published helper archive count = %d, want 1", len(entries))
 	}
 	publishedArchive := filepath.Join(helperOutputDir, entries[0].Name())
-	if !strings.Contains(gotManifest, "packagefile example.com/helper="+publishedArchive) {
+	publishedRelative := execrootRelativePath(publishedArchive)
+	if !strings.Contains(gotManifest, "packagefile example.com/helper="+publishedRelative) {
 		t.Fatalf("manifest does not reference published helper %q:\n%s", publishedArchive, gotManifest)
 	}
 	publishedData, err := os.ReadFile(publishedArchive)

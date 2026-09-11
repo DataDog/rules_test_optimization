@@ -6,14 +6,14 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Go Orchestrion Maintainer State
+# Go Orchestrion maintainer state
 
 ## Purpose
 
-This document is the maintainer-facing summary of the current Go + Orchestrion
-integration as it exists in this repository after the recent performance work.
+This page summarizes the current Go and Orchestrion integration for
+maintainers.
 
-Use it when you need one place that answers:
+Use it to find:
 
 - how the integration is wired end to end
 - why the fork exists and what it changes
@@ -31,10 +31,10 @@ This is intentionally different from the other Go Orchestrion docs:
 - [rules_go_orchestrion_probe_measurements.md](./rules_go_orchestrion_probe_measurements.md)
   is the running measurement log
 
-This document is the current state summary that ties those three views
-together.
+The supported upstream lines are `rules_go` v0.60.0, v0.61.1, v0.62.0, and
+v0.63.0. They share the same Orchestrion behavior and determinism contract.
 
-## Current Architecture In One View
+## Current architecture
 
 ```mermaid
 flowchart TD
@@ -58,7 +58,7 @@ flowchart TD
     M --> E
 ```
 
-The important model is:
+In this design:
 
 - Bazel is still the build and test system
 - `rules_go` still owns the Go build pipeline
@@ -77,7 +77,7 @@ The important model is:
   managed case, the consumer's central wrapper selects the exact
   `topt_data_by_target` entry before calling `dd_topt_go_test`.
 
-## Mode Contract
+## Mode contract
 
 `dd_topt_go_test` exposes two Orchestrion modes:
 
@@ -93,7 +93,7 @@ instrumentation. Metadata emitted by the Go macro should include
 `bazel.go.test_binary_linker_optimization` so reviewers can tell whether the
 test-binary linker flag optimization was active.
 
-## Why The Fork Exists
+## Why the fork exists
 
 We are not using upstream `rules_go` and upstream Orchestrion as-is.
 
@@ -113,7 +113,7 @@ Orchestrion and upstream `rules_go` do not provide together out of the box:
 In short: the fork is not ornamental. It is the compatibility layer that keeps
 Orchestrion coherent inside Bazel.
 
-## Why The Orchestrion Tool Is Still Built When Enabled
+## Why the Orchestrion tool is built when enabled
 
 On an enabled true cold start, Bazel still builds the Orchestrion binary
 because:
@@ -145,9 +145,7 @@ The recent work changed one important part of this story:
 That reduced cold bootstrap cost substantially without changing the target-side
 tracer version that the instrumented binary actually loads.
 
-## Why The Target Still Uses The Pinned Tracer Version
-
-This is the subtle point that mattered most in the recent work.
+## Why the target uses the pinned tracer version
 
 There are two different module contexts:
 
@@ -169,7 +167,35 @@ The kept design now does this:
 That is why runtime validation must show the target workspace's configured
 Datadog tracer version, even after tool-side `go.mod` rewriting was removed.
 
-## Kept Performance Changes
+## Deterministic action outputs
+
+Bazel can reuse the instrumented build only when identical inputs produce
+identical action keys and bytes. The generated-profile verifier therefore runs
+two isolated builds and compares these action families:
+
+- `GoStdlib`;
+- `GoSyntheticTestmainHelpers`;
+- the synthetic `GoCompilePkg` action that produces `~testmain.a`;
+- `GoLink`.
+
+An ordinary `GoStdlib` action must leave its declared Orchestrion cache empty.
+Only a Test Optimization action may publish the woven stdlib cache, and that
+cache must contain deterministic, manifested archive data. This prevents an
+ordinary Go build from consuming an instrumented standard library.
+
+The instrumented path normalizes values that vary between otherwise equivalent
+Bazel executions: the temporary Go work directory, the Bazel execroot in
+compiler arguments, the CGO random seed, synthetic source trim paths, and build
+IDs in copied helper archives. Relative CGO inputs still resolve against the
+real execroot; normalization changes identity, not input lookup.
+
+`tools/dev/verify_rules_go_profiles.py` implements this check with compact Bazel
+execution logs and isolated output roots. Local runs need `zstd` to read those
+logs. CI splits the supported versions across x86_64 and ARM64 shards. A changed
+action key with identical bytes is reported as avoidable rebuilding; changed
+output bytes are a reproducibility failure.
+
+## Kept performance changes
 
 These changes were kept because they improved performance without changing
 runtime behavior.
@@ -234,7 +260,7 @@ Effect:
 - stdlib action time improved
 - no runtime regression was observed in the validated kept version
 
-## Experiments That Failed
+## Experiments that failed
 
 These failed experiments are worth documenting because they are tempting to try
 again.
@@ -327,7 +353,7 @@ Lesson:
 - the current stdlib root set is coupled to the real Bazel test flow more than
   the surface comment suggests
 
-## Current Best-Known Baseline
+## Current best-known baseline
 
 The current baseline should be read in two modes:
 
@@ -351,10 +377,8 @@ Current cold numbers:
   - download/extract: `32.066s`
   - tool `go build`: `113.334s`
 
-The main conclusion is simple:
-
-- the largest remaining cold-start cost is still building the patched
-  Orchestrion tool from scratch
+The largest remaining cold-start cost is building the patched Orchestrion tool
+from scratch.
 
 ### Warm bootstrap reuse
 
@@ -371,12 +395,9 @@ Current isolated warm-bootstrap observation:
 - cache identity source: the declared Bazel SDK, allowing restore before SDK
   materialization
 
-The main conclusion is:
-
-- once the bootstrap artifact cache hits, the tool bootstrap is no longer the
-  main cost
-- Bazel startup, repository mapping, and analysis account for most of the
-  remaining fresh-output-root command time
+Once the bootstrap artifact cache hits, the tool bootstrap is no longer the
+main cost. Bazel startup, repository mapping, and analysis account for most of
+the remaining fresh-output-root command time.
 
 ### Runtime correctness validation
 
@@ -396,7 +417,7 @@ What must be verified:
 
 This validation is part of the baseline, not optional extra checking.
 
-## What Still Looks Expensive
+## Remaining expensive work
 
 ### 1. Cold Orchestrion tool build
 
@@ -422,7 +443,7 @@ The remaining stdlib cost now appears to be mostly real work:
 
 The easy cache tricks have mostly been exhausted or disproved.
 
-## Recommended Next Steps
+## Possible next steps
 
 ### If the goal is the biggest remaining performance win
 
@@ -446,7 +467,7 @@ The most plausible local direction is:
 - do not assume cache-layout tricks are safe
 - keep validating runtime behavior, not just build success
 
-## Validation Checklist For Future Changes
+## Validation checklist for future changes
 
 Future changes in this area should not be considered done until they pass all
 of these checks:
@@ -460,11 +481,14 @@ of these checks:
 5. runtime validation with:
    - `DD_TRACE_DEBUG=1`
    - `DD_CIVISIBILITY_ENABLED=1`
-6. confirmation that:
+6. two isolated generated-profile runs compare `GoStdlib`, synthetic helpers,
+   synthetic `~testmain.a`, and `GoLink` action keys and bytes
+7. confirmation that:
    - tracer startup logs are present
    - the pinned tracer version is the one loaded at runtime
    - a payload file is written under `test.outputs/payloads/tests`
    - metadata includes the expected `bazel.go.orchestrion.mode`
    - metadata includes the expected `bazel.go.test_binary_linker_optimization`
 
-That final runtime check is the one that caught the bad stdlib snapshot idea.
+The runtime check caught the rejected stdlib snapshot approach; the isolated
+action comparison prevents that class of cache drift from reaching a consumer.

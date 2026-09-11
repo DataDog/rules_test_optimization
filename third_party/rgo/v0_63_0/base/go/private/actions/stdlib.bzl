@@ -135,10 +135,8 @@ def _stdlib_execution_requirements(go):
     # CGO_CFLAGS/CGO_LDFLAGS. Bazel does not path-map environment values.
     return SUPPORTS_PATH_MAPPING_REQUIREMENT if go.mode.pure else {}
 
-def _stdlib_list_env(go):
-    return _stdlib_env(go, go.env)
-
-def _stdlib_env(go, base_env):
+def stdlib_env(go, base_env):
+    """Returns the canonical environment for actions that consume this stdlib."""
     env = dict(base_env)
 
     if go.mode.pure:
@@ -163,6 +161,9 @@ def _stdlib_env(go, base_env):
     })
 
     return env
+
+def _stdlib_list_env(go):
+    return stdlib_env(go, go.env)
 
 def _stdlib_action_env(go, orchestrion_trace_version_file, orchestrion_proxy_root_marker, orchestrion_tool_version_file):
     return _orchestrion_action_env(
@@ -219,7 +220,7 @@ def _build_shared_synthetic_testmain_helpers(go, goroot_file, stdlib_cache_dir):
         arguments = [args],
         env = _orchestrion_action_env(
             go,
-            _stdlib_env(go, go.env_for_path_mapping),
+            stdlib_env(go, go.env_for_path_mapping),
             orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None),
             orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None),
             orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None),

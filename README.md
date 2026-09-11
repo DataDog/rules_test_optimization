@@ -556,6 +556,12 @@ Disabled or mismatched repositories fail analysis. This descriptor is an
 additive option; generated single-, multi-, and manifest-sync exports keep
 their existing behavior.
 
+The `.topt` clone preserves the source test's execution policy. A source tagged
+`no-remote-exec` therefore still runs its `TestRunner` locally, but that policy
+does not leak into deterministic build actions such as stdlib preparation,
+synthetic testmain helpers, compilation, or linking. Those actions remain
+eligible for normal Bazel caching and remote execution.
+
 Large consumers can warm the matching instrumented standard library in a
 dedicated cache-writing invocation:
 
@@ -572,8 +578,9 @@ bazel build //tools/test_optimization:go_stdlib_warmup \
 ```
 
 The warmup target applies the same target-scoped Go configuration transitions,
-enables Orchestrion in `test_optimization` mode, and materializes both the
-instrumented stdlib and its Go build cache. The consumer
+enables Orchestrion in `test_optimization` mode, and materializes the
+instrumented stdlib plus its deterministic declared archive cache. Ordinary Go
+actions neither publish nor consume that instrumented cache. The consumer
 remains responsible for restricting remote-cache writes to a trusted CI
 invocation.
 Without the named config, the target is a no-op so ordinary broad builds can
@@ -1472,14 +1479,26 @@ The uploader is a normal Bazel rule (not a test) that runs via `bazel run` after
 4. Then run the uploader via `bazel run`
 5. The uploader discovers all `test.outputs/` directories, waits for quiescence, uploads, and deletes files
 
-Before transport, the uploader enriches each test payload and splits any body
-larger than 4,500,000 bytes along its `events` array. Parts preserve event order
-and the original top-level envelope, are compressed independently when gzip is
-enabled, and use independent retries. The original payload is deleted only
-after every part uploads successfully. A terminal upload failure reports the
-HTTP status, a bounded response body, and uncompressed/compressed/transmitted
-sizes without requiring debug mode. A single event above the 5,000,000-byte
-intake limit is rejected because it cannot be split safely.
+The default Python runtime prepares CODEOWNERS, contexts, schemas, freshness,
+and telemetry plans once. It then gives each source file to one of eight
+independent workers. That worker owns enrichment, optional validation,
+preventive splitting, upload retries, and cleanup for the file, whether it
+contains test, coverage, or telemetry data. Starting several uploader processes
+is neither necessary nor supported.
+
+After enrichment, a worker compacts a test payload and splits it along its
+`events` array before any HTTP request when the encoded body would exceed
+`4_718_592` bytes (4.5 MiB). Chunks preserve event order and the original
+top-level envelope, and each chunk has its own retry lifecycle. HTTP `413` is a
+terminal contract error: the uploader has already applied the preventive limit,
+so retrying or splitting adaptively would hide a defect. A single event that
+cannot fit within the limit is rejected locally without spending a request.
+
+At the end of the run, the uploader prints deterministic totals for files,
+payload types, chunks, requests, retries, and cleanup. Use `--debug` for verbose,
+redacted diagnostics. Use `--dry-run --validate-enrichment` to exercise
+discovery, enrichment, validation, splitting, and request preparation without
+contacting the backend or deleting source files.
 
 Telemetry-specific notes:
 - Telemetry files must contain one raw top-level tracer telemetry request body per file.
@@ -1522,12 +1541,12 @@ $env:DD_SITE = "datadoghq.com"
   //...
 ```
 
-**IMPORTANT**: Always preserve the test exit code. When upload is enabled, the
+Always preserve the test exit code. When upload is enabled, the
 wrapper runs the doctor, then validates enrichment and uploads every available
 fresh valid payload in one uploader pass even if tests or doctor failed. The
 earliest test, doctor, or uploader failure remains the job result.
 
-### Important runtime requirements
+### Runtime requirements
 
 1. Use `bazel run` (not `bazel test`) for uploader execution.
 2. Use a single uploader target per workspace (do not run concurrent uploaders).
@@ -1720,13 +1739,12 @@ an `outputs.zip` archive to the requested `--output` path before
 the downloader contract; it does not ship credentials or a Datadog-internal CAS
 client.
 
-Artifact staging requires Python at uploader runtime. Bash resolves
-`DD_TEST_OPTIMIZATION_PYTHON`, then `PYTHON`, then `python3`, then `python`;
-PowerShell uses the same discovery order. Existing local-only uploader flows
-remain usable without Python except for support bundle generation and the
-pre-existing optional schema and telemetry helpers. Bash BEP freshness parsing
-still requires `jq` whenever BEP freshness validation is enabled in the Bash
-uploader path.
+The default uploader and artifact staging require Python 3.10 or newer. The
+small Bash and PowerShell launchers resolve `DD_TEST_OPTIMIZATION_PYTHON`, then
+`PYTHON`, then `python3`, then `python`. Only the explicit
+`use_python_uploader = False` rollback path can upload local files without
+Python. That legacy Bash path still requires `jq` for BEP freshness parsing,
+schema validation, enrichment, and oversized-payload splitting.
 
 ### Enrichment validation
 

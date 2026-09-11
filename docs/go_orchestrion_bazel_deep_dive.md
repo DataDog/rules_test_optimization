@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Go + Orchestrion + Bazel Deep Dive
+# Go, Orchestrion, and Bazel deep dive
 
 > Scope note: consumers choose `third_party/rgo/v0_60_0/base` or a
 > versioned base tree. Maintainer-only local regression fixtures live in
@@ -30,14 +30,8 @@ reverted, or the latest measured bottlenecks, start with
 [go_orchestrion_maintainer_state.md](./go_orchestrion_maintainer_state.md) and
 then return here for the lower-level architectural detail.
 
-This is a maintainer document. It intentionally describes the current system,
-not the debugging history that produced it.
-
-### Why This Section Exists
-
-The Go integration is split across bootstrap, Starlark, vendored `rules_go`,
-and patched Orchestrion source. This section states upfront that the document is
-meant to unify those pieces into one operational model.
+This is a maintainer document about the current system, not its debugging
+history.
 
 ## Scope
 
@@ -70,13 +64,7 @@ Then use the same relative files under that tree.
 - [third_party/rgo/v0_60_0/base/go/tools/builders/link.go](../third_party/rgo/v0_60_0/base/go/tools/builders/link.go)
 - [third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go](../third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go)
 
-### Why This Section Exists
-
-The repository is broader than the Go integration path. This section narrows
-the document to the files that actually determine how Orchestrion-backed Go
-tests work.
-
-## Mental Model
+## Mental model
 
 The system is easiest to understand as three concentric layers:
 
@@ -101,13 +89,10 @@ transition that enables the requested Orchestrion mode in the vendored
 toolchain. When the selected sync export is disabled, the macro instead creates
 only the caller's public raw `go_test`.
 
-### Why This Section Exists
+Orchestrion is not an external post-processing step. Bazel, the vendored
+`rules_go`, and Orchestrion form one compile pipeline.
 
-The most common architectural mistake is to think of Orchestrion as an external
-post-processing step. This section sets the correct model: Bazel, vendored
-`rules_go`, and Orchestrion are one compile pipeline.
-
-## High-Level Architecture
+## High-level architecture
 
 ```mermaid
 flowchart TD
@@ -137,18 +122,9 @@ flowchart TD
     P --> Q[CI Visibility runtime + payloads]
 ```
 
-### Why This Section Exists
+## Current user-facing flow
 
-The rest of the document is easier to follow if the major boundaries are visible
-first. This diagram is the system map the later sections zoom into.
-
-## Current User-Facing Flow
-
-### Why This Section Exists
-
-The public API is intentionally simpler than the internal implementation. This
-section explains the supported user-facing contract before moving into toolchain
-mechanics.
+The public API hides most of the toolchain mechanics described later.
 
 ### 1. Module setup
 
@@ -175,8 +151,6 @@ materializes the metadata repo used by `dd_topt_go_test`.
 
 The generated metadata repo then provides the per-service and per-module
 payload labels consumed by `dd_topt_go_test`.
-
-#### Why This Exists
 
 Analysis-time payload selection depends on repository-level metadata. Module
 setup creates the repos and exports the macro needs later.
@@ -207,8 +181,7 @@ architecture:
    - `orchestrion.tool.go`
    - `orchestrion.yml`
 
-The important point is that bootstrap does not merely install an external tool.
-It aligns:
+Bootstrap does more than install a tool. It aligns:
 
 - Bazel module wiring
 - the vendored `rules_go` fork
@@ -240,8 +213,6 @@ uses the Bazel-managed Go SDK to resolve every supported direct or transitive
 module with `-mod=readonly`, emits the same canonical
 `dd_trace_go_versions.json`, and keys the bootstrap cache by that resolved map.
 Explicit shared and per-module selections remain compatibility escape hatches.
-
-#### Why This Exists
 
 Bootstrap centralizes the one-time mutations needed to make Bazel and
 Orchestrion agree on the workspace shape. Without that central step, each test
@@ -296,8 +267,6 @@ for arbitrary subpackages.
 That keeps typical module-root packages simple without implying that every Go
 test target in every package automatically receives those files.
 
-#### Why This Exists
-
 The macro is the policy boundary. It keeps user BUILD files simple while
 combining payload selection, runtime wiring, and Orchestrion-enabled compilation
 in one place.
@@ -323,14 +292,12 @@ the same runfiles.
 This preserves normal Bazel test ergonomics while moving the actual build onto
 an Orchestrion-enabled configuration.
 
-#### Why This Exists
-
 The transition wrapper lets the raw test build under a different configuration
 without changing the public target label that users and CI invoke. Callers that
 filter tests by rule language must account for the mode-dependent rule class:
 `go` for the disabled raw target and `orch_go` for the enabled wrapper.
 
-## Why the Vendored `rules_go` Fork Exists
+## Why the vendored `rules_go` fork exists
 
 Orchestrion is fundamentally a `toolexec`-style integration. In a plain Go
 workflow, the intended shape is conceptually:
@@ -357,15 +324,10 @@ For Orchestrion to behave correctly, all of those steps must agree on:
 - stdlib export family
 - synthetic test binary link inputs
 
-That is why the repository vendors a `rules_go` fork instead of trying to bolt
-Orchestrion on as an external wrapper.
+The repository therefore vendors a `rules_go` fork instead of attaching
+Orchestrion as an external wrapper.
 
-### Why This Section Exists
-
-The vendored fork is the key architectural decision. If a maintainer does not
-understand why it exists, they will naturally try to simplify the wrong layer.
-
-## Current Toolchain Topology
+## Current toolchain topology
 
 ```mermaid
 flowchart LR
@@ -380,18 +342,10 @@ flowchart LR
     I --> F
 ```
 
-### Why This Section Exists
-
-This is the toolchain-only view of the system. It highlights where state is
-carried between compile and link, which is the part most maintainers need to
-reason about when something breaks.
-
-## Vendored `rules_go`: What It Owns
+## What the vendored `rules_go` fork owns
 
 The vendored fork owns the Orchestrion integration at the action and builder
 layer.
-
-### Why This Section Exists
 
 The fork is not just a copy of upstream `rules_go`; it is the layer that makes
 the Bazel pipeline and Orchestrion pipeline behave coherently.
@@ -408,8 +362,6 @@ Responsibilities:
 - pass the Orchestrion binary into builders
 - pass the synthetic `testmain` manifest and declared helper archive tree
   through analysis and execution
-
-#### Why This Exists
 
 Starlark is where Bazel decides which files and arguments are real. If the
 manifest, its helper archive tree, or the Orchestrion tool are not declared
@@ -432,12 +384,10 @@ Responsibilities:
 - persist synthetic `testmain` helper selections across compile and link
 - ensure final link reuses the same helper export family chosen during compile
 
-#### Why This Exists
-
 Execution-time coherence cannot be solved in analysis alone. The builder layer
 is where the environment, importcfg, and archive family are made consistent.
 
-## Patched Orchestrion Source
+## Patched Orchestrion source
 
 The vendored `rules_go` fork does not use upstream Orchestrion unchanged.
 
@@ -457,8 +407,6 @@ The patches make dependency resolution less recursive and more Bazel-friendly,
 and they create compatibility symlinks in temporary work directories where
 needed.
 
-#### Why This Exists
-
 Upstream Orchestrion expects a more conventional Go execution environment than
 Bazel provides. These patches adapt resolver behavior to Bazel sandboxes and
 synthetic work directories.
@@ -468,8 +416,6 @@ synthetic work directories.
 The compile proxy is patched so it can correctly understand linker-object
 outputs and cooperate with the synthetic `testmain` flow.
 
-#### Why This Exists
-
 The synthetic `testmain` path needs metadata to survive across Bazel's separate
 compile and link stages. The compile proxy has to preserve that information.
 
@@ -478,8 +424,6 @@ compile and link stages. The compile proxy has to preserve that information.
 The `oncompile`, `oncompile-main`, and `onlink` hooks are patched so dependency
 lookups run with the Bazel-specific import-path context they actually need, not
 only with upstream assumptions about a normal Go tool invocation.
-
-#### Why This Exists
 
 Under Bazel, package identity can differ from what upstream Orchestrion would
 infer from a normal `go` command. These patches keep lookup context aligned with
@@ -491,26 +435,18 @@ Some patches keep Orchestrion from dropping required aspects too early or
 failing to discover stdlib archives when Bazel's importcfg layout differs from
 what upstream Orchestrion normally sees.
 
-#### Why This Exists
-
 If Orchestrion rejects a package too early or cannot locate stdlib archives,
 later steps cannot recover. These patches keep the instrumentation path open.
 
 The result is still "Orchestrion from source", but it is a Bazel-adapted build
 of Orchestrion, not a stock upstream binary.
 
-### Why This Section Exists
+The Orchestrion binary is part of the supported integration surface. The design
+depends on this Bazel-adapted build as well as the vendored `rules_go` changes.
 
-The Orchestrion binary is part of the supported integration surface. This
-section explains why the current design depends on a Bazel-adapted Orchestrion
-build, not just on the vendored `rules_go` changes.
+## Compile path
 
-## The Compile Path
-
-### Why This Section Exists
-
-Compile is where the system first moves from "configured for instrumentation"
-to "producing instrumented artifacts". This section explains that boundary.
+Compile turns the configured instrumentation into build artifacts.
 
 ### Package compile
 
@@ -537,8 +473,6 @@ The key Orchestrion-specific compile responsibilities are:
 - module/cache preparation
 - importcfg rewriting
 - synthetic `testmain` helper capture
-
-#### Why This Exists
 
 Package compile is the first place where wrong module context, wrong importcfg,
 or wrong stdlib selection can poison everything downstream.
@@ -567,13 +501,11 @@ outside the execroot are copied into the declared helper tree, and the sidecar
 is rewritten to point there. This makes the compile-to-link contract portable
 across Bazel sandboxes and remote workers.
 
-#### Why This Exists
-
 `testing` instrumentation enters through synthetic `testmain`. The sidecar
 exists so final link can reuse the exact helper package family chosen during
 compile instead of reconstructing a different one.
 
-## Importcfg Management
+## Importcfg management
 
 The importcfg layer is where the Bazel/Orchestrion integration becomes most
 concrete.
@@ -582,8 +514,6 @@ Implementation:
 - [importcfg.go](../third_party/rgo/v0_60_0/base/go/tools/builders/importcfg.go)
 
 This file owns several distinct jobs:
-
-### Why This Section Exists
 
 Importcfg is the explicit statement of what the toolchain can import. This
 section explains how the integration shapes that package universe.
@@ -597,8 +527,6 @@ The builder can source stdlib packagefiles from:
 - seeded stdlib cache exports
 - persisted stdlib export manifests
 
-#### Why This Exists
-
 Orchestrion can weave stdlib packages, so compile and link need to resolve the
 woven stdlib archive family rather than silently falling back to the default
 unwoven one.
@@ -608,8 +536,6 @@ unwoven one.
 The Datadog helper packages used for CI Visibility and tracing must exist as
 real `packagefile` entries in the importcfg seen by compile and link.
 
-#### Why This Exists
-
 Injected CI Visibility hooks become ordinary package dependencies after weaving.
 If their exports are missing from importcfg, the final binary cannot preserve
 the instrumentation path.
@@ -618,8 +544,6 @@ the instrumentation path.
 
 The builder rewrites existing `packagefile` directives and appends missing ones
 so the toolchain sees a coherent package universe.
-
-#### Why This Exists
 
 Bazel's default importcfg contents do not fully describe the instrumented build
 graph. Rewriting is how the builders present the package set Orchestrion
@@ -631,12 +555,10 @@ The final link must not invent a different Datadog helper export family than
 the one synthetic `testmain` compile already used. The importcfg layer is where
 that reuse is made explicit.
 
-#### Why This Exists
-
 Compile and link are separate actions. Helper-root reuse is the mechanism that
 keeps them inside the same Datadog package universe.
 
-## The Link Path
+## Link path
 
 The link entry point is:
 
@@ -653,18 +575,13 @@ packagefiles produced earlier, then keeps the link action free of unused
 Orchestrion proxy and pin-file inputs. Generic mode can still use the broader
 Orchestrion link behavior.
 
-### Why This Section Exists
-
-Link is the last place where separate compile outputs can either converge into a
-coherent binary or drift apart. This section explains how the current design
-forces convergence.
+Link is the last point where separate compile outputs can converge into a
+coherent binary or drift apart.
 
 ### Normal link
 
 When linking a normal main package, link can run through Orchestrion directly
 and can append the broader Datadog helper closure it needs for the final binary.
-
-#### Why This Exists
 
 Normal link establishes the baseline behavior: link may complete the helper
 closure, but it must still stay inside one consistent export family.
@@ -701,25 +618,16 @@ That is the core consistency rule of the current implementation:
 Without that, compile may instrument `testing`, but the final linked test binary
 may not preserve those hooks coherently.
 
-#### Why This Exists
+Bazel's synthetic test wrapper and Datadog's `testing` instrumentation meet on
+this link path. The sidecar manifest makes that join deterministic.
 
-This is the highest-risk link path because Bazel's synthetic test wrapper and
-Datadog's `testing` instrumentation meet here. The sidecar manifest exists to
-make that join deterministic.
-
-## The Orchestrion Runtime Environment Inside Builders
+## Orchestrion runtime environment inside builders
 
 Implementation:
 - [orchestrion.go](../third_party/rgo/v0_60_0/base/go/tools/builders/orchestrion.go)
 
-This file centralizes the environment preparation Orchestrion needs under Bazel.
-
-Important responsibilities:
-
-### Why This Section Exists
-
-The builders do not run in a normal developer shell. This section explains the
-supporting environment that must exist before Orchestrion can do useful work.
+This file prepares the environment Orchestrion needs inside Bazel actions,
+which do not run in a normal developer shell.
 
 ### Go cache and module cache provisioning
 
@@ -731,8 +639,6 @@ The builder ensures writable:
 
 That matters because Orchestrion shells out to Go tooling while resolving
 injectors and package files.
-
-#### Why This Exists
 
 Without writable caches and module storage, Orchestrion's internal `go` calls
 fail inside Bazel sandboxes even when the outer action is otherwise correct.
@@ -750,8 +656,6 @@ path.
 This still lets Orchestrion reuse fetched modules instead of redownloading them
 for each sandboxed step.
 
-#### Why This Exists
-
 The shared cache is not just a performance optimization. It keeps bootstrap-time
 pinning and sandboxed builder steps working against the same downloaded module
 set.
@@ -764,8 +668,6 @@ subprocesses assume. The builder normalizes that by:
 - resolving absolute SDK/GOROOT paths
 - creating compatibility symlinks when `GOROOT/src` is missing
 
-#### Why This Exists
-
 Orchestrion and the Go toolchain expect a usable GOROOT layout. Bazel's SDK
 presentation can differ enough that the builders need to repair that view.
 
@@ -773,8 +675,6 @@ presentation can differ enough that the builders need to repair that view.
 
 Orchestrion expects a real Go module context. The builder prepares a synthetic
 module environment when the Bazel workdir does not already match that shape.
-
-#### Why This Exists
 
 Orchestrion resolves injectors and pinned module files through Go module
 semantics. Synthetic module preparation gives it a workspace shape compatible
@@ -788,12 +688,29 @@ set. In `test_optimization` mode the synthetic module and helper closure are
 reduced to the standard Go `testing` Test Optimization path and exclude profiler
 and Datadog contrib HTTP/slog helper roots.
 
-#### Why This Exists
-
 Some required woven dependencies are first touched inside sandboxed steps.
 Warming them reduces failures caused by lazy first access in those contexts.
 
-## End-to-End Flow for an Enabled Go Test
+### Deterministic build outputs
+
+The Go build cache itself is writable process state, so it cannot be exposed as
+a Bazel-declared output. `GoStdlib` builds in a private scratch `GOCACHE` and
+publishes only sorted, manifested woven archives to its declared cache. An
+ordinary Go action leaves that declared Orchestrion cache empty; a non-optimized
+target must never consume the instrumented stdlib.
+
+Later synthetic helper, compile, and link actions seed their private caches from
+the read-only published archives. Before hashing or copying results, the builder
+normalizes the temporary Go work directory, Bazel execroot references, CGO
+random seed, synthetic source trim paths, and helper archive build IDs. Actual
+relative CGO inputs still resolve from the physical execroot.
+
+The generated-profile verifier repeats the build in isolated output roots and
+compares action keys and bytes for `GoStdlib`,
+`GoSyntheticTestmainHelpers`, synthetic `GoCompilePkg` (`~testmain.a`), and
+`GoLink`. This is the same action chain that downstream Reprise checks observe.
+
+## End-to-end flow for an enabled Go test
 
 The disabled path stops at the macro: it creates the public raw `go_test` and
 does not enter the wrapper, vendored Orchestrion, or payload path below.
@@ -820,13 +737,11 @@ sequenceDiagram
     Bin->>Bin: emit tracer / CI Visibility runtime
 ```
 
-### Why This Section Exists
-
 The system crosses many boundaries. This sequence compresses them into one path
 so a maintainer can reason from the declared test target to the observed runtime
 behavior.
 
-## Runtime Result
+## Runtime result
 
 At runtime, a correctly wired binary shows evidence that the compile-time path
 worked:
@@ -844,27 +759,18 @@ exports during compile/link consistency checks. Those names are useful
 build-time indicators, but they are not themselves user-visible runtime
 signals.
 
-### Why This Section Exists
-
 The global goal is not just "a successful build". It is a final test binary
 whose runtime behavior proves that CI Visibility instrumentation survived the
 full Bazel compile and link pipeline.
 
-## Invariants Maintainers Should Preserve
+## Invariants maintainers should preserve
 
 If you change this system, keep these invariants intact.
-
-### Why This Section Exists
-
-This section marks the boundaries of safe refactoring. It separates incidental
-implementation details from the properties that actually make the design work.
 
 ### 1. The public API stays Bazel-native
 
 Users should keep writing `dd_topt_go_test`, not a custom shell rule or an
 alternate test runner.
-
-#### Why This Exists
 
 The integration is meant to feel like normal Bazel usage to consumers. If the
 public entry point changes shape, the maintenance burden moves into every
@@ -881,8 +787,6 @@ The bootstrap tool is the place that mutates:
 
 Do not push that complexity onto each test target.
 
-#### Why This Exists
-
 Workspace mutation has to happen in one place or the setup becomes fragile and
 non-idempotent. Bootstrap is that one place.
 
@@ -890,8 +794,6 @@ non-idempotent. Bootstrap is that one place.
 
 The sidecar manifest, declared helper archive tree, and helper-root reuse are
 structural, not optional.
-
-#### Why This Exists
 
 This is the specific invariant that keeps `testing` instrumentation alive in the
 final binary. Losing it produces apparently successful builds with incomplete
@@ -902,8 +804,6 @@ runtime behavior.
 If compile or link needs a packagefile and it is not in importcfg, that is an
 importcfg problem first.
 
-#### Why This Exists
-
 Putting package-universe fixes in multiple places makes the pipeline impossible
 to reason about. Importcfg must remain the primary source of truth.
 
@@ -911,8 +811,6 @@ to reason about. Importcfg must remain the primary source of truth.
 
 Builder-side synthetic module and cache preparation are not cosmetic. They are
 required because Orchestrion shells out to Go tooling internally.
-
-#### Why This Exists
 
 If Orchestrion cannot see a usable Go module environment, it stops behaving like
 the tool this design expects and starts failing in ways that look unrelated to
@@ -923,19 +821,14 @@ the actual instrumentation logic.
 The source patches in `extensions.bzl` are part of the supported design. Treat
 them as first-class integration code, not as temporary local hacks.
 
-#### Why This Exists
-
 The vendored `rules_go` changes alone are not enough. The built Orchestrion
 binary carries Bazel-specific behavior that the rest of the design relies on.
 
-## Practical Debugging Map
+## Debugging map
 
 When something breaks, this is the fastest place to look.
 
-### Why This Section Exists
-
-The implementation surface is large. This section shortens the feedback loop by
-mapping likely failure classes to the files that actually control them.
+The entries below map failure classes to the files that control them.
 
 ### Bootstrap and workspace shape
 
@@ -947,10 +840,7 @@ Look here if:
 - `rules_go_orchestrion_tool` is missing
 - `orchestrion.tool.go` was not pinned
 
-#### Why This Exists
-
-Many failures that look like compile bugs are really workspace-shape bugs. This
-section makes that distinction explicit.
+Many apparent compile bugs originate in the workspace shape.
 
 ### Macro and transition behavior
 
@@ -963,11 +853,8 @@ Look here if:
 - runfiles or executable naming are wrong
 - payload data selection is wrong
 
-#### Why This Exists
-
-This is the place to debug analysis-time mistakes before looking at builder
-internals. If the wrong target graph is produced, the toolchain never gets a
-chance to do the right thing.
+Check analysis-time mistakes before builder internals. A wrong target graph
+never reaches the intended toolchain path.
 
 ### Orchestrion source patching
 
@@ -979,10 +866,8 @@ Look here if:
 - dependency resolution differs from local `go` behavior
 - patched upstream assumptions drift
 
-#### Why This Exists
-
-Some failures originate inside the generated Orchestrion binary, not inside
-Starlark or the builders. This section points directly at that integration seam.
+Some failures originate inside the generated Orchestrion binary rather than
+Starlark or the builders.
 
 ### Compile/link consistency
 
@@ -995,8 +880,6 @@ Look here if:
 - stdlib weaving appears missing
 - Datadog helper packages are unresolved
 - synthetic test binaries lose instrumentation at final link
-
-#### Why This Exists
 
 Most correctness bugs eventually reduce to compile/link inconsistency. This is
 the fastest entry point for the class of bugs that most directly threaten the
@@ -1016,9 +899,3 @@ The current architecture is:
 That combination is what makes the current Go CI Visibility path work under
 Bazel while still behaving like a normal `go_test` target from the user's point
 of view.
-
-### Why This Section Exists
-
-The final summary compresses the design down to the few moving pieces that are
-actually carrying the integration. If a future simplification preserves these
-properties, it is likely safe.

@@ -12,7 +12,7 @@ This product includes software developed at Datadog
 -->
 
 
-# Datadog rules_go Orchestrion Upstream Migration
+# Datadog rules_go Orchestrion upstream migration
 
 Use this skill when you need to move the vendored Orchestrion-enabled
 `rules_go` fork in this repository from the currently pinned upstream
@@ -28,7 +28,7 @@ Bazel-managed Go SDK bootstrap, and the existing public Orchestrion aliases;
 it must not add target discovery, service naming, or manifest policy to
 `rules_go`.
 
-## Non-Negotiable Contract
+## Non-negotiable contract
 
 Preserve the maintained fork contract:
 
@@ -47,8 +47,13 @@ Preserve the maintained fork contract:
 - Do not call the migration complete until materialization checks, profile
   verification, changed-file regeneration, and relevant smoke or integration
   validation have run.
+- Preserve deterministic action outputs for `GoStdlib`,
+  `GoSyntheticTestmainHelpers`, synthetic `GoCompilePkg` (`~testmain.a`), and
+  `GoLink`. An ordinary `GoStdlib` action must not publish or consume the
+  instrumented stdlib cache. A Test Optimization build must publish stable
+  woven archives across two isolated output roots, including CGO mode.
 
-## First Actions
+## First actions
 
 1. Confirm the requested target upstream:
    - exact upstream `rules_go` tag or commit
@@ -71,14 +76,16 @@ Preserve the maintained fork contract:
    - `python3 tools/dev/generate_rules_go_fork_maps.py --check`
    - `python3 tools/dev/materialize_rules_go_fork.py check --all`
    - `python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt`
+5. Install `zstd` before running the local generated-profile verifier; it reads
+   Bazel's compact execution logs.
 
-## Implementation Path
+## Implementation path
 
 - **Migration workflow:** follow [migration-workflow.md](references/migration-workflow.md).
 - **Validation:** follow [validation-checklist.md](references/validation-checklist.md).
 - **Troubleshooting:** follow [troubleshooting.md](references/troubleshooting.md).
 
-## Sensitive Surfaces
+## Sensitive surfaces
 
 Expect conflicts or semantic drift around these paths first:
 
@@ -115,7 +122,7 @@ Pay special attention to:
 - Bzlmod and WORKSPACE extension entrypoints
 - Bazel transitions that must preserve Orchestrion settings
 
-## Done Criteria
+## Done criteria
 
 A migration is done only when all of these are true:
 
@@ -127,6 +134,10 @@ A migration is done only when all of these are true:
   `tools/dev/diff_rules_go_fork.py`.
 - `python3 tools/dev/materialize_rules_go_fork.py check --all` passes.
 - `python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt` passes.
+- Profile verification executes two isolated builds for both ordinary and Test
+  Optimization modes and compares the four required action families. The
+  ordinary declared stdlib cache is empty; the instrumented CGO stdlib contains
+  Test Optimization markers and produces identical bytes.
 - The selected validation lanes in
   [validation-checklist.md](references/validation-checklist.md) pass, or every
   skipped lane has a concrete reason.
@@ -135,7 +146,7 @@ A migration is done only when all of these are true:
 - The final report names the target upstream, changed-path counts, validation
   results, and any remaining external blockers.
 
-## Test Optimization Alias Contract
+## Test Optimization alias contract
 
 When validating a consumer that uses Test Optimization, preserve the stable
 alias contract from the vendored base tree:
@@ -149,7 +160,7 @@ targets enable Orchestrion through their transition. Omitting the config must
 leave metadata bootstrap disabled for public Go extension repositories and for
 low-level repositories explicitly configured with `enabled_by_env = True`.
 
-## Stop Conditions
+## Stop conditions
 
 Stop and escalate instead of guessing when:
 

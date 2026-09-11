@@ -17,6 +17,7 @@ load(
     "//go/private:mode.bzl",
     "link_mode_arg",
 )
+load("//go/private/actions:stdlib.bzl", "stdlib_env")
 load("//go/private/actions:utils.bzl", "quote_opts")
 load("//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
@@ -254,13 +255,13 @@ def emit_compilepkg(
     if link_mode_flag:
         compile_args.add("-asmflags", link_mode_flag)
 
-    # cgo and the linker action don't support path mapping yet
-    # TODO: Remove the second condition after https://github.com/bazelbuild/bazel/pull/21921.
+    # cgo and nested Go commands that may invoke it do not support path mapping.
+    # TODO: Remove the local-tag condition after https://github.com/bazelbuild/bazel/pull/21921.
     orchestrion_trace_version_file = getattr(go, "orchestrion_version_file", None) if compile_orchestrion else None
     orchestrion_proxy_root_marker = getattr(go, "orchestrion_module_proxy_root_marker", None) if compile_orchestrion else None
     orchestrion_tool_version_file = getattr(go, "orchestrion_tool_version_file", None) if compile_orchestrion else None
-    if cgo or "local" in go._ctx.attr.tags:
-        # cgo doesn't support path mapping yet
+    synthetic_testmain_needs_cgo = out_synthetic_testmain_manifest != None and not go.mode.pure
+    if cgo or synthetic_testmain_needs_cgo or "local" in go._ctx.attr.tags:
         env = _orchestrion_action_env(
             go,
             go.env,
@@ -299,6 +300,14 @@ def emit_compilepkg(
             compile_args.add("-objcxxflags", quote_opts(objcxxopts))
         if clinkopts:
             compile_args.add("-ldflags", quote_opts(clinkopts))
+
+    if synthetic_testmain_needs_cgo:
+        if not cgo:
+            inputs_transitive.append(go.cc_toolchain_files)
+
+        # The nested Go commands consume the woven stdlib cache, so their cgo
+        # settings must match the action that produced that cache.
+        env = stdlib_env(go, env)
 
     if go.mode.pgoprofile:
         compile_args.add("-pgoprofile", go.mode.pgoprofile)

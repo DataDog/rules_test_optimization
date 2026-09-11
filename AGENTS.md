@@ -74,7 +74,10 @@ The sync rule creates `@test_optimization_data//` containing:
 - **Sanitization**: module names are converted into Bazel-safe labels using `sanitize_label_fragment()` (lowercase, `[a-z0-9_]` only, deterministic suffixes).
 - **Go importpath inference**: `topt_go_payloads_selector` mirrors rules_go importpath logic (explicit `importpath` > `embed` provider > fallback `<module>/<package>`).
 - **Vendored rules_go forks for root workflows**: the repository root pins `rules_go` as a dev-only dependency and redirects it to `third_party/rgo/v0_60_0/base` with `local_path_override(...)`; consumer-facing core usage remains rules_go-free.
-- **Cross-platform uploader**: Unix uses Bash/curl; Windows uses PowerShell and .NET `HttpClient`.
+- **Cross-platform uploader**: Python 3.10+ provides one implementation on
+  Linux, macOS, and Windows. Small Bash and PowerShell launchers locate Python
+  and Bazel runfiles. The former Bash/curl and PowerShell/.NET uploaders remain
+  available only through the explicit `use_python_uploader = False` rollback.
 
 ## Build, Test, and Development Commands
 - Canonical validation command matrix lives in `CONTRIBUTING.md`; keep this

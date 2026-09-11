@@ -63,6 +63,7 @@ sh_test(
         "//tools/dev:check_bazelversion_sync.py",
         "//tools/dev:check_module_versions.py",
         "//tools/dev:check_release_archive_contents.py",
+        "//tools/dev:compact_execution_log.py",
         "//tools/dev:diff_rules_go_fork.py",
         "//tools/dev:generate_rules_go_consumer_patch.py",
         "//tools/dev:generate_rules_go_fork_maps.py",

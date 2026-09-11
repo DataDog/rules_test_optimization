@@ -6,14 +6,14 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# rules_go Orchestrion Support Selection
+# rules_go Orchestrion support selection
 
 This repository exposes one supported public `rules_go` tree variant, `base`.
 Consumers that already own a private `rules_go` patch stack can also consume a
 generated sparse patch profile as an input to a local rebase or merge inside
 their own repository.
 
-## Published Variant
+## Published variant
 
 - `base`: upstream `rules_go` plus the generic Orchestrion integration and
   correctness fixes maintained by this repository.
@@ -29,7 +29,7 @@ support line. Omitting `rules_go_upstream` preserves the repository default.
 The registry currently supports `v0_60_0`, `v0_61_1`, `v0_62_0`, and
 `v0_63_0`.
 
-## Selection Rule
+## Selection rule
 
 - Use `base` for normal WORKSPACE and Bzlmod consumers.
 - Use a generated consumer patch profile only when the consuming repository
@@ -43,7 +43,7 @@ Public consumer patch profiles live under
 python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt
 ```
 
-## Maintainer Workflow
+## Maintainer workflow
 
 Maintainers track each supported upstream version with both:
 
@@ -64,6 +64,12 @@ python3 tools/dev/diff_rules_go_fork.py --all --write-report
 python3 tools/dev/materialize_rules_go_fork.py check --all
 python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt
 ```
+
+The verifier runs two isolated ordinary and Test Optimization builds for every
+registered upstream. It compares `GoStdlib`, synthetic helper, synthetic
+`~testmain.a`, and `GoLink` action keys and bytes, and rejects an instrumented
+stdlib cache in ordinary mode. Local compact execution-log inspection requires
+`zstd`.
 
 Run the smoke lane before publishing:
 

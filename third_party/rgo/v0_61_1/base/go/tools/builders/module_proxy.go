@@ -83,15 +83,22 @@ func normalizeGoModuleResolutionEnv(env []string) ([]string, error) {
 	return env, nil
 }
 
-func ensureGoFlagsModMode(env []string) []string {
+// ensureSyntheticModuleGoFlags keeps helper module builds offline-compatible
+// and removes their temporary module-cache roots from compiled archives.
+func ensureSyntheticModuleGoFlags(env []string) []string {
 	goFlags := strings.TrimSpace(getEnv(env, "GOFLAGS"))
-	if strings.Contains(goFlags, "-mod=") {
-		return env
+	if !strings.Contains(goFlags, "-mod=") {
+		goFlags = strings.TrimSpace("-mod=mod " + goFlags)
 	}
-	if goFlags == "" {
-		goFlags = "-mod=mod"
-	} else {
-		goFlags = "-mod=mod " + goFlags
+	trimPathEnabled := false
+	for _, flag := range strings.Fields(goFlags) {
+		if flag == "-trimpath" || flag == "-trimpath=true" {
+			trimPathEnabled = true
+			break
+		}
+	}
+	if !trimPathEnabled {
+		goFlags += " -trimpath"
 	}
 	return setEnv(env, "GOFLAGS", goFlags)
 }

@@ -70,6 +70,7 @@ This product includes software developed at Datadog
   - `shellcheck` (shell lint lane)
   - `buildifier` (Starlark formatting lane)
   - `jq` (integration harness payload/CODEOWNERS checks)
+  - `zstd` (rules_go compact execution-log verification)
 - Optional pre-commit setup:
   - `python3 -m pip install pre-commit && pre-commit install`
 - Optional Python syntax smoke check when editing tooling:
@@ -94,7 +95,7 @@ This product includes software developed at Datadog
     `--config=test-optimization` as the only user-facing switch. The shared
     config entry is
     `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`.
-  - Go additionally sets the existing `rules_go` Orchestrion `enabled=true`
+  - Go also sets the existing `rules_go` Orchestrion `enabled=true`
     build setting. Python-only consumers must not declare that Go-only label.
   - Omitting the config is the documented complete opt-out for Go and Python:
     metadata repositories use disabled stubs when `enabled_by_env = True`, Go
@@ -228,7 +229,10 @@ This product includes software developed at Datadog
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)
-  - global fork drift checks plus one consumer patch-profile shard per supported `rules_go` upstream
+  - global fork drift checks plus x86-64 and ARM64 consumer patch-profile shards
+    for every supported `rules_go` upstream; each profile shard rebuilds the
+    cache-critical Test Optimization actions twice from isolated output roots
+    and requires identical action keys and output bytes
   - shell scripts, PowerShell, Buildifier, gofmt, schema sync checks, fixture JSON checks, and Python tooling tests
 - Workflow dependency pinning:
   - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.

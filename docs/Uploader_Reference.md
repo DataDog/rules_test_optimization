@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Uploader Reference
+# Uploader reference
 
 This page is the full runtime/upload reference for `dd_payload_uploader`.
 For a quick path, use the upload section in `README.md`. Examples below use a
@@ -18,7 +18,8 @@ small repositories.
 
 1. Tests write payloads to
    `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests/*.json` and
-   `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`
+   `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`; tracers may also
+   write `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/telemetry/*.json`
 2. Bazel automatically collects these to
    `bazel-testlogs/<package>/<target>/test.outputs/`
 3. After tests complete, run the doctor via `bazel run` to validate local
@@ -26,8 +27,14 @@ small repositories.
 4. Optionally run the uploader in dry-run enrichment mode to validate the exact
    outbound body without uploading or deleting files
 5. Then run the uploader via `bazel run`
-6. The uploader discovers local or BEP-staged `test.outputs/` directories,
-   waits for quiescence, uploads, and deletes uploaded payload files
+6. The uploader discovers local or BEP-staged `test.outputs/` directories and
+   waits for quiescence
+7. Its coordinator prepares shared CODEOWNERS, context, schema, freshness, and
+   telemetry state once, then starts a bounded pool of eight workers by default
+8. Each worker owns one source file through enrichment, optional validation,
+   preventive splitting, upload retries, and cleanup; it can handle test,
+   coverage, or telemetry data without coordinating with other workers
+9. The coordinator prints final statistics after every worker has stopped
 
 ## Basic usage
 
@@ -667,13 +674,12 @@ to the requested `--output` path before `--bep-artifact-downloader-timeout-sec`
 expires. The public rule only defines the downloader contract; it does not ship
 credentials or a Datadog-internal CAS client.
 
-Artifact staging requires Python at uploader runtime. Bash resolves
-`DD_TEST_OPTIMIZATION_PYTHON`, then `PYTHON`, then `python3`, then `python`;
-PowerShell uses the same discovery order. Existing local-only uploader flows
-remain usable without Python except for support bundle generation and the
-pre-existing optional schema and telemetry helpers. Bash BEP freshness parsing
-still requires `jq` whenever BEP freshness validation is enabled in the Bash
-uploader path.
+The default uploader and artifact staging require Python 3.10 or newer. The
+small Bash and PowerShell launchers resolve `DD_TEST_OPTIMIZATION_PYTHON`, then
+`PYTHON`, then `python3`, then `python`. Only the explicit
+`use_python_uploader = False` rollback path can upload local files without
+Python. That legacy Bash path still requires `jq` for BEP freshness parsing,
+schema validation, enrichment, and oversized-payload splitting.
 
 ### Legacy execution-log fallback
 
@@ -745,6 +751,20 @@ payload discovery/quiescence before proceeding.
   available only as an explicit opt-out rollback during the rollout window.
   The normalized policy above is the default uploader contract on Linux,
   macOS, and Windows.
+
+### Final run summary
+
+Every controlled completion prints six compact lines prefixed with
+`[dd-uploader]`: `summary`, `files`, `types`, `split`, `requests`, and `cleanup`.
+Together they report the mode and result, configured and peak workers, elapsed
+time, file outcomes, per-type outcomes, created and uploaded chunks, request
+attempts and retries, and deleted or retained files. The optional JSON report
+contains the same aggregate result plus structured diagnostics for automation.
+
+Dry-run mode reports planned requests but always reports zero attempted
+requests and leaves every source file in place. Debug mode adds redacted
+per-file and per-request diagnostics; it does not change the summary or the
+result.
 
 ### Legacy Bash and PowerShell uploaders
 

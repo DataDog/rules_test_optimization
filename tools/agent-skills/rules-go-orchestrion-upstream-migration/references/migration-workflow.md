@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Migration Workflow
+# Migration workflow
 
 Use this workflow to port the vendored Orchestrion-enabled `rules_go` fork to a
 new upstream `rules_go` tag or commit.
@@ -19,7 +19,7 @@ The public fork has one supported variant: `base`. Do not reintroduce
 `complete`, `third_party/rules_go_orchestrion/versions/...`, or
 consumer-specific public patch bundles while adding a new upstream.
 
-## Mechanical Release Recipe
+## Mechanical release recipe
 
 Use this recipe as the default algorithm for a new upstream release. Replace
 `v0_62_0`, `0.62.0`, and `v0.62.0` with the requested release.
@@ -149,7 +149,7 @@ truth. The source of truth remains the registry entry, the `base.series` patch
 stack, the materialized `third_party/rgo/$NEW_UPSTREAM/base` tree, and the
 profile JSON.
 
-## 1. Capture The Current Baseline
+## 1. Capture the current baseline
 
 Start from a clean understanding of the current fork:
 
@@ -169,7 +169,7 @@ Review the current patch series and checked-in reports before editing:
 - the current upstream's `*.METADATA.json`
 - the current upstream's `*.CHANGED_FILES.md`
 
-## 2. Materialize The New Upstream Tree
+## 2. Materialize the new upstream tree
 
 Add the new upstream to `third_party/rules_go_orchestrion/registry.json` using
 the shape from the mechanical recipe. Create the metadata file from the same
@@ -208,7 +208,7 @@ After the base tree is coherent, regenerate `base.series` and
 `materialize_rules_go_fork.py check --upstream <upstream> --variant base`
 recreates it exactly.
 
-## 4. Verify Consumer Patch Profiles
+## 4. Verify consumer patch profiles
 
 Run the public profile generator against the migrated base tree. The generated
 patch must apply to clean upstream `rules_go`, preserve included file modes and
@@ -218,7 +218,7 @@ labels in public profiles. Generate profile artifacts into `/tmp` or another
 throwaway directory unless a release process explicitly asks for checked-in
 derived artifacts.
 
-## 5. Regenerate Reports
+## 5. Regenerate reports
 
 Regenerate the target upstream delta report:
 
@@ -233,7 +233,7 @@ python3 tools/dev/check_release_archive_contents.py
 Read the regenerated reports. The changed-path counts may change, but every new
 or removed path should be explainable by the upstream migration.
 
-## 6. Validate Behavior
+## 6. Validate behavior
 
 Run the required lanes from [validation-checklist.md](validation-checklist.md).
 For Orchestrion migrations, build success alone is not enough. Runtime
@@ -243,7 +243,7 @@ payload files.
 If validation fails, use [troubleshooting.md](troubleshooting.md). Do not hide
 failures by weakening tests or deleting variant differences from metadata.
 
-## 7. Final Report
+## 7. Final report
 
 The final report for a migration PR must include:
 

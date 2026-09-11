@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# rules_go Orchestrion Support Folder Guide
+# rules_go Orchestrion support folder guide
 
 This guide describes the maintained folder layout for the vendored
 Orchestrion-enabled `rules_go` support lines and public consumer patch profiles.
@@ -17,7 +17,7 @@ Orchestrion-enabled `rules_go` support lines and public consumer patch profiles.
 
 The public base tree for one supported upstream. For example, the current
 default upstream uses `third_party/rgo/v0_60_0/base`, and the additional
-support lines use `third_party/rgo/v0_61_1/base` and
+support lines use `third_party/rgo/v0_61_1/base`,
 `third_party/rgo/v0_62_0/base`, and `third_party/rgo/v0_63_0/base`. Each tree
 contains clean upstream `rules_go` plus the generic Orchestrion support
 maintained by this repository. Bugs in our integration are fixed in the
@@ -64,9 +64,12 @@ Use `tools/dev/materialize_rules_go_fork.py check --all` to verify that patch
 series recreate the checked-in trees. Use
 `tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt`
 to verify that public consumer patch profiles round-trip against clean upstream
-`rules_go` without leaking private-only strings.
+`rules_go` without leaking private-only strings. The verifier also rebuilds
+ordinary and Test Optimization consumers in isolated output roots and compares
+action keys and bytes for `GoStdlib`, synthetic helpers, synthetic
+`~testmain.a`, and `GoLink`. Install `zstd` before running this check locally.
 
-## Adding A rules_go Upstream Release
+## Adding a rules_go upstream release
 
 Use this sequence when adding support for a new upstream `rules_go` release.
 Replace the example `v0_62_0` and `v0.62.0` values with the requested release.
@@ -242,7 +245,8 @@ Replace the example `v0_62_0` and `v0.62.0` values with the requested release.
 9. Run the migration validation checklist before calling the support line done.
    Build success alone is not enough; at least one runtime lane must prove CI
    Visibility startup, JSON payload generation, doctor success, and upload or
-   dry-run upload behavior.
+   dry-run upload behavior. Profile verification must also prove deterministic
+   outputs across the four action families in ordinary and instrumented modes.
 
 ## Consumer Contract
 

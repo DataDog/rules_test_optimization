@@ -256,7 +256,7 @@ jobs:
         run: python3 tools/dev/check_release_archive_contents.py
 
   rules-go-fork-profile-shard:
-    name: rules-go-fork-profile-shard (${{ matrix.upstream }})
+    name: rules-go-fork-profile-shard (${{ matrix.upstream }}, ${{ matrix.runner }})
     needs: rules-go-fork-drift-matrix
     if: ${{ !inputs.docs_only && inputs.run_rules_go_fork_drift }}
     strategy:
@@ -264,7 +264,10 @@ jobs:
       max-parallel: 4
       matrix:
         upstream: ${{ fromJSON(needs.rules-go-fork-drift-matrix.outputs.upstreams) }}
-    runs-on: ubuntu-latest
+        runner:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
