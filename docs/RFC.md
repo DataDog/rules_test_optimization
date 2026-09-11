@@ -25,7 +25,7 @@ This section provides a short overview of Bazel concepts that are relevant to th
 
 ### Hermetic Sandboxes
 
-Bazel executes builds and tests inside isolated sandboxes. Inputs are declared explicitly, network access is usually disabled, and outputs are cached deterministically. This ensures reproducibility but restricts ad-hoc network activity during test execution.
+Bazel executes builds and tests inside isolated sandboxes. Inputs are declared explicitly, network access is usually disabled, and outputs are cached deterministically. That makes builds reproducible but restricts ad-hoc network activity during test execution.
 
 ### Cache
 

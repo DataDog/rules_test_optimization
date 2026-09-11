@@ -12,14 +12,14 @@ This product includes software developed at Datadog
 -->
 
 
-# Datadog Go Test Optimization Onboarding
+# Datadog Go Test Optimization onboarding
 
 Use this skill when you need to instrument a Bazel Go repository with Datadog
 Test Optimization. This skill is intentionally project-neutral: it is stored in
 the repository as a Codex-compatible skill, but any agent can read it as a
 normal implementation guide.
 
-## Non-Negotiable Contract
+## Non-negotiable contract
 
 Keep the RFC contract intact:
 
@@ -27,6 +27,18 @@ Keep the RFC contract intact:
 - Bazel collects those files under `bazel-testlogs/<target>/test.outputs/`.
 - The doctor validates local files after `bazel test`.
 - The uploader runs after the doctor with `bazel run`.
+- Use the default Python 3.10+ uploader unless a temporary rollback explicitly
+  requires `use_python_uploader = False`. Its coordinator prepares shared
+  CODEOWNERS, contexts, schemas, freshness, and telemetry once, then starts up
+  to eight independent file workers by default. Each worker owns enrichment,
+  validation, preventive splitting, retries, and cleanup for one test,
+  coverage, or telemetry source file.
+- Run one uploader process. Use `--dry-run --validate-enrichment` to prepare
+  requests without HTTP or deletion, `--debug` only for verbose redacted
+  diagnostics, and review the final file/type/split/request/cleanup totals.
+- Test bodies are split before HTTP when they exceed `4_718_592` bytes. HTTP
+  `413` is terminal and must not trigger a retry or adaptive split; coverage
+  and telemetry are not split.
 - Do not add payload proxies or msgpack-only handoff paths.
 - Do not pass `DD_GIT_*` through `--test_env`; use `--repo_env` for sync metadata.
 - Do not pass uploader endpoints or credentials into the test sandbox.
@@ -55,7 +67,7 @@ Keep the RFC contract intact:
   `reports/doctor-report.json`, optional uploader reports, and
   `command/flags.json` in that order.
 
-## First Actions
+## First actions
 
 1. Read the consumer repository's Bazel shape before editing:
    - Does it use `MODULE.bazel`, `WORKSPACE`, or both?
@@ -82,14 +94,14 @@ Keep the RFC contract intact:
      sync only when that command can expand exact labels and derive
      service/runtime contexts. Do not create a checked-in target/service map.
 
-## Implementation Paths
+## Implementation paths
 
 - **WORKSPACE consumers:** follow [workspace-onboarding.md](references/workspace-onboarding.md).
 - **Bzlmod consumers:** follow [bzlmod-onboarding.md](references/bzlmod-onboarding.md).
 - **Validation:** follow [validation-checklist.md](references/validation-checklist.md).
 - **Debugging:** follow [troubleshooting.md](references/troubleshooting.md).
 
-## Universal Shape
+## Universal shape
 
 Every successful Go onboarding should end with these pieces:
 
@@ -108,6 +120,10 @@ Every successful Go onboarding should end with these pieces:
 - Go tests use one central repo-local wrapper that delegates to
   `dd_topt_go_test`. The named config, not a different BUILD macro, selects
   enabled behavior.
+- A `.topt` clone preserves the source test's execution policy. Keep
+  `no-remote-exec` on the actual `TestRunner`, but do not let it constrain
+  deterministic stdlib, synthetic helper, compile, or link actions; those must
+  remain cacheable and remote-capable.
 - The workspace has exactly one `dd_test_optimization_doctor` target and one
   `dd_upload_payloads` target. Root is acceptable for small repositories; use a
   lightweight package such as `//tools/test_optimization` in monorepos.
@@ -136,7 +152,9 @@ Every successful Go onboarding should end with these pieces:
   Prefer the wrapper support bundle for full CI escalation; use the doctor-only
   support bundle for the simplest initial customer request. Keep individual
   reports for local inspection and manual fallback flows.
-- Real upload processes available fresh valid payloads after doctor and dry-run attempts, while preserving any earlier failure.
+- A real upload processes every available fresh valid payload after validation
+  attempts. The wrapper preserves the earliest test, doctor, or uploader exit
+  code; uploader errors never replace an earlier test result.
 
 For automatic managed Go/Python monorepos, the universal shape has these
 additional constraints:
@@ -192,7 +210,7 @@ Go wrapper, treat it as a consumer-specific integration:
   the doctor and one enrichment-validating uploader pass; use dry-run only
   when real upload is disabled.
 
-## Branch And PR Hygiene
+## Branch and PR hygiene
 
 Before making changes in a real repository, confirm whether to use the current
 branch or create a new branch from the latest default branch. Keep onboarding
@@ -207,7 +225,7 @@ changes reviewable:
 - If an issue requires changing this rule repository, add matching fixture
   coverage in `rules_test_optimization_tests` before declaring it solved.
 
-## Stop Conditions
+## Stop conditions
 
 Stop and escalate instead of guessing when:
 

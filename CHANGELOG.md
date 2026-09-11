@@ -70,6 +70,13 @@ versioning.
 - Config-disabled Go analysis now resolves stable empty Orchestrion repository
   targets before host-Go discovery or source fetching, so ordinary targets do
   not require Go to be installed merely because the integration is declared.
+- Generated-profile verification now checks deterministic output bytes for
+  `GoStdlib`, `GoSyntheticTestmainHelpers`, synthetic `GoCompilePkg`, and
+  `GoLink` actions across every maintained `rules_go` version. The builder
+  normalizes ephemeral execroot and Go work paths, CGO random seeds, source
+  trim paths, and copied helper build IDs while preserving relative CGO input
+  resolution. Ordinary Go actions cannot consume the instrumented stdlib
+  cache.
 
 ## [1.2.0] - 2026-06-03
 

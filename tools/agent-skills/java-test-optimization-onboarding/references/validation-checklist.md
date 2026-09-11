@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Java Validation Checklist
+# Java validation checklist
 
 Replace `bazel` in examples with the consumer repository's real Bazel entrypoint
 such as `bzl` or `./bazelw`.
@@ -86,7 +86,7 @@ bazel sync --enable_workspace --config=test-optimization \
   --repo_env=FETCH_SALT="$(date +%s)"
 ```
 
-## Test, Doctor, Dry-Run, Upload
+## Test, doctor, dry-run, and upload
 
 For the simplest customer troubleshooting request after tests have run, use
 `bazel run //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` with any
@@ -145,7 +145,15 @@ done
 Do not run the real upload unless credentials are intentionally available and
 the user or CI environment expects data to be sent.
 
-## Expected Outputs
+For a safe end-to-end check, add `--dry-run` to the uploader invocation and
+keep `--validate-enrichment`. Confirm that its final statistics show the
+expected configured and peak workers, per-type file counts, prepared chunks,
+zero attempted requests, and zero deleted files. The default runtime uses eight
+Python workers; do not simulate concurrency by launching multiple uploader
+processes. Use `--debug` only when the normal report lacks enough redacted
+detail to diagnose a failure.
+
+## Expected outputs
 
 After tests:
 
@@ -164,7 +172,7 @@ After tests:
 Do not list build-only or analysis-only targets in doctor `expected_targets`;
 they do not run instrumented test code.
 
-## Remote Execution
+## Remote execution
 
 If tests use remote execution or remote cache, the test config must include:
 

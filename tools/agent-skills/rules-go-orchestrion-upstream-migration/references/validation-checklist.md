@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Validation Checklist
+# Validation checklist
 
 Use this checklist before calling a `rules_go` upstream migration complete.
 When the Rule also supports manifest-managed Go targets, verify the selected
@@ -14,7 +14,7 @@ upstream still passes no-host-Go disabled/enabled bootstrap coverage. Manifest
 schema, service derivation, and target discovery remain outside this migration
 and must not be modified here.
 
-## Metadata And Inventory
+## Metadata and inventory
 
 Run these checks after editing any `rules_go` support line:
 
@@ -38,8 +38,17 @@ Expected:
 - diff commands report the same counts as the regenerated reports
 - generated reports name the new upstream tag or commit
 - no generated report was edited manually
+- the verifier observes and compares `GoStdlib`,
+  `GoSyntheticTestmainHelpers`, synthetic `GoCompilePkg` (`~testmain.a`), and
+  `GoLink` across two isolated output roots
+- ordinary `GoStdlib` leaves its declared Orchestrion cache empty
+- Test Optimization CGO stdlib output is woven and byte-identical between runs
 
-## Fast Variant Smoke
+The local compact execution-log check requires `zstd`. A changed action key
+with unchanged bytes is still useful evidence of avoidable rebuilding; changed
+bytes are a reproducibility failure.
+
+## Fast variant smoke
 
 Run the published base variant:
 
@@ -53,7 +62,7 @@ If the migration changes slow or platform-sensitive areas, also run:
 RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_extended.sh
 ```
 
-## Go Consumer Integration
+## Go consumer integration
 
 Run both WORKSPACE and Bzlmod integration harnesses when the migration touches
 Orchestrion wiring, module proxy handling, stdlib behavior, transitions, or
@@ -79,7 +88,7 @@ Expected:
 - payload files are written under `bazel-testlogs`
 - payload metadata does not show unexpected fallback states
 
-## Repository-Level Regression
+## Repository-level regression
 
 Run root or focused repository tests when changed files overlap repository
 helpers or companion integration:
@@ -97,7 +106,7 @@ workspace wiring:
 ./bazelw build //examples/...
 ```
 
-## Cross-Repository Fixture
+## Cross-repository fixture
 
 If the migration is intended to validate consumer-style behavior before a PR is
 called done, run the sibling fixture repository with local overrides:
@@ -118,7 +127,7 @@ cd ../rules_test_optimization_tests
 Restore the fixture repository to its pinned overrides before committing or
 pushing changes there.
 
-## Runtime Correctness Checks
+## Runtime correctness checks
 
 For stdlib, synthetic `testmain`, module proxy, or tool-version changes, do not
 stop at build success. Inspect runtime behavior:
@@ -136,7 +145,7 @@ Expected:
 - No `.msgpack` or `.msgpack.gz` payloads are emitted.
 - No unexpected `full_bundle_no_match` state appears.
 
-## Completion Gate
+## Completion gate
 
 Before final response or PR handoff, record:
 

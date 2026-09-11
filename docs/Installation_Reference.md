@@ -525,6 +525,14 @@ and validates enrichment in that same pass. It processes every available fresh
 valid payload even if tests or doctor failed while preserving the earliest
 failure as the job result.
 
+The default uploader is one standard-library Python 3.10+ implementation on
+Linux, macOS, and Windows. It prepares shared CODEOWNERS and context data once,
+then uses eight independent file workers by default. Each worker handles one
+test, coverage, or telemetry source through preparation, retries, and cleanup.
+The run ends with human-readable and JSON statistics. Use `--debug` only when
+the normal report is not enough; use `--dry-run --validate-enrichment` to verify
+the complete outbound preparation without HTTP or deletion.
+
 For manual Go extension wiring, set `module_path` to the Go module path from
 `go.mod`:
 
@@ -968,7 +976,7 @@ dd_test_optimization_targets(
 ### 5) Forward environment variables in `.bazelrc`
 
 The metadata forwarding entries below apply to every runtime. Config-gated Go
-and Python onboarding additionally includes:
+and Python onboarding also includes:
 
 ```text
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1

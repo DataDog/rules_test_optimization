@@ -211,7 +211,7 @@ Extension tag: `test_optimization_sync.test_optimization_sync(...)`
 | `test_management` | bool | `True` | Local switch for Test Management request. When `False`, request is skipped, a minimal stub is written, and settings are mutated to `test_management.enabled=false` |
 | `flaky_tests` | bool | `True` | Local switch for Flaky Tests request. When `False`, request is skipped, a minimal stub is written, and settings are mutated to `flaky_test_retries_enabled=false` |
 | `enabled` | bool | `True` | Hard enablement switch. When `False`, the repository emits the deterministic disabled interface and skips local Git discovery and metadata HTTP requests |
-| `enabled_by_env` | bool | `False` | When `True`, additionally gate enablement on `DD_TEST_OPTIMIZATION_ENABLED` (`1`, `true`, `yes`, or `on`, case-insensitive). Unset and false values emit the disabled interface. The public Go extension and Go WORKSPACE helper override this low-level default to `True` |
+| `enabled_by_env` | bool | `False` | When `True`, also gate enablement on `DD_TEST_OPTIMIZATION_ENABLED` (`1`, `true`, `yes`, or `on`, case-insensitive). Unset and false values emit the disabled interface. The public Go extension and Go WORKSPACE helper override this low-level default to `True` |
 | `require_git_metadata` | bool | `False` | Strict local/CI validation for settings-request Git metadata. When `True`, sync fails before HTTP if repository URL, branch or tag, and commit SHA cannot be resolved |
 | `debug` | bool | `False` | Enables verbose repository-rule logging |
 

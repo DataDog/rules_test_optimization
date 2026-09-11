@@ -95,7 +95,7 @@ This product includes software developed at Datadog
     `--config=test-optimization` as the only user-facing switch. The shared
     config entry is
     `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`.
-  - Go additionally sets the existing `rules_go` Orchestrion `enabled=true`
+  - Go also sets the existing `rules_go` Orchestrion `enabled=true`
     build setting. Python-only consumers must not declare that Go-only label.
   - Omitting the config is the documented complete opt-out for Go and Python:
     metadata repositories use disabled stubs when `enabled_by_env = True`, Go

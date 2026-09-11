@@ -11,9 +11,9 @@ This product includes software developed at Datadog
 This document explains the current implementation architecture in this
 repository. For installation and day-to-day usage, start with `README.md`.
 
-> Last reviewed: 2026-07-27
+> Last reviewed: 2026-09-11
 
-## Approach Overview
+## Approach overview
 
 The integration uses a Bazel module extension and repository rule to
 materialize the Test Optimization repository during module/repo resolution, a
@@ -37,7 +37,7 @@ The steps are:
    - `@<repo>//:test_optimization_files` (core bundle, includes `cache/http/settings.json`)
    - `@<repo>//:test_optimization_context` (`context.json` plus
      `telemetry_facts.json`)
-   When an enabled response contains module data, the repository additionally
+   When an enabled response contains module data, the repository also
    exposes `@<repo>//:module_<sanitized>` bundles with
    `cache/http/settings.json` plus that module's known-tests, test-management,
    and flaky-tests files.
@@ -59,7 +59,16 @@ The steps are:
    targets, or payload instrumentation.
 
 3. **Payload validation and reporting**:
-   A single workspace-level doctor runs via `bazel run` after tests complete and validates local JSON payloads, Bazel target metadata, Git metadata, and invalid Go payload-selection states. A single workspace-level uploader then discovers all `test.outputs/` directories in `bazel-testlogs/`, waits for payloads to quiesce, enriches them with `context.json`, and uploads via agentless (`DD_API_KEY`, `DD_SITE`) or EVP proxy (`DD_TEST_OPTIMIZATION_AGENT_URL`).
+   A single workspace-level doctor runs via `bazel run` after tests complete and
+   validates local JSON payloads, Bazel target metadata, Git metadata, and
+   invalid payload-selection states. A single workspace-level uploader then
+   discovers local or BEP-staged `test.outputs/` directories and waits for
+   payloads to quiesce. Its coordinator prepares CODEOWNERS, contexts, schemas,
+   freshness, and telemetry plans once before starting a bounded pool of eight
+   workers by default. Each worker owns one source file through enrichment,
+   optional validation, preventive 4.5 MiB splitting for test payloads, upload
+   retries, and cleanup. A worker can process test, coverage, or telemetry data;
+   workers do not synchronize with one another.
    In mixed-runtime workspaces, the uploader can bundle multiple `context.json`
    files and select the matching one per payload using sibling
    `bazel_target_metadata.json` repo metadata instead of reusing one global
@@ -69,9 +78,25 @@ The steps are:
    can use root labels; large monorepos should use a lightweight package such
    as `//tools/test_optimization`.
    Usage: run `bazel test`, then the doctor target, then one uploader pass with
-   `--validate-enrichment`; add `--dry-run` only when upload is disabled.
-   Preserve the earliest failure while still processing every available fresh
+   `--validate-enrichment`; add `--dry-run` only when upload is disabled. The
+   uploader prints final file, type, split, request, retry, and cleanup totals.
+   `--debug` adds verbose redacted diagnostics. Preserve the earliest test,
+   doctor, or uploader failure while still processing every available fresh
    valid payload.
+
+   ```mermaid
+   flowchart LR
+     D[Discover fresh source files] --> P[Prepare shared context and CODEOWNERS]
+     P --> Q[Bounded file queue]
+     Q --> W1[Worker 1: enrich, validate, split, send, clean]
+     Q --> WN[Worker N: enrich, validate, split, send, clean]
+     W1 --> S[Aggregate final statistics]
+     WN --> S
+   ```
+
+   Each worker owns its file from dequeue to final result. There is no serial
+   split or upload stage after enrichment, and workers do not exchange payload
+   state.
 
 4. **Language macros (optional)**:
    Thin wrappers (for Go/Python/Java/NodeJS/.NET/Ruby) set up the right runfiles/env so test code can read the synced files and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
@@ -281,16 +306,24 @@ generated per-service sync repository keys used by payload metadata.
 
 ## Runtime uploads and hermetic tests
 
-Tests remain hermetic with network blocked. They write payloads to Bazel's built-in `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`, which is automatically collected to `bazel-testlogs/<target>/test.outputs/`. A single workspace-level doctor validates those local outputs before upload. A single workspace-level uploader (via `bazel run`) then:
+Tests remain hermetic with network blocked. They write payloads to Bazel's
+built-in `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage,telemetry}`,
+which Bazel collects under `bazel-testlogs/<target>/test.outputs/`. A single
+workspace-level doctor validates those outputs before upload. One uploader
+process then:
 
 - Discovers all `test.outputs/` directories in `bazel-testlogs/`,
 - Waits for filesystem quiescence,
-- Enriches test payloads with `context.json` when present,
+- Prepares CODEOWNERS, contexts, schemas, freshness, and telemetry state once,
+- Assigns each source file to one of eight workers by default,
+- Lets that worker enrich, validate, split when required, upload with retries,
+  and clean up the file,
 - When multiple bundled contexts are present, matches them per payload using
   `bazel.test_optimization.repo_name` from sibling `bazel_target_metadata.json`,
 - Can dry-run the enrichment path without uploading or deleting files,
 - Uploads to Datadog using either `DD_API_KEY`/`DD_SITE` (agentless) or `DD_TEST_OPTIMIZATION_AGENT_URL` (EVP proxy),
-- Deletes successfully uploaded payloads.
+- Deletes successfully uploaded payloads,
+- Prints aggregate statistics after all workers finish.
 
 No secrets are written to disk; all credentials are passed via environment variables.
 
@@ -335,7 +368,7 @@ flowchart TD
   %% Test execution: hermetic, offline
   subgraph T[Test Execution (Hermetic)]
     T1[Tests (instrumented)]
-    P1[bazel-testlogs/.../test.outputs/\n  payloads/tests/*.json\n  payloads/coverage/*.json]
+    P1[bazel-testlogs/.../test.outputs/\n  payloads/tests/*.json\n  payloads/coverage/*.json\n  payloads/telemetry/*.json]
     T1 -->|read runfiles| A3
     T1 -->|write to TEST_UNDECLARED_OUTPUTS_DIR| P1
   end
@@ -343,13 +376,16 @@ flowchart TD
   %% Validate/upload steps: bazel run after tests
   subgraph U[Validate and upload via bazel run]
     U0[Doctor rule]
-    U1[Uploader rule]
+    U1[Uploader coordinator]
+    UW[Bounded file workers\n enrich, validate, split, send, clean]
+    US[Final statistics]
     U0 -->|validate| P1
     U0 -->|validate context| A3
     U0 --> U1
-    U1 -->|enrich with| A3
-    U1 -->|upload tests| G1{Agentless?\n DD_API_KEY}
-    U1 -->|upload coverage| G1
+    U1 -->|prepare shared context| A3
+    U1 --> UW
+    UW -->|upload tests, coverage, telemetry| G1{Agentless?\n DD_API_KEY}
+    UW --> US
     G1 -- Yes --> I1[(citestcycle/citestcov\n intake on <DD_SITE>)]
     G1 -- No  --> I2[(EVP proxy\n ${DD_TEST_OPTIMIZATION_AGENT_URL})]
   end
@@ -387,13 +423,15 @@ Build Graph
 
 Test Execution (Hermetic)
   [tests (instrumented)] --read runfiles--> synced JSONs
-                         --write payloads--> TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage} (-> bazel-testlogs/.../test.outputs/)
+                         --write payloads--> TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage,telemetry} (-> bazel-testlogs/.../test.outputs/)
 
 Validate and upload (via bazel run)
   [doctor rule] --validate--> payload JSON, bazel_target_metadata.json, context.json
-  [uploader rule] --dry-run enrichment or upload--> context.json
-       |-- agentless (DD_API_KEY, DD_SITE) --> citestcycle/citestcov intake
+  [uploader coordinator] --prepare once--> context/CODEOWNERS/schema/freshness
+       |-- bounded file workers: enrich -> validate -> split -> send -> clean
+       |-- agentless (DD_API_KEY, DD_SITE) --> citestcycle/citestcov/telemetry intake
        |-- EVP proxy (DD_TEST_OPTIMIZATION_AGENT_URL) -> /evp_proxy/... endpoints
+       `-- aggregate final statistics
 
 Optional: Multi-service aggregator
   @test_optimization_data//:test_optimization_files_<service>

@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Validation Checklist
+# Validation checklist
 
 Use this checklist before calling a Go onboarding complete.
 
@@ -63,7 +63,7 @@ module graph requires the documented escape hatch.
 
 ## Managed Manifest Checks
 
-For the automatic managed path, additionally prove:
+For the automatic managed path, also prove:
 
 - no committed target/service mapping, generated example registry, Gazelle
   extension, or ownership gate was added;
@@ -199,7 +199,7 @@ ls -la "$(bazel info output_base)/external/test_optimization_data_<service_key>/
 cat "$(bazel info output_base)/external/test_optimization_data_<service_key>/export.bzl"
 ```
 
-## Test, Doctor, Dry-Run, Upload
+## Test, doctor, dry-run, and upload
 
 For the simplest customer troubleshooting request after tests have run, use
 `bazel run --config=test-optimization //<topt-package>:dd_test_optimization_doctor -- --support-bundle=<path>` with any
@@ -256,7 +256,30 @@ done
 Do not run the real upload unless credentials are intentionally available and
 the user or CI environment expects data to be sent.
 
-## Payload Inspection
+For a safe end-to-end check, add `--dry-run` to the uploader invocation and
+keep `--validate-enrichment`. Confirm that its final statistics show the
+expected configured and peak workers, per-type file counts, prepared chunks,
+zero attempted requests, and zero deleted files. The default runtime uses eight
+Python workers; do not simulate concurrency by launching multiple uploader
+processes. Use `--debug` only when the normal report lacks enough redacted
+detail to diagnose a failure.
+
+If the source test carries `no-remote-exec`, inspect the transitioned target's
+actions:
+
+```bash
+bazel aquery --config=test-optimization \
+  'mnemonic("TestRunner", deps(//path/to:pilot_test.topt))' \
+  --output=jsonproto
+bazel aquery --config=test-optimization \
+  'mnemonic("GoStdlib|GoSyntheticTestmainHelpers|GoCompilePkg|GoLink", deps(//path/to:pilot_test.topt))' \
+  --output=jsonproto
+```
+
+The `TestRunner` must retain `no-remote-exec`. Deterministic build actions must
+not inherit it, so they remain cacheable and remote-capable.
+
+## Payload inspection
 
 After tests, inspect `bazel-testlogs`:
 
@@ -309,7 +332,7 @@ on the default allowlist:
 - Do not list `.build_test` or build-only controls in `expected_targets`
   because they do not run instrumented test code.
 
-## Remote Execution
+## Remote execution
 
 If tests use remote execution or remote cache, make sure the test config uses:
 
@@ -353,7 +376,7 @@ Artifact mode choices:
 | BEP references bytestream/CAS/custom-auth `test.outputs` or `outputs.zip` artifacts | Add `--artifact-source=bep --remote-artifacts=download --bep-artifact-downloader=/path/to/downloader`; use `--remote-artifacts=required` for strict all-or-nothing validation |
 | Mixed migration where local outputs may be stale but BEP can stage fresh carriers | Use `--artifact-source=auto --remote-artifacts=download` so staged BEP outputs win for matching output keys |
 
-## Final Consumer Checks
+## Final consumer checks
 
 Before opening or finishing a consumer PR:
 

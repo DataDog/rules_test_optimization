@@ -22,7 +22,7 @@ Symptoms:
 Checks:
 
 - Compare old upstream, old `base`, new upstream, and the partial migrated tree.
-- Identify the behavior being carried, not only the line-level patch.
+- Identify the behavior being carried rather than copying the line-level patch.
 - Read the new upstream implementation before deciding where to insert the
   Orchestrion behavior.
 - Re-run the changed-files diff after each coherent chunk.
@@ -90,7 +90,8 @@ Checks:
 - Verify Orchestrion `toolexec` is present in compile and stdlib actions.
 - Verify the offline module proxy is available as an action input.
 - Verify `dd_trace_go_versions.json` is present and read by builder actions.
-- Run the consumer integration harnesses, not only vendored `rules_go` tests.
+- Run both the consumer integration harnesses and the vendored `rules_go`
+  tests.
 
 Build success alone is not proof for stdlib or runtime weaving changes.
 

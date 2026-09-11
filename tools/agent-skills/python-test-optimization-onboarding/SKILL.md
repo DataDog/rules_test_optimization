@@ -12,14 +12,14 @@ This product includes software developed at Datadog
 -->
 
 
-# Datadog Python Test Optimization Onboarding
+# Datadog Python Test Optimization onboarding
 
 Use this skill when you need to instrument a Bazel Python repository with
 Datadog Test Optimization. The skill is intentionally project-neutral: it is
 stored in this repository as a Codex-compatible skill, but any agent can read it
 as a normal implementation guide.
 
-## Non-Negotiable Contract
+## Non-negotiable contract
 
 Keep the RFC contract intact:
 
@@ -27,6 +27,18 @@ Keep the RFC contract intact:
 - Bazel collects those files under `bazel-testlogs/<target>/test.outputs/`.
 - The doctor validates local files after `bazel test`.
 - The uploader runs after the doctor with `bazel run`.
+- Use the default Python 3.10+ uploader unless a temporary rollback explicitly
+  requires `use_python_uploader = False`. Its coordinator prepares shared
+  CODEOWNERS, contexts, schemas, freshness, and telemetry once, then starts up
+  to eight independent file workers by default. Each worker owns enrichment,
+  validation, preventive splitting, retries, and cleanup for one test,
+  coverage, or telemetry source file.
+- Run one uploader process. Use `--dry-run --validate-enrichment` to prepare
+  requests without HTTP or deletion, `--debug` only for verbose redacted
+  diagnostics, and review the final file/type/split/request/cleanup totals.
+- Test bodies are split before HTTP when they exceed `4_718_592` bytes. HTTP
+  `413` is terminal and must not trigger a retry or adaptive split; coverage
+  and telemetry are not split.
 - Do not add payload proxies or upload-from-test-sandbox paths.
 - Do not pass `DD_GIT_*` through `--test_env`; use `--repo_env` for sync
   metadata.
@@ -56,7 +68,7 @@ Keep the RFC contract intact:
   `reports/doctor-report.json`, optional uploader reports, and
   `command/flags.json` in that order.
 
-## First Actions
+## First actions
 
 1. Read the consumer repository's Bazel shape before editing:
    - Does it use `MODULE.bazel`, `WORKSPACE`, or both?
@@ -91,7 +103,7 @@ Keep the RFC contract intact:
      [validation-checklist.md](references/validation-checklist.md) and
      [troubleshooting.md](references/troubleshooting.md).
 
-## Universal Shape
+## Universal shape
 
 Every successful Python onboarding should end with these pieces:
 
@@ -128,7 +140,9 @@ Every successful Python onboarding should end with these pieces:
 - `FETCH_SALT` is used only for a separate, explicit
   `bazel sync --config=test-optimization --only=<repo> --repo_env=FETCH_SALT="$(date +%s)"` refresh, never
   as part of normal test, doctor, or uploader commands.
-- Real upload processes available fresh valid payloads after doctor and dry-run attempts, while preserving any earlier failure.
+- A real upload processes every available fresh valid payload after validation
+  attempts. The wrapper preserves the earliest test, doctor, or uploader exit
+  code; uploader errors never replace an earlier test result.
 
 For automatic managed Go/Python monorepos:
 
@@ -146,7 +160,7 @@ Use the consumer's existing Bazel entrypoint in all commands. Do not switch a
 repository from `bzl` or `bazelw` to raw `bazel` just because examples use the
 generic binary name.
 
-## Branch And PR Hygiene
+## Branch and PR hygiene
 
 Before making changes in a real repository, confirm whether to use the current
 branch or create a new branch from the latest default branch. Keep onboarding
@@ -161,7 +175,7 @@ changes reviewable:
 - If an issue requires changing this rule repository, add matching fixture
   coverage in `rules_test_optimization_tests` before declaring it solved.
 
-## Stop Conditions
+## Stop conditions
 
 Stop and escalate instead of guessing when:
 

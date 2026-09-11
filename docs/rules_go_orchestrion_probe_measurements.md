@@ -651,8 +651,8 @@ So the cold miss is not “compile a few helper packages”. It becomes “compi
 large transitive non-cgo helper ecosystem that must remain source-compatible in
 the synthetic module”.
 
-That matches the measured run: the expensive packages were not only the obvious
-Datadog roots. They also included deeper transitive packages such as:
+That matches the measured run: expensive work included the Datadog roots and
+deeper transitive packages such as:
 
 - `github.com/DataDog/dd-trace-go/v2/ddtrace/mocktracer`
 - `github.com/DataDog/datadog-agent/pkg/trace/stats`

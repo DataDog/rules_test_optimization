@@ -6,7 +6,7 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Python Parallel Uploader: Implementation Guide and Tracker
+# Python parallel uploader implementation tracker
 
 ## Status
 
@@ -29,6 +29,14 @@ The implementation currently provides:
 
 This is an implementation milestone, not the end of the migration. Open
 checkboxes are release gates, not deferred product ideas.
+
+The merged rollout in
+[rule PR #214](https://github.com/DataDog/rules_test_optimization/pull/214)
+passed the Linux, macOS, and Windows rule matrix. The consumer matrix passed in
+the merged
+[`_tests` PR #108](https://github.com/ddoghq/rules_test_optimization_tests/pull/108).
+The remaining unchecked items below are the proof still required before
+deleting the legacy implementations.
 
 ## Goals
 
@@ -121,7 +129,7 @@ There is no synchronization between file workers beyond queue ownership and
 coordinator collection. A worker never waits for another file's enrichment,
 split, upload, or cleanup.
 
-## Ownership Boundaries
+## Ownership boundaries
 
 ### Launcher
 
@@ -188,7 +196,7 @@ dequeued.
 Report writing is atomic. A report-write failure is printed as a warning and
 does not reinterpret completed uploads.
 
-## Pre-worker Flow
+## Pre-worker flow
 
 The following order is intentional:
 
@@ -207,7 +215,7 @@ The following order is intentional:
 The lock remains held through worker completion, staging cleanup, and final
 reporting so a second uploader cannot race source deletion or staging cleanup.
 
-## Configuration Precedence
+## Configuration precedence
 
 Generated rule values are defaults. Environment overrides them, and explicit
 CLI values override environment where a CLI option exists.
@@ -247,7 +255,7 @@ The parser produces immutable compiled rules and preserves:
 Workers share the matcher but keep a file-local source-to-match cache. They do
 not mutate matcher rules or share per-file match state.
 
-## Worker Pool
+## Worker pool
 
 - The queue is bounded to apply producer backpressure.
 - Threads are homogeneous and non-daemon.
@@ -263,7 +271,7 @@ already owned finish their current complete pipeline, all threads join, owned
 temporary resources are cleaned, completed results are reported, and the
 process exits `130`.
 
-## Test Payload Pipeline
+## Test payload pipeline
 
 For each test JSON file, one worker performs:
 
@@ -304,7 +312,7 @@ HTTP `413` is a terminal `payload_limit_contract_mismatch` for test chunks. It
 is not retried and does not trigger another split, because the preventive split
 should already have made the request valid.
 
-## Coverage Pipeline
+## Coverage pipeline
 
 Coverage accepts JSON and msgpack. The worker:
 
@@ -317,7 +325,7 @@ Coverage accepts JSON and msgpack. The worker:
 Coverage is not split. A `413` is terminal and identifies unsupported oversized
 coverage rather than invoking test-split behavior.
 
-## Telemetry Pipeline
+## Telemetry pipeline
 
 Telemetry correlation is planned before workers start, but each source remains
 owned by one worker. The source worker:
@@ -334,7 +342,7 @@ Unchanged primary telemetry preserves its original bytes. Changed and
 synthetic bodies use deterministic compact serialization. Telemetry is not
 split, and `413` is terminal.
 
-## HTTP and Retry Contract
+## HTTP and retry contract
 
 Each worker-local standard-library transport owns:
 
@@ -366,7 +374,7 @@ Do not retry:
 seconds. Otherwise the configured fixed delay is used. Dry-run performs no
 sleep and creates no network connection.
 
-## Dry-run and Debug
+## Dry-run and debug
 
 ### Dry-run
 
@@ -391,7 +399,7 @@ timing.
 Debug must never print API keys, authorization headers, full payload bodies, or
 unbounded response bodies.
 
-## Cleanup and Outcome Rules
+## Cleanup and outcome rules
 
 - Delete a source only after all requests derived from it succeed.
 - Keep sources on preparation, validation, split, transport, or HTTP failure;
@@ -411,7 +419,7 @@ Severity precedence is:
 3. one or more failed files (`1`);
 4. success (`0`).
 
-## Final Statistics
+## Final statistics
 
 Every controlled completion prints a stable summary containing:
 
@@ -427,7 +435,7 @@ Human output and JSON derive from the same aggregate. The schema-v1 report keeps
 legacy fields and adds explicit concurrency, split, request, warning, and
 failure sections.
 
-## Package Map
+## Package map
 
 | Module | Responsibility |
 |---|---|
@@ -452,7 +460,7 @@ directories, strict JSON, credentials, discovery, expected targets, and
 resource loading. Avoid adding another layer unless it removes more complexity
 than it introduces.
 
-## Implementation Tracker
+## Implementation tracker
 
 ### Runtime foundations
 
@@ -509,7 +517,7 @@ than it introduces.
 - [ ] Remove the temporary switch and legacy Bash/PowerShell runtimes.
 - [ ] Remove obsolete jq/curl/gzip uploader prerequisites from docs.
 
-## Test Matrix
+## Test matrix
 
 Required automated coverage:
 
@@ -548,7 +556,7 @@ python3 tools/dev/lint_uploader_templates.py
 Also run every companion-module command from `CONTRIBUTING.md` and the relevant
 flow in `../rules_test_optimization_tests` with local overrides.
 
-## Acceptance Criteria
+## Acceptance criteria
 
 - [x] One functional Python uploader implementation exists.
 - [x] Platform launchers contain resolution only.
@@ -569,12 +577,12 @@ flow in `../rules_test_optimization_tests` with local overrides.
 - [ ] Public Bash/PowerShell behavior is characterized and matched.
 - [ ] Standard-library HTTP behavior passes all supported OS/proxy/TLS lanes.
 - [ ] `workers=1` passes the complete cross-platform parity matrix.
-- [ ] Linux, macOS, and Windows CI pass with the Python target.
-- [ ] The sibling consumer fixture passes.
+- [x] Linux, macOS, and Windows CI pass with the Python target.
+- [x] The sibling consumer fixture passes.
 - [x] Python becomes the default.
 - [ ] Legacy functional scripts are removed.
 
-## Performance Validation
+## Performance validation
 
 Measure with identical payload fixtures and backend behavior:
 
@@ -598,7 +606,7 @@ the default is `8`; consumers with split-heavy workloads or backend throttling
 can override it to `4`. Continue validating memory, temporary storage, and
 real-backend retry behavior on supported CI hosts.
 
-## Rollout and Rollback
+## Rollout and rollback
 
 1. Compare dry-run outputs and loopback request captures against legacy.
 2. Validate the default in representative consumers and supported CI platforms.

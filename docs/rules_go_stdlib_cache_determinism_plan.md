@@ -6,13 +6,15 @@ This product includes software developed at Datadog
 (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 -->
 
-# Deterministic rules_go Standard-Library Cache Plan
+# Deterministic rules_go build-output tracker
 
 ## Status
 
-Draft implementation plan for the Orchestrion v1.12.0 update. This document
-describes the intended implementation and validation sequence; the cache fix is
-not implemented merely by adding this plan.
+Implementation is in progress on PR #251. The stdlib ownership fix and the
+isolated action-output verifier are implemented locally; publication and
+downstream adoption remain open until the PR is merged and consumers are
+repinned. This document now tracks that work instead of describing an
+unimplemented proposal.
 
 The work starts in `rules_test_optimization`, is validated through
 `rules_test_optimization_tests`, and is adopted by `dd-source` only after a
@@ -22,6 +24,7 @@ maintained `rules_go` profile:
 - `v0_60_0`
 - `v0_61_1`
 - `v0_62_0`
+- `v0_63_0`
 
 It must preserve both supported Go execution modes:
 
@@ -49,7 +52,7 @@ Instead, Test Optimization must explicitly publish only the deterministic
 archive data required by downstream actions. Ordinary Go builds must still
 create the declared TreeArtifact, but leave it empty.
 
-## Problem Statement
+## Problem statement
 
 The Go build cache is not a reproducible Bazel action output. In addition to
 archive data entries (`*-d`), the Go tool writes action index entries (`*-a`)
@@ -77,7 +80,7 @@ correctly identifies the first writer and moves the primary stdlib build to a
 private cache. Porting that patch literally is insufficient for this repository
 because the two Orchestrion-specific writers would remain.
 
-## Terminology and Data Flow
+## Terminology and data flow
 
 This plan uses these names consistently:
 
@@ -120,7 +123,7 @@ Later compile/link action
   +-- seedWovenStdlibCache copies/hard-links declared archives into GOCACHE
 ```
 
-## Required Invariants
+## Required invariants
 
 The implementation is complete only if all of the following remain true.
 
@@ -165,7 +168,7 @@ The implementation is complete only if all of the following remain true.
 
 ### In scope
 
-- The base `rules_go` trees for all three registered upstreams.
+- The base `rules_go` trees for all four registered upstreams.
 - Builder unit tests covering cache ownership, publication, manifest contents,
   path safety, and command environments.
 - Generated public patch profiles, metadata, and changed-files reports.
@@ -188,7 +191,7 @@ The implementation is complete only if all of the following remain true.
 - Refactoring unrelated Orchestrion cache, jobserver, resolver, uploader, or
   payload code.
 
-## Design Decisions
+## Design decisions
 
 ### D-1: Fix the base trees, then regenerate
 
@@ -244,7 +247,7 @@ and SHA-256 content digest. Filesystem mtimes are not part of the TreeArtifact's
 semantic content and must not be used to create a false failure. Symlinks, if
 any unexpectedly appear, must be reported rather than silently followed.
 
-## Implementation Plan
+## Implementation plan
 
 ### S-1: Introduce explicit cache setup in `stdlib.go`
 
@@ -374,7 +377,7 @@ must enforce that the declared cache is never passed as its writable root.
 
 The existing builder test target includes `stdlib_test.go` in
 `@rules_go//go/tools/builders:orchestrion_test`. Add the tests to the base trees
-and keep the test sources identical across all three versions where the
+and keep the test sources identical across all four versions where the
 production sources are identical.
 
 #### Cache setup and ownership tests
@@ -445,12 +448,12 @@ Keep existing tests for:
 ### S-6: Apply the implementation to every maintained upstream
 
 At the start of implementation, compare the relevant source files across the
-three bases. They are currently byte-identical for `stdlib.go`,
+four bases. They are currently byte-identical for `stdlib.go`,
 `stdlib_test.go`, `importcfg.go`, and `env_orchestrion.go`, so the preferred
 workflow is:
 
 1. implement and review the change in `v0_60_0`;
-2. copy the exact logical change to `v0_61_1` and `v0_62_0`;
+2. copy the exact logical change to `v0_61_1`, `v0_62_0`, and `v0_63_0`;
 3. compare the resulting files or focused diffs across versions;
 4. retain a version-specific difference only when the upstream base requires
    it and document the reason in the diff.
@@ -464,10 +467,17 @@ Extend the existing functional smoke in
 `tools/dev/verify_rules_go_profiles.py`; do not create a parallel profile
 verifier.
 
-For each registered upstream, the verifier already materializes a pristine
-upstream tree, applies the generated public patch, creates a temporary WORKSPACE
-consumer, executes a Test Optimization test, and inspects `aquery`. Add a
-determinism phase to that same temporary consumer.
+For each registered upstream, the verifier materializes a pristine upstream
+tree, applies the generated public patch, creates a temporary WORKSPACE
+consumer, executes a Test Optimization test, and inspects structured Bazel
+output. Its determinism phase runs twice with isolated output roots and reads
+the compact execution logs. Local runs require `zstd`.
+
+The comparison covers the full Reprise-sensitive chain: `GoStdlib`,
+`GoSyntheticTestmainHelpers`, the `GoCompilePkg` action that produces
+`~testmain.a`, and `GoLink`. The verifier compares both action keys and output
+bytes. Different bytes fail the check; equal bytes with a different key
+identify an unnecessary rebuild.
 
 #### Plain mode
 
@@ -497,6 +507,8 @@ determinism phase to that same temporary consumer.
    actually enabled Test Optimization.
 8. Preserve the real test execution proving that the woven stdlib can be
    consumed.
+9. Exercise CGO so the woven stdlib, compiler random seed, relative input
+   paths, synthetic source trim paths, and copied helper build IDs are covered.
 
 The implementation may use two isolated Bazel output roots or an explicit
 action-cache invalidation mechanism. It must not compare one execution with a
@@ -539,7 +551,7 @@ If a generator modifies a base source file, stop and understand why before
 continuing; the base source implementation must remain the reviewed source of
 truth.
 
-## Validation Matrix
+## Validation matrix
 
 The minimum acceptance matrix is:
 
@@ -548,6 +560,7 @@ The minimum acceptance matrix is:
 | v0.60.0 | required | required | two isolated runs | required |
 | v0.61.1 | required | required | two isolated runs | required |
 | v0.62.0 | required | required | two isolated runs | required |
+| v0.63.0 | required | required | two isolated runs | required |
 
 For every row:
 
@@ -594,10 +607,10 @@ consumer repository. Enable the existing local overrides for:
 - `datadog-rules-test-optimization-go`;
 - the selected `rules_go` base tree.
 
-Exercise all three upstreams using the existing fixture support:
+Exercise all four upstreams using the existing fixture support:
 
 ```bash
-for rules_go_upstream in v0_60_0 v0_61_1 v0_62_0; do
+for rules_go_upstream in v0_60_0 v0_61_1 v0_62_0 v0_63_0; do
   RULES_GO_UPSTREAM="$rules_go_upstream" RTO_LOCAL_ARCHIVE=1 \
     ./fixtures/bzlmod-go/runtests
 done
@@ -619,7 +632,7 @@ discrepancy, and clear the stable Orchestrion cache when the test specifically
 needs a cold Orchestrion execution. Do not clear caches between the first and
 second runs whose purpose is to prove cache reuse.
 
-## Cross-Repository Rollout
+## Cross-repository rollout
 
 ### R-1: Publish `rules_test_optimization`
 
@@ -669,7 +682,7 @@ For the Test Optimization run, require test and telemetry payload counts and
 successful doctor/enrichment/upload stages. A Reprise success from a plain Go
 target alone does not prove the Orchestrion path.
 
-## Failure Handling and Rollback
+## Failure handling and rollback
 
 ### During Rule implementation
 
@@ -693,15 +706,15 @@ target alone does not prove the Orchestrion path.
   than adding another overlay before determining whether the failure is in
   Rule generation, consumer integration, or dd-source composition.
 
-## Risks and Mitigations
+## Risks and mitigations
 
 ### Silent loss of instrumentation
 
 **Risk:** compile and link succeed while downstream actions read plain stdlib
 archives.
 
-**Mitigation:** require real payload emission plus doctor/enrichment validation,
-not only builder unit tests or `aquery` output.
+**Mitigation:** require real payload emission plus doctor/enrichment validation;
+builder unit tests and `aquery` output alone are insufficient.
 
 ### A hidden declared-cache writer remains
 
@@ -752,11 +765,11 @@ changes already present in generated profiles.
 **Mitigation:** modify base sources first, keep existing user changes intact,
 then run the canonical generators once and inspect the combined generated diff.
 
-## Completion Criteria
+## Completion criteria
 
 The work is complete only when:
 
-- all three base profiles implement the same cache ownership contract;
+- all four base profiles implement the same cache ownership contract;
 - no live Go or Orchestrion subprocess receives the declared cache as
   `GOCACHE`;
 - plain Go declared cache outputs are empty and reproducible;
@@ -766,8 +779,8 @@ The work is complete only when:
   inventories;
 - builder unit tests, profile materialization, profile verification, release
   archive checks, and the full rules suite pass;
-- local and published consumer fixtures pass for `v0.60.0`, `v0.61.1`, and
-  `v0.62.0`;
+- local and published consumer fixtures pass for `v0.60.0`, `v0.61.1`,
+  `v0.62.0`, and `v0.63.0`;
 - real Test Optimization tests emit valid test and telemetry payloads;
 - an unchanged second consumer run demonstrates Bazel cache reuse;
 - PR #108 is pinned to the final rules SHA and passes its CI matrix;
@@ -776,22 +789,22 @@ The work is complete only when:
 - no temporary overrides, scratch artifacts, or unrelated generated changes
   remain in any of the three repositories.
 
-## Execution Checklist
+## Execution checklist
 
-- [ ] Confirm the active Rule branch and preserve all existing review changes.
-- [ ] Recompare relevant builder sources across all three bases.
-- [ ] Implement private scratch and separate declared-cache setup.
-- [ ] Remove the Orchestrion `GOCACHE=env.stdlibCache` override.
-- [ ] Implement safe deterministic archive publication.
-- [ ] Audit every declared-cache read and write call site.
-- [ ] Add cache ownership and command-environment tests.
-- [ ] Add deterministic publisher and path-safety tests.
-- [ ] Run focused builder tests.
-- [ ] Propagate and compare the implementation across all upstreams.
-- [ ] Extend generated-profile plain and Test Optimization determinism smoke.
-- [ ] Regenerate profiles, metadata, and changed-files reports.
-- [ ] Run materialization, verifier, release, and full-suite checks.
-- [ ] Validate local consumer fixtures across all versions and both modes.
+- [x] Confirm the active Rule branch and preserve all existing review changes.
+- [x] Recompare relevant builder sources across all four bases.
+- [x] Implement private scratch and separate declared-cache setup.
+- [x] Remove the Orchestrion `GOCACHE=env.stdlibCache` override.
+- [x] Implement safe deterministic archive publication.
+- [x] Audit every declared-cache read and write call site.
+- [x] Add cache ownership and command-environment tests.
+- [x] Add deterministic publisher and path-safety tests.
+- [x] Run focused builder tests.
+- [x] Propagate and compare the implementation across all upstreams.
+- [x] Extend generated-profile verification to the four Reprise action families.
+- [x] Regenerate profiles, metadata, and changed-files reports.
+- [x] Run materialization, verifier, release, and full-suite checks.
+- [x] Validate local consumer fixtures across all versions and both modes.
 - [ ] Publish the Rule commit when explicitly authorized.
 - [ ] Repin and validate PR #108 from the published commit.
 - [ ] Repin dd-source and regenerate its composed rules_go patch.
@@ -799,4 +812,3 @@ The work is complete only when:
 - [ ] Validate dd-source plain, Test Optimization, Reprise, load, and cache
       hydration flows.
 - [ ] Inspect final diffs and confirm all temporary local wiring is removed.
-

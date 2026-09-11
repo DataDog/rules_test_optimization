@@ -275,6 +275,11 @@ Notes:
 - CI also keeps a dedicated WORKSPACE-compat probe on Bazel `8.4.1` (separate
   from the `8.5.1` baseline lanes) so legacy `--enable_workspace` behavior is
   continuously exercised during Bazel 9 migration.
+- The generated `rules_go` profile verifier rebuilds each maintained upstream
+  in two isolated output roots and compares action keys and bytes for
+  `GoStdlib`, `GoSyntheticTestmainHelpers`, synthetic `GoCompilePkg`
+  (`~testmain.a`), and `GoLink`. Ordinary `GoStdlib` outputs must not publish an
+  instrumented cache. Local compact execution-log checks require `zstd`.
 - Current PR baseline checks:
 
 ```sh
