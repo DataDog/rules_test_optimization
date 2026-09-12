@@ -572,7 +572,10 @@ fails before upload.
    For a local-static descriptor, `runtime_module_path` identifies the sync
    repository but does not select payloads for every test beneath that root.
    Inspect `@<repo>//:module_*` and compare those labels with the effective test
-   package importpath. A package present in that catalog should report `module`.
+   package importpath. The generated catalog handles Go's escaped runtime
+   module name and external `_test` package automatically; do not derive those
+   names from the sanitized Bazel label. A package present in a freshly synced
+   catalog should report `module`.
 
 6. **Expected target output missing**: Run the exact target listed in
    `expected_targets` before the doctor. With remote execution or remote cache,

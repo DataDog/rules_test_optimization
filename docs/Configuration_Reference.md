@@ -192,6 +192,12 @@ test's effective `importpath` and selects the matching module files. The
 configured `runtime_module_path` identifies the sync repository; it is not used
 as a substitute for the test package's `importpath`.
 
+The catalog maps the backend's raw module identifiers to their generated Bazel
+groups. Go selection applies the same final-segment escaping used for runtime
+symbols and also checks the external-test `<importpath>_test` identifier. When
+one binary contains internal and external package tests, its base package group
+contains both sets of backend metadata.
+
 Static descriptors use the same fallback contract as generated exports. An
 explicit `importpath` or `module_label_override` that is absent from a populated
 catalog fails analysis. An inferred or label-derived miss uses the canonical

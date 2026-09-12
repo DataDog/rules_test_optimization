@@ -45,6 +45,10 @@ example_stub_repo.example_stub_repo(
         "example_com_embed_pkg",
         "example_com_other_pkg",
     ],
+    module_group_by_identifier = {
+        "example.com/embed/pkg": "module_example_com_embed_pkg",
+        "example.com/other/pkg": "module_example_com_other_pkg",
+    },
     service_name = "static-module-service",
 )
 example_stub_repo.example_stub_repo(

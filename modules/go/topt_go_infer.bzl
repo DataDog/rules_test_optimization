@@ -34,6 +34,7 @@ Maintenance notes:
   the safe full-bundle fallback.
 """
 
+load("@datadog-rules-test-optimization//tools/core:common_utils.bzl", "fail_with_prefix")
 load(
     "@datadog-rules-test-optimization//tools/core:test_optimization_repository_state.bzl",
     "TestOptimizationRepositoryStateInfo",
@@ -53,6 +54,41 @@ _selected_payload_runfiles = selected_payload_runfiles
 
 # Public alias for unit tests.
 select_module_group_name_for_tests = _select_module_group_name
+
+def _go_path_to_prefix(importpath):
+    """Mirror Go's symbol-prefix escaping for valid import paths.
+
+    Go escapes periods only in the last path segment. Percent signs and double
+    quotes are escaped everywhere; the remaining characters escaped by Go are
+    not valid in module import paths accepted by this integration.
+    """
+    slash = importpath.rfind("/")
+    path = importpath[:slash + 1]
+    name = importpath[slash + 1:]
+    return (
+        path.replace("%", "%25").replace("\"", "%22") +
+        name.replace("%", "%25").replace("\"", "%22").replace(".", "%2e")
+    )
+
+def _go_runtime_module_identifiers(importpath):
+    """Return package identifiers a rules_go test binary may emit."""
+    if not importpath:
+        return []
+    base = _go_path_to_prefix(importpath)
+    return [base, base + "_test"]
+
+go_runtime_module_identifiers_for_tests = _go_runtime_module_identifiers
+
+def _select_go_module_group_name(importpath, module_group_by_identifier, module_group_names, include_per_module):
+    """Select an exact backend module identifier without reversing labels."""
+    if not include_per_module:
+        return ""
+    available = {name: True for name in module_group_names}
+    for identifier in _go_runtime_module_identifiers(importpath):
+        name = module_group_by_identifier.get(identifier)
+        if name and available.get(name):
+            return name
+    return ""
 
 def _resolved_importpath(explicit_importpath, embeds, fallback_importpath):
     """Resolve the effective importpath and record which source supplied it."""
@@ -82,9 +118,11 @@ def _resolve_payload_selection(ctx):
         state = ctx.attr.repository_state[TestOptimizationRepositoryStateInfo]
         _validate_static_repository_state(ctx, state)
         module_group_names = state.module_group_names
+        module_group_by_identifier = state.module_group_by_identifier
         module_files_by_name = state.module_files_by_name
     else:
         module_group_names = ctx.attr.module_group_names
+        module_group_by_identifier = ctx.attr.module_group_by_identifier
         if module_group_names:
             if len(module_group_names) != len(ctx.attr.module_groups):
                 fail("module_group_names must contain one entry per module_groups entry")
@@ -97,14 +135,46 @@ def _resolve_payload_selection(ctx):
     strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
         bool(ctx.attr.explicit_importpath) or bool(ctx.attr.module_label_override)
     )
-    selected_name = _select_module_group_name(
-        ip,
-        module_group_names,
-        ctx.attr.include_per_module,
-        ctx.attr.module_label_override,
-        fail_on_miss = strict_selection,
-        failure_context = "topt_go_payloads_selector",
-    )
+    if ctx.attr.module_label_override:
+        selected_name = _select_module_group_name(
+            ip,
+            module_group_names,
+            ctx.attr.include_per_module,
+            ctx.attr.module_label_override,
+            fail_on_miss = strict_selection,
+            failure_context = "topt_go_payloads_selector",
+        )
+    else:
+        selected_name = _select_go_module_group_name(
+            ip,
+            module_group_by_identifier,
+            module_group_names,
+            ctx.attr.include_per_module,
+        )
+        if not selected_name and not module_group_by_identifier:
+            # Generated repositories from older releases do not export the raw
+            # identifier map. Try the same Go runtime identifiers against their
+            # historical sanitized target names before using the full bundle.
+            for identifier in _go_runtime_module_identifiers(ip):
+                selected_name = _select_module_group_name(
+                    identifier,
+                    module_group_names,
+                    ctx.attr.include_per_module,
+                )
+                if selected_name:
+                    break
+        if not selected_name and strict_selection:
+            fail_with_prefix(
+                "topt_go_payloads_selector",
+                (
+                    "explicit module identifier '%s' did not match any runtime module identifier (%s). " +
+                    "Available module groups: %s"
+                ) % (
+                    ip,
+                    ", ".join(_go_runtime_module_identifiers(ip)),
+                    ", ".join(sorted(module_group_names)) or "<none>",
+                ),
+            )
 
     chosen_files = module_files_by_name.get(selected_name) if selected_name else None
 
@@ -297,6 +367,9 @@ topt_go_payloads_selector = rule(
         # Optional logical names parallel to module_groups for namespaced repos.
         "module_group_names": attr.string_list(),
 
+        # Exact raw backend identifier -> logical module group mapping.
+        "module_group_by_identifier": attr.string_dict(),
+
         # Whether to prefer per-module files when available
         "include_per_module": attr.bool(default = True),
 
@@ -320,6 +393,7 @@ topt_go_bazel_metadata = rule(
         "explicit_importpath": attr.string(),
         "fallback_importpath": attr.string(),
         "module_group_names": attr.string_list(),
+        "module_group_by_identifier": attr.string_dict(),
         "module_groups": attr.label_list(),
         "include_per_module": attr.bool(default = True),
         "module_label_override": attr.string(),

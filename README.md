@@ -1443,8 +1443,16 @@ Sanitization rules for `<sanitized_module>` (file paths and target labels):
 - If collisions occur after sanitization, numeric suffixes like `_2`, `_3` are appended deterministically
 
 Labels are computed from the union of module names across known tests, test
-management, and flaky tests so a `module_<sanitized>` target always refers to a
-single module (avoids cross-feature collisions).
+management, and flaky tests so a `module_<sanitized>` target keeps one stable
+selection unit across features (avoids cross-feature collisions).
+
+For Go, the catalog also retains the exact backend module identifier behind
+each label. This matters for fallback `go_test` import paths whose final target
+name contains a period: Go escapes that period in runtime symbols (for example,
+`.topt` becomes `%2e`) before the tracer reports the module. If one test binary
+contains both `package pkg` and external `package pkg_test` tests, the base
+package target carries both module entries. Other runtimes keep one backend
+module per generated target.
 
 Example usage:
 
@@ -2095,6 +2103,12 @@ publishes its module catalog through the stable repository-state target, so a
 static `.topt` target does not need to load `export.bzl` and still receives only
 the matching module files. Changes to an unrelated module therefore do not
 change that test action's payload inputs.
+
+Selection uses the exact raw-module catalog exported by the sync repository,
+including Go's symbol escaping and the optional `_test` package identifier.
+The generated Bazel label is an implementation detail: the selector does not
+try to reverse a sanitized label or guess which collision suffix belongs to an
+import path.
 
 When automatic per-module selection is close but not exact (for example, custom
 import path layouts), use `module_label_override` to pin the expected sanitized

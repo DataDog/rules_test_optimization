@@ -341,8 +341,8 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "Ivuvpy4j1ja9FKlsorzxrx0rjhQUS0BqrUPizpZPURM=",
-        "usagesDigest": "Oj8UALbYXpLtVhQfVk5eJlSD6cM6lpTZS/VC5PG051o=",
+        "bzlTransitiveDigest": "rzTQJIRz9Kp9iW7tjdt2NIf5A0cF3TWHKRxR+nwEaXE=",
+        "usagesDigest": "Y7pj/+6VGiGQWxcchDXIRj0wRk/Zf1rM4EDatzpumys=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -362,6 +362,7 @@
                 "example_python_pkg",
                 "example_python_tests"
               ],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data",
               "service_name": "stub-service",
@@ -392,6 +393,7 @@
                 "example_python_pkg",
                 "example_python_tests"
               ],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_go",
               "service_name": "go-service",
@@ -413,6 +415,7 @@
                 "example_python_pkg",
                 "example_python_tests"
               ],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_python",
               "service_name": "go-service",
@@ -434,6 +437,7 @@
                 "example_python_pkg",
                 "example_python_tests"
               ],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_java",
               "service_name": "go-service",
@@ -455,6 +459,7 @@
                 "example_python_pkg",
                 "example_python_tests"
               ],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_nodejs",
               "service_name": "go-service",
@@ -476,6 +481,7 @@
                 "example_python_pkg",
                 "example_python_tests"
               ],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_dotnet",
               "service_name": "go-service",
@@ -497,6 +503,7 @@
                 "example_python_pkg",
                 "example_python_tests"
               ],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_ruby",
               "service_name": "go-service",
@@ -511,6 +518,7 @@
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
               "labels": [],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_static",
               "service_name": "static-service",
@@ -528,6 +536,10 @@
                 "example_com_embed_pkg",
                 "example_com_other_pkg"
               ],
+              "module_group_by_identifier": {
+                "example.com/embed/pkg": "module_example_com_embed_pkg",
+                "example.com/other/pkg": "module_example_com_other_pkg"
+              },
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_static_module",
               "service_name": "static-module-service",
@@ -542,6 +554,7 @@
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
               "labels": [],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_static_disabled",
               "service_name": "static-disabled-service",

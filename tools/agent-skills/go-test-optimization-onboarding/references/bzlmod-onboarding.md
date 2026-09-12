@@ -293,7 +293,9 @@ synchronized metadata exposes module groups, explicit `importpath` and
 misses and metadata with no module groups use the canonical full bundle.
 Local-static descriptors follow the same rules: their stable repository-state
 target exposes the generated module catalog without requiring a load of
-`export.bzl`.
+`export.bzl`. The catalog retains exact backend identifiers, so Go's escaped
+runtime symbol name and an external `<importpath>_test` package resolve without
+manual label overrides.
 
 Set `orchestrion_mode = "test_optimization"` for standard Go `testing`
 onboarding. The generated local wrapper should inject this mode; manual

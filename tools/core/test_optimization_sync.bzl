@@ -606,7 +606,14 @@ def _detect_runtime_module_path(ctx, debug, runtime_name, env_key, runtime_modul
         log_debug(debug, runtime_name, "Using runtime_module_path attr")
     return explicit_module_path
 
-def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_filename, label_map = None):
+def _split_json_payload_by_module(
+        ctx,
+        source_file,
+        debug,
+        module_key,
+        output_filename,
+        label_map = None,
+        group_members_by_module = None):
     """Split one payload JSON map into per-module canonical files."""
 
     specs = []
@@ -631,8 +638,28 @@ def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_fi
 
     base_dir = _dirname(source_file)
 
-    # Ensure deterministic ordering for reproducible BUILD content
-    module_names = sorted([k for k in modules_obj.keys()])
+    # A Go test binary may contain both the package under test and its external
+    # `<package>_test` package. The base package's shard carries both so one
+    # selected canonical payload describes the whole binary.
+    if group_members_by_module:
+        module_names = []
+        content_by_module = {}
+        for module_name in sorted(group_members_by_module.keys()):
+            selected = {}
+            for member in group_members_by_module[module_name]:
+                member_content = modules_obj.get(member)
+                if _is_dict(member_content):
+                    selected[member] = member_content
+            if selected:
+                module_names.append(module_name)
+                content_by_module[module_name] = selected
+    else:
+        module_names = sorted([k for k in modules_obj.keys()])
+        content_by_module = {
+            module_name: {module_name: modules_obj.get(module_name)}
+            for module_name in module_names
+            if _is_dict(modules_obj.get(module_name))
+        }
 
     # Compute sanitized labels and deduplicate (or use provided mapping)
     if label_map:
@@ -644,10 +671,8 @@ def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_fi
     for i in range(len(module_names)):
         module_name = module_names[i]
         label = deduped_labels[i]
-        module_content = modules_obj.get(module_name)
-
-        # Guard against non-dict anomalies
-        if not _is_dict(module_content):
+        module_content = content_by_module.get(module_name)
+        if not module_content:
             continue
 
         # Place per-module canonical-named file under a dedicated subdirectory to avoid collisions
@@ -665,7 +690,7 @@ def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_fi
         if not _is_dict(attrs_obj2):
             attrs_obj2 = {}
             data_obj2["attributes"] = attrs_obj2
-        attrs_obj2[module_key] = {module_name: module_content}
+        attrs_obj2[module_key] = module_content
         mod_obj = new_obj
 
         _ensure_parent_directory(ctx, out_file, debug)
@@ -684,7 +709,7 @@ def _split_json_payload_by_module(ctx, source_file, debug, module_key, output_fi
 
     return specs
 
-def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None):
+def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None, group_members_by_module = None):
     """Split aggregate known-tests payload into one file per module."""
     return _split_json_payload_by_module(
         ctx,
@@ -693,9 +718,10 @@ def _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = None)
         module_key = "tests",
         output_filename = "known_tests.json",
         label_map = label_map,
+        group_members_by_module = group_members_by_module,
     )
 
-def _split_test_management_by_module(ctx, test_management_file, debug, label_map = None):
+def _split_test_management_by_module(ctx, test_management_file, debug, label_map = None, group_members_by_module = None):
     """Split aggregate test-management payload into one file per module."""
     return _split_json_payload_by_module(
         ctx,
@@ -704,9 +730,10 @@ def _split_test_management_by_module(ctx, test_management_file, debug, label_map
         module_key = "modules",
         output_filename = "test_management.json",
         label_map = label_map,
+        group_members_by_module = group_members_by_module,
     )
 
-def _split_flaky_tests_by_module(ctx, flaky_tests_file, debug, label_map = None):
+def _split_flaky_tests_by_module(ctx, flaky_tests_file, debug, label_map = None, group_members_by_module = None):
     """Split raw flaky-tests payload into one file per module.
 
     Unlike known_tests/test_management which use `_split_json_payload_by_module`
@@ -759,8 +786,9 @@ def _split_flaky_tests_by_module(ctx, flaky_tests_file, debug, label_map = None)
 
     base_dir = _dirname(flaky_tests_file)
 
-    # Deterministic module ordering
-    module_names = sorted(module_order)
+    # Deterministic module ordering. Go base-package groups may also include
+    # the external-test package emitted by the same test binary.
+    module_names = sorted(group_members_by_module.keys()) if group_members_by_module else sorted(module_order)
 
     # Compute sanitized labels (use provided mapping or generate fresh)
     if label_map:
@@ -772,7 +800,12 @@ def _split_flaky_tests_by_module(ctx, flaky_tests_file, debug, label_map = None)
     for i in range(len(module_names)):
         module_name = module_names[i]
         label = deduped_labels[i]
-        entries = module_entries[module_name]
+        members = group_members_by_module.get(module_name) if group_members_by_module else [module_name]
+        entries = []
+        for member in members:
+            entries.extend(module_entries.get(member, []))
+        if not entries:
+            continue
 
         per_module_dir = ("%s/%s" % (base_dir, ("module_%s" % label))) if base_dir else ("module_%s" % label)
         out_file = per_module_dir + "/flaky_tests.json"
@@ -1228,6 +1261,17 @@ def _build_module_label_map(known_modules, test_management_modules, flaky_module
         label_map[all_modules[i]] = deduped[i]
     return label_map
 
+def _build_module_group_members(label_map, runtime_name):
+    """Return the raw backend modules carried by each generated group."""
+    members = {}
+    for module in sorted(label_map.keys()):
+        group = [module]
+        external_test_module = module + "_test"
+        if runtime_name == "go" and external_test_module in label_map:
+            group.append(external_test_module)
+        members[module] = group
+    return members
+
 # Public aliases for tests (avoid importing private symbols)
 def _render_export_bzl(
         repo_name,
@@ -1253,7 +1297,8 @@ def _render_export_bzl(
         ruby_module_path = "",
         sanitized_ruby_module_path = "",
         ruby_module_included = False,
-        enabled = True):
+        enabled = True,
+        module_group_by_identifier = None):
     """Render export.bzl content consumed by macros and BUILD files."""
     repo_name_lit = json.encode(repo_name or "")
     service_name_lit = json.encode(service_name or "")
@@ -1285,6 +1330,7 @@ def _render_export_bzl(
         "    \"manifest_path\": %s,\n" % manifest_file_lit +
         "    \"labels\": %s,\n" % repr(labels) +
         "    \"set\": %s,\n" % set_literal +
+        "    \"module_group_by_identifier\": %s,\n" % repr(module_group_by_identifier or {}) +
         "    \"runtimes\": {\n" +
         "".join(runtime_entries) +
         "    },\n" +
@@ -1480,9 +1526,11 @@ def _render_repository_state_target(
         runtime_module_path,
         runtime_module_included,
         module_group_names = None,
+        module_group_by_identifier = None,
         disabled_reason = ""):
     """Render the stable analysis-time repository-state target."""
     module_group_names = list(module_group_names or [])
+    module_group_by_identifier = dict(module_group_by_identifier or {})
     return (
         "test_optimization_repository_state(\n" +
         '    name = "test_optimization_repository_state",\n' +
@@ -1494,6 +1542,7 @@ def _render_repository_state_target(
         "    runtime_module_included = %s,\n" % ("True" if runtime_module_included else "False") +
         "    module_group_names = %s,\n" % repr(module_group_names) +
         "    module_groups = %s,\n" % repr([":%s" % name for name in module_group_names]) +
+        "    module_group_by_identifier = %s,\n" % repr(module_group_by_identifier) +
         "    disabled_reason = %s,\n" % _bzl_string_literal(disabled_reason or "") +
         '    visibility = ["//visibility:public"],\n' +
         ")\n"
@@ -1891,6 +1940,7 @@ compute_dd_api_base_for_tests = _compute_dd_api_base
 resolve_dd_api_base_for_tests = _resolve_dd_api_base_for_tests
 redact_url_userinfo_for_tests = _redact_url_userinfo
 build_module_label_map_for_tests = _build_module_label_map
+build_module_group_members_for_tests = _build_module_group_members
 normalize_ref_for_tests = _normalize_ref
 first_env_for_tests = _first_env
 first_env_from_environ_for_tests = _first_env_from_environ
@@ -1941,6 +1991,8 @@ count_known_tests_response_tests_for_tests = _count_known_tests_response_tests
 count_test_management_response_tests_for_tests = _count_test_management_response_tests
 count_flaky_tests_response_tests_for_tests = _count_flaky_tests_response_tests
 collect_flaky_tests_modules_for_tests = _collect_flaky_tests_modules
+split_known_tests_by_module_for_tests = _split_known_tests_by_module
+split_test_management_by_module_for_tests = _split_test_management_by_module
 split_flaky_tests_by_module_for_tests = _split_flaky_tests_by_module
 
 # ##########################################################################
@@ -2975,11 +3027,35 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     tm_modules = _collect_test_management_modules(ctx, test_management_file)
     flaky_modules = _collect_flaky_tests_modules(ctx, flaky_tests_file)
     label_map = _build_module_label_map(known_modules, tm_modules, flaky_modules)
+    runtime_name = (runtime["name"] or "").strip()
+    group_members_by_module = _build_module_group_members(label_map, runtime_name)
+    module_group_by_identifier = {
+        module: "module_%s" % label_map[module]
+        for module in sorted(label_map.keys())
+    }
 
     # Split known tests, test management, and flaky tests by module into dedicated files
-    module_specs_known = _split_known_tests_by_module(ctx, known_tests_file, debug, label_map = label_map)
-    module_specs_tm = _split_test_management_by_module(ctx, test_management_file, debug, label_map = label_map)
-    module_specs_flaky = _split_flaky_tests_by_module(ctx, flaky_tests_file, debug, label_map = label_map)
+    module_specs_known = _split_known_tests_by_module(
+        ctx,
+        known_tests_file,
+        debug,
+        label_map = label_map,
+        group_members_by_module = group_members_by_module,
+    )
+    module_specs_tm = _split_test_management_by_module(
+        ctx,
+        test_management_file,
+        debug,
+        label_map = label_map,
+        group_members_by_module = group_members_by_module,
+    )
+    module_specs_flaky = _split_flaky_tests_by_module(
+        ctx,
+        flaky_tests_file,
+        debug,
+        label_map = label_map,
+        group_members_by_module = group_members_by_module,
+    )
 
     # Build and write context.json (non-secret metadata) under `out_dir`
     # so all manifest-relative payload files share a single root.
@@ -2997,7 +3073,6 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
 
     # Emit helper runtime metadata for downstream macros.
     runtime_module_path = (runtime["module_path"] or "").strip()
-    runtime_name = (runtime["name"] or "").strip()
     runtime_module_path_is_authoritative = spec.get("runtime_module_path_is_authoritative", False)
     if runtime_module_path_is_authoritative:
         go_module_path = runtime_module_path if runtime_name == "go" else ""
@@ -3143,6 +3218,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
         sanitized_ruby_module_path = sanitized_ruby_module_path,
         ruby_module_included = ruby_module_included,
         enabled = True,
+        module_group_by_identifier = module_group_by_identifier,
     )
     if emit_surface:
         ctx.file("export.bzl", export_bzl)
@@ -3266,6 +3342,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
             runtime_module_path = repository_runtime_module_path,
             runtime_module_included = repository_runtime_module_included,
             module_group_names = ["module_%s" % label for label in labels_for_modules],
+            module_group_by_identifier = module_group_by_identifier,
         )
     )
     if emit_surface:
@@ -3292,6 +3369,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
             }
             for label in labels
         },
+        "module_group_by_identifier": module_group_by_identifier,
         "out_dir": out_dir,
         "repo_name": repo_name,
         "runtime": {

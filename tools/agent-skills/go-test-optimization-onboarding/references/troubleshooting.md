@@ -189,7 +189,9 @@ Checks:
   correct service/runtime slice.
 - For a local-static descriptor, treat `runtime_module_path` as repository
   identity, not as the package selection. Compare the test importpath with the
-  generated `@<repo>//:module_*` catalog.
+  generated `@<repo>//:module_*` catalog. The sync repository handles Go's
+  escaped runtime identifier and external `_test` package; do not copy a
+  sanitized target label into `module_label_override` to compensate for either.
 
 For known pilots, valid alternatives are `module`, `module_override`, and
 `full_bundle_disabled`. `full_bundle_disabled` is acceptable when the setup

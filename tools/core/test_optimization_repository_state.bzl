@@ -19,6 +19,7 @@ TestOptimizationRepositoryStateInfo = provider(
         "disabled_reason": "Safe user-facing reason when synchronization is disabled.",
         "enabled": "Whether the repository fetched live Test Optimization metadata.",
         "module_files_by_name": "Per-module file depsets keyed by generated module target name.",
+        "module_group_by_identifier": "Generated module target name keyed by the backend's raw module identifier.",
         "module_group_names": "Generated module target names in deterministic order.",
         "repo_name": "Apparent repository name exported to consumers.",
         "runtime_module_included": "Whether the configured runtime module has a dedicated payload group.",
@@ -41,10 +42,17 @@ def _test_optimization_repository_state_impl(ctx):
             fail("test_optimization_repository_state: duplicate module group name %r" % name)
         module_files_by_name[name] = ctx.attr.module_groups[index][DefaultInfo].files
 
+    for identifier, name in ctx.attr.module_group_by_identifier.items():
+        if not identifier or not name:
+            fail("test_optimization_repository_state: module_group_by_identifier cannot contain empty keys or values")
+        if name not in module_files_by_name:
+            fail("test_optimization_repository_state: module_group_by_identifier references unknown module group %r" % name)
+
     return [TestOptimizationRepositoryStateInfo(
         disabled_reason = ctx.attr.disabled_reason,
         enabled = ctx.attr.enabled,
         module_files_by_name = module_files_by_name,
+        module_group_by_identifier = dict(ctx.attr.module_group_by_identifier),
         module_group_names = list(ctx.attr.module_group_names),
         repo_name = ctx.attr.repo_name,
         runtime_module_included = ctx.attr.runtime_module_included,
@@ -58,6 +66,7 @@ test_optimization_repository_state = rule(
     attrs = {
         "disabled_reason": attr.string(),
         "enabled": attr.bool(mandatory = True),
+        "module_group_by_identifier": attr.string_dict(),
         "module_group_names": attr.string_list(),
         "module_groups": attr.label_list(allow_files = True),
         "repo_name": attr.string(mandatory = True),

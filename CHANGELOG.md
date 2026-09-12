@@ -36,6 +36,11 @@ versioning.
   Orchestrion integration and public consumer patch profile.
 
 ### Changed
+
+- Go payload selection now matches the exact module identifiers emitted by the
+  test runtime, including escaped fallback target names and external `_test`
+  packages. One package shard carries both internal and external test metadata
+  when they run in the same test binary.
 - Updated the maintained `rules_go` Orchestrion integration to Orchestrion
   `v1.12.0` and `dd-trace-go/v2` `v2.9.1`, preserving upstream test-variant
   resolution while retaining the Bazel-specific resolver compatibility layer.

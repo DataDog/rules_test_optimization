@@ -148,8 +148,8 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "pEtdmCcaVr1OkIH25SH4cyETvAvRQqQpbzKhiXENvjE=",
-        "usagesDigest": "lkd+fAQt8TWlWrIR+JA3Mo/3XrNzbv7rcTteUo1h968=",
+        "bzlTransitiveDigest": "qE9S3HNMfKVJtD4XMT5WNvc3sgOOqqdVoBns0egnuPE=",
+        "usagesDigest": "bCrmCvUzjwmaer0KO0w5vG+clLl4rBuIE4SB8EGEmtM=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -162,6 +162,7 @@
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
               "labels": [],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data",
               "service_name": "stub-service",
@@ -179,6 +180,7 @@
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
               "labels": [],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_static",
               "service_name": "static-service",
@@ -196,6 +198,10 @@
                 "example_com_embed_pkg",
                 "example_com_other_pkg"
               ],
+              "module_group_by_identifier": {
+                "example.com/embed/pkg": "module_example_com_embed_pkg",
+                "example.com/other/pkg": "module_example_com_other_pkg"
+              },
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_static_module",
               "service_name": "static-module-service",
@@ -210,6 +216,7 @@
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
               "labels": [],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_static_disabled",
               "service_name": "static-disabled-service",
