@@ -186,8 +186,23 @@ repository's `export.bzl`. The macro derives
 `:test_optimization_repository_state`, `:test_optimization_files`, and
 `:test_optimization_runtime_module` from `repo_name`. The selector fails
 analysis when the repository is disabled or its service, Go runtime, or module
-identity differs. If the configured module is absent, the stable runtime-module
-label is empty and selection uses the canonical full bundle.
+identity differs. The repository-state provider also exposes the generated
+module catalog. After validating the descriptor, the selector resolves the
+test's effective `importpath` and selects the matching module files. The
+configured `runtime_module_path` identifies the sync repository; it is not used
+as a substitute for the test package's `importpath`.
+
+The catalog maps the backend's raw module identifiers to their generated Bazel
+groups. Go selection applies the same final-segment escaping used for runtime
+symbols and also checks the external-test `<importpath>_test` identifier. When
+one binary contains internal and external package tests, its base package group
+contains both sets of backend metadata.
+
+Static descriptors use the same fallback contract as generated exports. An
+explicit `importpath` or `module_label_override` that is absent from a populated
+catalog fails analysis. An inferred or label-derived miss uses the canonical
+full bundle and reports `full_bundle_no_match`. An empty catalog uses the full
+bundle and reports `full_bundle_disabled`.
 
 ## Sync extension attributes
 
@@ -227,8 +242,9 @@ Notes:
 - Single-service repositories expose stable public
   `:test_optimization_repository_state` and
   `:test_optimization_runtime_module` targets in both enabled and disabled
-  states. These support explicit static Go targets and do not activate a
-  repository by themselves.
+  states. The state target includes the generated module catalog used by
+  explicit static Go targets. These labels do not activate a repository by
+  themselves.
 
 ## Multi-sync extension attributes
 

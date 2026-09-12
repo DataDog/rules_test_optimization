@@ -317,6 +317,9 @@ generic inferred/derived fallback must set
 with a narrower `allowed_payload_selections` list that excludes
 `full_bundle_no_match`. Explicit `importpath` and `module_label_override`
 selection still fail analysis when their requested module group is absent.
+Local-static descriptors use the same module catalog and fallback meanings as
+generated exports; do not accept `full_bundle_no_match` merely because a target
+uses a literal descriptor.
 
 When validating a known pilot, make the doctor stricter instead of relying only
 on the default allowlist:

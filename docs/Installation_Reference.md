@@ -787,6 +787,9 @@ Additional helper file exported by the generated repository:
   - `manifest_path`: path to `manifest.txt` inside the generated repo
   - `labels`: list of available per-module sanitized labels
   - `set`: dict-as-set keyed by sanitized labels for fast membership checks
+  - `module_group_by_identifier`: exact backend module identifier to generated
+    `module_<sanitized>` group mapping; Go selectors use this for escaped symbol
+    names, external `_test` packages, and collision-safe lookup
   - `runtimes["go"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
   - `runtimes["python"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`
   - `runtimes["java"]`: nested object with `module_path`, `sanitized_module_path`, `module_included`

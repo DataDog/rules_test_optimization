@@ -148,8 +148,8 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "PoT1vHfLILb9IHzanYU8Hjy3Lc2nLwTn2trTYqR3g/E=",
-        "usagesDigest": "yco8+ejjp1y3GIF8UGLO928CMMuVMZAHdJKNqhZnoJo=",
+        "bzlTransitiveDigest": "qE9S3HNMfKVJtD4XMT5WNvc3sgOOqqdVoBns0egnuPE=",
+        "usagesDigest": "bCrmCvUzjwmaer0KO0w5vG+clLl4rBuIE4SB8EGEmtM=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -162,6 +162,7 @@
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
               "labels": [],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data",
               "service_name": "stub-service",
@@ -169,6 +170,57 @@
                 "go_service",
                 "ruby_service"
               ]
+            }
+          },
+          "test_optimization_data_static": {
+            "repoRuleId": "@@datadog-rules-test-optimization+//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": true,
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [],
+              "module_group_by_identifier": {},
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_static",
+              "service_name": "static-service",
+              "service_keys": []
+            }
+          },
+          "test_optimization_data_static_module": {
+            "repoRuleId": "@@datadog-rules-test-optimization+//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": true,
+              "go_module_included": false,
+              "go_module_path": "github.com/DataDog/dd-source",
+              "go_sanitized_module_path": "github_com_datadog_dd_source",
+              "labels": [
+                "example_com_embed_pkg",
+                "example_com_other_pkg"
+              ],
+              "module_group_by_identifier": {
+                "example.com/embed/pkg": "module_example_com_embed_pkg",
+                "example.com/other/pkg": "module_example_com_other_pkg"
+              },
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_static_module",
+              "service_name": "static-module-service",
+              "service_keys": []
+            }
+          },
+          "test_optimization_data_static_disabled": {
+            "repoRuleId": "@@datadog-rules-test-optimization+//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "enabled": false,
+              "go_module_included": false,
+              "go_module_path": "example.com/stub",
+              "go_sanitized_module_path": "example_com_stub",
+              "labels": [],
+              "module_group_by_identifier": {},
+              "out_dir": ".testoptimization",
+              "repo_alias": "test_optimization_data_static_disabled",
+              "service_name": "static-disabled-service",
+              "service_keys": []
             }
           }
         },
@@ -300,7 +352,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "A6ikJiKlwEi5hRrfBqTTwMADTITgDCpH46mkFqp1Avc=",
+        "bzlTransitiveDigest": "N942zJo74p6EuM32D0LK75ZZ+l/Ib5MF2HcKQ7hgetY=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

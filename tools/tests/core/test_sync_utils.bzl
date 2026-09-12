@@ -15,6 +15,8 @@ load(
     "apply_dd_git_overrides_for_tests",
     "apply_github_event_payload_for_tests",
     "build_context_tags_for_tests",
+    "build_module_group_by_identifier_for_tests",
+    "build_module_group_members_for_tests",
     "build_module_label_map_for_tests",
     "build_settings_response_tags_for_tests",
     "build_unix_read_abs_file_command_for_tests",
@@ -59,6 +61,8 @@ load(
     "sanitize_repository_url_for_tests",
     "set_context_tag_from_env_for_tests",
     "split_flaky_tests_by_module_for_tests",
+    "split_known_tests_by_module_for_tests",
+    "split_test_management_by_module_for_tests",
 )
 load(
     "//tools/tests:example_stub_repo.bzl",
@@ -1255,6 +1259,9 @@ def _export_bzl_manifest_path_test(ctx):
         ruby_module_path = "apps/ruby_service",
         sanitized_ruby_module_path = "apps_ruby_service",
         ruby_module_included = False,
+        module_group_by_identifier = {
+            "example.com/mod": "module_example_com_mod",
+        },
     )
     asserts.true(env, '"enabled": True' in content)
     asserts.true(env, "\"service_name\": \"service-name\"" in content)
@@ -1271,6 +1278,7 @@ def _export_bzl_manifest_path_test(ctx):
     asserts.true(env, "\"module_path\": \"packages/service\"" in content)
     asserts.true(env, "\"module_path\": \"Company.Product.Service\"" in content)
     asserts.true(env, "\"module_path\": \"apps/ruby_service\"" in content)
+    asserts.true(env, '"module_group_by_identifier": {"example.com/mod": "module_example_com_mod"}' in content)
     asserts.false(env, "\n    \"go\": {\n" in content)
     return unittest.end(env)
 
@@ -1909,6 +1917,136 @@ def _module_label_map_flaky_modules_test(ctx):
     asserts.equals(env, 2, len(label_map3))
     return unittest.end(env)
 
+def _go_module_group_members_test(ctx):
+    """A Go package group also carries its external-test package payloads."""
+    env = unittest.begin(ctx)
+    label_map = {
+        "example.com/pkg": "example_com_pkg",
+        "example.com/pkg_test": "example_com_pkg_test",
+        "example.com/other": "example_com_other",
+    }
+    asserts.equals(
+        env,
+        {
+            "example.com/other": ["example.com/other"],
+            "example.com/pkg": ["example.com/pkg", "example.com/pkg_test"],
+            "example.com/pkg_test": ["example.com/pkg_test"],
+        },
+        build_module_group_members_for_tests(label_map, "go"),
+    )
+    asserts.equals(
+        env,
+        {
+            "example.com/other": ["example.com/other"],
+            "example.com/pkg": ["example.com/pkg"],
+            "example.com/pkg_test": ["example.com/pkg_test"],
+        },
+        build_module_group_members_for_tests(label_map, "python"),
+    )
+    asserts.equals(
+        env,
+        {
+            "example.com/pkg": "module_example_com_pkg",
+        },
+        build_module_group_by_identifier_for_tests({
+            "": "empty",
+            "example.com/pkg": "example_com_pkg",
+        }),
+    )
+    return unittest.end(env)
+
+def _go_grouped_payload_split_test(ctx):
+    """Go base shards contain both internal and external test-package data."""
+    env = unittest.begin(ctx)
+    written = {}
+
+    def _path(path):
+        return path
+
+    def _read(path):
+        return written.get(path, "")
+
+    def _file(path, content):
+        written[path] = content
+
+    def _execute(_args, **_kwargs):
+        return struct(return_code = 0, stdout = "", stderr = "")
+
+    fake_ctx = struct(
+        path = _path,
+        read = _read,
+        file = _file,
+        execute = _execute,
+        os = struct(name = "linux", environ = {}),
+    )
+
+    def _file_for(module, specs):
+        for spec in specs:
+            if spec["module"] == module:
+                return spec["file"]
+        fail("missing split output for %s" % module)
+
+    label_map = {
+        "example.com/pkg": "example_com_pkg",
+        "example.com/pkg_test": "example_com_pkg_test",
+        "example.com/other": "example_com_other",
+    }
+    members = build_module_group_members_for_tests(label_map, "go")
+    written["known.json"] = json.encode({
+        "data": {"attributes": {"tests": {
+            "example.com/pkg": {"internal": {}},
+            "example.com/pkg_test": {"external": {}},
+            "example.com/other": {"other": {}},
+        }}},
+    })
+    written["management.json"] = json.encode({
+        "data": {"attributes": {"modules": {
+            "example.com/pkg": {"internal": {}},
+            "example.com/pkg_test": {"external": {}},
+            "example.com/other": {"other": {}},
+        }}},
+    })
+    written["flaky.json"] = json.encode({
+        "data": [
+            {"id": "internal", "attributes": {"configurations": {"test": {"bundle": "example.com/pkg"}}}},
+            {"id": "other", "attributes": {"configurations": {"test": {"bundle": "example.com/other"}}}},
+            {"id": "external", "attributes": {"configurations": {"test": {"bundle": "example.com/pkg_test"}}}},
+        ],
+    })
+
+    known_specs = split_known_tests_by_module_for_tests(
+        fake_ctx,
+        "known.json",
+        False,
+        label_map = label_map,
+        group_members_by_module = members,
+    )
+    management_specs = split_test_management_by_module_for_tests(
+        fake_ctx,
+        "management.json",
+        False,
+        label_map = label_map,
+        group_members_by_module = members,
+    )
+    flaky_specs = split_flaky_tests_by_module_for_tests(
+        fake_ctx,
+        "flaky.json",
+        False,
+        label_map = label_map,
+        group_members_by_module = members,
+    )
+
+    base_known = json.decode(written[_file_for("example.com/pkg", known_specs)])["data"]["attributes"]["tests"]
+    base_management = json.decode(written[_file_for("example.com/pkg", management_specs)])["data"]["attributes"]["modules"]
+    base_flaky = json.decode(written[_file_for("example.com/pkg", flaky_specs)])["data"]
+    asserts.equals(env, ["example.com/pkg", "example.com/pkg_test"], sorted(base_known.keys()))
+    asserts.equals(env, ["example.com/pkg", "example.com/pkg_test"], sorted(base_management.keys()))
+    asserts.equals(env, ["internal", "external"], [entry["id"] for entry in base_flaky])
+
+    external_known = json.decode(written[_file_for("example.com/pkg_test", known_specs)])["data"]["attributes"]["tests"]
+    asserts.equals(env, ["example.com/pkg_test"], sorted(external_known.keys()))
+    return unittest.end(env)
+
 def _render_module_runfiles_bzl_respects_manifest_root_test(ctx):
     """Validate module runfiles helper returns raw payload files for the selector."""
     env = unittest.begin(ctx)
@@ -2226,6 +2364,8 @@ telemetry_response_counts_test = unittest.make(_telemetry_response_counts_test)
 count_flaky_tests_response_tests_test = unittest.make(_count_flaky_tests_response_tests_test)
 split_flaky_tests_by_module_test = unittest.make(_split_flaky_tests_by_module_test)
 module_label_map_flaky_modules_test = unittest.make(_module_label_map_flaky_modules_test)
+go_module_group_members_test = unittest.make(_go_module_group_members_test)
+go_grouped_payload_split_test = unittest.make(_go_grouped_payload_split_test)
 render_module_runfiles_bzl_respects_manifest_root_test = unittest.make(_render_module_runfiles_bzl_respects_manifest_root_test)
 render_module_runfiles_bzl_escaping_test = unittest.make(_render_module_runfiles_bzl_escaping_test)
 partition_unix_headers_test = unittest.make(_partition_unix_headers_test)

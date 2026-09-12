@@ -96,7 +96,8 @@ def _render_stub_export(
         go_module_path,
         go_sanitized_module_path,
         go_module_included,
-        enabled = True):
+        enabled = True,
+        module_group_by_identifier = None):
     """Render export.bzl content for the stub repository."""
     mapping_lines = []
     for key in service_keys:
@@ -110,6 +111,7 @@ def _render_stub_export(
         "    \"manifest_path\": %s,\n" % _bzl_string_literal(manifest_path) +
         ("    \"labels\": %s,\n" % repr(labels)) +
         '    "set": {},\n' +
+        ("    \"module_group_by_identifier\": %s,\n" % repr(module_group_by_identifier or {})) +
         '    "runtimes": {\n' +
         '        "go": {\n' +
         ("            \"module_path\": %s,\n" % _bzl_string_literal(go_module_path)) +
@@ -164,7 +166,8 @@ def _render_stub_build(
         runtime_module_path = "example.com/stub",
         runtime_module_label = "example_com_stub",
         runtime_module_included = False,
-        enabled = True):
+        enabled = True,
+        module_group_by_identifier = None):
     """Render BUILD content for stub repo targets."""
 
     def _append_filegroups(name_suffix, srcs):
@@ -224,6 +227,9 @@ def _render_stub_build(
         '    runtime_name = "go",\n' +
         ("    runtime_module_path = %s,\n" % repr(runtime_module_path)) +
         ("    runtime_module_included = %s,\n" % ("True" if runtime_module_included else "False")) +
+        ("    module_group_names = %s,\n" % repr(["module_%s" % label for label in list(module_labels or [])])) +
+        ("    module_groups = %s,\n" % repr([":module_%s" % label for label in list(module_labels or [])])) +
+        ("    module_group_by_identifier = %s,\n" % repr(module_group_by_identifier or {})) +
         ("    disabled_reason = %s,\n" % repr("" if enabled else "disabled by repository configuration")) +
         '    visibility = ["//visibility:public"],\n' +
         ")\n\n",
@@ -290,6 +296,7 @@ def _example_stub_repo_impl(ctx):
         go_sanitized_module_path = ctx.attr.go_sanitized_module_path,
         go_module_included = ctx.attr.go_module_included,
         enabled = ctx.attr.enabled,
+        module_group_by_identifier = ctx.attr.module_group_by_identifier,
     )
     ctx.file("export.bzl", export)
     ctx.file("module_runfiles.bzl", _render_stub_module_runfiles_bzl(ctx.name, out_dir))
@@ -311,6 +318,7 @@ def _example_stub_repo_impl(ctx):
         runtime_module_label = ctx.attr.go_sanitized_module_path,
         runtime_module_included = ctx.attr.go_module_included,
         enabled = ctx.attr.enabled,
+        module_group_by_identifier = ctx.attr.module_group_by_identifier,
     )
     ctx.file("BUILD", build)
 
@@ -322,6 +330,7 @@ example_stub_repo = repository_rule(
         "go_module_path": attr.string(default = "example.com/stub"),
         "go_sanitized_module_path": attr.string(default = "example_com_stub"),
         "labels": attr.string_list(),
+        "module_group_by_identifier": attr.string_dict(),
         "out_dir": attr.string(default = ".testoptimization"),
         "repo_alias": attr.string(),
         "service_name": attr.string(default = "stub-service"),
@@ -340,6 +349,7 @@ def _example_stub_repo_extension_impl(module_ctx):
                 go_module_path = call.go_module_path,
                 go_sanitized_module_path = call.go_sanitized_module_path,
                 labels = list(call.labels or []),
+                module_group_by_identifier = dict(call.module_group_by_identifier),
                 out_dir = call.out_dir,
                 repo_alias = call.name,
                 service_name = call.service_name,
@@ -355,6 +365,7 @@ example_stub_repo_extension = module_extension(
             "go_module_path": attr.string(default = "example.com/stub"),
             "go_sanitized_module_path": attr.string(default = "example_com_stub"),
             "labels": attr.string_list(),
+            "module_group_by_identifier": attr.string_dict(),
             "name": attr.string(mandatory = True),
             "out_dir": attr.string(default = ".testoptimization"),
             "service_name": attr.string(default = "stub-service"),
