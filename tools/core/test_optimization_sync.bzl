@@ -1272,6 +1272,14 @@ def _build_module_group_members(label_map, runtime_name):
         members[module] = group
     return members
 
+def _build_module_group_by_identifier(label_map):
+    """Build the exact selector index, omitting non-selectable empty names."""
+    return {
+        identifier: "module_%s" % label_map[identifier]
+        for identifier in sorted(label_map.keys())
+        if identifier and label_map[identifier]
+    }
+
 # Public aliases for tests (avoid importing private symbols)
 def _render_export_bzl(
         repo_name,
@@ -1940,6 +1948,7 @@ compute_dd_api_base_for_tests = _compute_dd_api_base
 resolve_dd_api_base_for_tests = _resolve_dd_api_base_for_tests
 redact_url_userinfo_for_tests = _redact_url_userinfo
 build_module_label_map_for_tests = _build_module_label_map
+build_module_group_by_identifier_for_tests = _build_module_group_by_identifier
 build_module_group_members_for_tests = _build_module_group_members
 normalize_ref_for_tests = _normalize_ref
 first_env_for_tests = _first_env
@@ -3029,10 +3038,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     label_map = _build_module_label_map(known_modules, tm_modules, flaky_modules)
     runtime_name = (runtime["name"] or "").strip()
     group_members_by_module = _build_module_group_members(label_map, runtime_name)
-    module_group_by_identifier = {
-        module: "module_%s" % label_map[module]
-        for module in sorted(label_map.keys())
-    }
+    module_group_by_identifier = _build_module_group_by_identifier(label_map)
 
     # Split known tests, test management, and flaky tests by module into dedicated files
     module_specs_known = _split_known_tests_by_module(

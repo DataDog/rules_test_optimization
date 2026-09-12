@@ -15,6 +15,7 @@ load(
     "apply_dd_git_overrides_for_tests",
     "apply_github_event_payload_for_tests",
     "build_context_tags_for_tests",
+    "build_module_group_by_identifier_for_tests",
     "build_module_group_members_for_tests",
     "build_module_label_map_for_tests",
     "build_settings_response_tags_for_tests",
@@ -1941,6 +1942,16 @@ def _go_module_group_members_test(ctx):
             "example.com/pkg_test": ["example.com/pkg_test"],
         },
         build_module_group_members_for_tests(label_map, "python"),
+    )
+    asserts.equals(
+        env,
+        {
+            "example.com/pkg": "module_example_com_pkg",
+        },
+        build_module_group_by_identifier_for_tests({
+            "": "empty",
+            "example.com/pkg": "example_com_pkg",
+        }),
     )
     return unittest.end(env)
 
