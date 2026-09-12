@@ -64,6 +64,10 @@ versioning.
   the Orchestrion build setting enabled.
 
 ### Fixed
+- Static Go descriptors now select payloads by the test package's effective
+  `importpath`, using the synchronized repository's module catalog. This
+  restores per-package cache invalidation without loading generated exports or
+  eagerly resolving unselected service repositories.
 - Go test analysis now fails with migration guidance when Test Optimization
   metadata is enabled but the global Orchestrion build setting is disabled,
   preventing a partial upgrade from silently dropping instrumentation.

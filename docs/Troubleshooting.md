@@ -569,6 +569,11 @@ fails before upload.
    rejects that state by default, so only an intentionally generic consumer
    should set `forbid_full_bundle_no_match = False`.
 
+   For a local-static descriptor, `runtime_module_path` identifies the sync
+   repository but does not select payloads for every test beneath that root.
+   Inspect `@<repo>//:module_*` and compare those labels with the effective test
+   package importpath. A package present in that catalog should report `module`.
+
 6. **Expected target output missing**: Run the exact target listed in
    `expected_targets` before the doctor. With remote execution or remote cache,
    use the recommended test `.bazelrc` config:

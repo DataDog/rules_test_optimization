@@ -187,6 +187,9 @@ Checks:
 - Verify the synced metadata includes the module path expected for this target.
 - For monorepos, verify `topt_data` or `topt_data_by_service` points to the
   correct service/runtime slice.
+- For a local-static descriptor, treat `runtime_module_path` as repository
+  identity, not as the package selection. Compare the test importpath with the
+  generated `@<repo>//:module_*` catalog.
 
 For known pilots, valid alternatives are `module`, `module_override`, and
 `full_bundle_disabled`. `full_bundle_disabled` is acceptable when the setup

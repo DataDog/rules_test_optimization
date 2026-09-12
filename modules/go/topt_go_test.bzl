@@ -549,9 +549,9 @@ def dd_topt_go_test(
         macro_name = "dd_topt_go_test",
     )
 
-    # Build the list of per-module groups once (if any were exported)
-    # Use exported sanitized labels directly to avoid re-deriving naming policy
-    # in the macro and drifting from sync-side label generation.
+    # Generated exports pass their module labels directly. Local-static
+    # descriptors keep those labels behind the repository-state provider so
+    # consumer BUILD files do not need to load each service repo's export.bzl.
     if is_local_static:
         module_labels = []
         module_group_names = []

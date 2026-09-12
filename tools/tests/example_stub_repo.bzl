@@ -224,6 +224,8 @@ def _render_stub_build(
         '    runtime_name = "go",\n' +
         ("    runtime_module_path = %s,\n" % repr(runtime_module_path)) +
         ("    runtime_module_included = %s,\n" % ("True" if runtime_module_included else "False")) +
+        ("    module_group_names = %s,\n" % repr(["module_%s" % label for label in list(module_labels or [])])) +
+        ("    module_groups = %s,\n" % repr([":module_%s" % label for label in list(module_labels or [])])) +
         ("    disabled_reason = %s,\n" % repr("" if enabled else "disabled by repository configuration")) +
         '    visibility = ["//visibility:public"],\n' +
         ")\n\n",

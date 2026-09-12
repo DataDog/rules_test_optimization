@@ -81,20 +81,19 @@ def _resolve_payload_selection(ctx):
     if ctx.attr.repository_state:
         state = ctx.attr.repository_state[TestOptimizationRepositoryStateInfo]
         _validate_static_repository_state(ctx, state)
-        return struct(
-            importpath = ip,
-            importpath_source = importpath_source,
-            selected_name = "test_optimization_runtime_module" if state.runtime_module_included else "",
-            chosen = ctx.attr.runtime_module if state.runtime_module_included else None,
-            selection = "module" if state.runtime_module_included else "full_bundle_no_match",
-        )
-
-    module_group_names = ctx.attr.module_group_names
-    if module_group_names:
-        if len(module_group_names) != len(ctx.attr.module_groups):
-            fail("module_group_names must contain one entry per module_groups entry")
+        module_group_names = state.module_group_names
+        module_files_by_name = state.module_files_by_name
     else:
-        module_group_names = [m.label.name for m in ctx.attr.module_groups]
+        module_group_names = ctx.attr.module_group_names
+        if module_group_names:
+            if len(module_group_names) != len(ctx.attr.module_groups):
+                fail("module_group_names must contain one entry per module_groups entry")
+        else:
+            module_group_names = [m.label.name for m in ctx.attr.module_groups]
+        module_files_by_name = {
+            module_group_names[index]: ctx.attr.module_groups[index][DefaultInfo].files
+            for index in range(len(module_group_names))
+        }
     strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
         bool(ctx.attr.explicit_importpath) or bool(ctx.attr.module_label_override)
     )
@@ -107,14 +106,9 @@ def _resolve_payload_selection(ctx):
         failure_context = "topt_go_payloads_selector",
     )
 
-    chosen = None
-    if selected_name:
-        for index in range(len(module_group_names)):
-            if module_group_names[index] == selected_name:
-                chosen = ctx.attr.module_groups[index]
-                break
+    chosen_files = module_files_by_name.get(selected_name) if selected_name else None
 
-    if chosen != None:
+    if chosen_files != None:
         selection = "module_override" if ctx.attr.module_label_override else "module"
     elif ctx.attr.include_per_module and len(module_group_names) > 0:
         selection = "full_bundle_no_match"
@@ -125,7 +119,7 @@ def _resolve_payload_selection(ctx):
         importpath = ip,
         importpath_source = importpath_source,
         selected_name = selected_name or "",
-        chosen = chosen,
+        chosen_files = chosen_files,
         selection = selection,
     )
 
@@ -216,13 +210,14 @@ def _topt_go_payloads_selector_impl(ctx):
 
     # Fallback to the full bundle when no per-module group matches.
     # This avoids surprising build/test failures when module mapping drifts.
-    source = selection.chosen if selection.chosen != None else ctx.attr.full_files
+    source_files = selection.chosen_files
+    if source_files == None:
+        source_files = ctx.attr.full_files[DefaultInfo].files
 
     # Rebuild runfiles here so the main workspace controls the canonical
     # manifest-adjacent paths that downstream test code reads at runtime.
-    src_default = source[DefaultInfo]
     payload = _selected_payload_runfiles(
-        src_default.files.to_list(),
+        source_files.to_list(),
         include_flaky_tests = False,
     )
     return [DefaultInfo(

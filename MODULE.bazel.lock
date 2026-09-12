@@ -341,8 +341,8 @@
     },
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "l/UY5cKcoI+BOTIVjrd3XT68zZQMJK+5tsxrrQSlMAE=",
-        "usagesDigest": "iczwt0b8/rtzeNHdvZ+E+5nz7sfkCo47xzKO5qiEi3s=",
+        "bzlTransitiveDigest": "Ivuvpy4j1ja9FKlsorzxrx0rjhQUS0BqrUPizpZPURM=",
+        "usagesDigest": "Oj8UALbYXpLtVhQfVk5eJlSD6cM6lpTZS/VC5PG051o=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -521,11 +521,12 @@
             "repoRuleId": "@@//tools/tests:example_stub_repo.bzl%example_stub_repo",
             "attributes": {
               "enabled": true,
-              "go_module_included": true,
-              "go_module_path": "example.com/stub",
-              "go_sanitized_module_path": "example_com_stub",
+              "go_module_included": false,
+              "go_module_path": "github.com/DataDog/dd-source",
+              "go_sanitized_module_path": "github_com_datadog_dd_source",
               "labels": [
-                "example_com_stub"
+                "example_com_embed_pkg",
+                "example_com_other_pkg"
               ],
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data_static_module",

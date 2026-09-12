@@ -186,6 +186,10 @@ The `dd_topt_go_test` macro automatically selects the correct per‑module paylo
   - When neither `importpath` nor `embed` is supplied, the macro consults
     `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate; if
     false, it uses the full bundle.
+  - Local-static descriptors do not load `export.bzl`. Instead, the sync
+    repository exposes the same module groups through its stable state target.
+    The selector still matches the test package `importpath`, so unrelated
+    package metadata stays out of the test action inputs.
 
 Note: The core module no longer declares `rules_go`. The companion module
 `datadog-rules-test-optimization-go` declares `rules_go` for provider

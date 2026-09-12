@@ -50,12 +50,18 @@ load(
     "go_macro_stage_sources_select_wiring_test",
     "go_macro_stage_sources_target",
     "go_macro_stage_sources_wiring_test",
+    "go_macro_static_catalog_no_match_metadata_test",
+    "go_macro_static_catalog_no_match_payloads_test",
+    "go_macro_static_catalog_no_match_target",
     "go_macro_static_disabled_failure_test",
     "go_macro_static_disabled_target",
+    "go_macro_static_explicit_miss_failure_test",
+    "go_macro_static_explicit_miss_target",
     "go_macro_static_fallback_metadata_test",
     "go_macro_static_identity_mismatch_failure_test",
     "go_macro_static_identity_mismatch_target",
     "go_macro_static_module_metadata_test",
+    "go_macro_static_module_payloads_test",
     "go_macro_static_module_target",
     "go_macro_static_target",
     "go_macro_static_wiring_test",
@@ -741,6 +747,36 @@ go_macro_static_module_metadata_test(
     target_under_test = ":go_macro_static_module_target_topt_bazel_metadata",
 )
 
+go_macro_static_module_payloads_test(
+    name = "go_macro_static_module_payloads_test",
+    target_under_test = ":go_macro_static_module_target_topt_payloads",
+)
+
+go_macro_static_catalog_no_match_target(
+    name = "go_macro_static_catalog_no_match_target",
+    tags = ["manual"],
+)
+
+go_macro_static_catalog_no_match_metadata_test(
+    name = "go_macro_static_catalog_no_match_metadata_test",
+    target_under_test = ":go_macro_static_catalog_no_match_target_topt_bazel_metadata",
+)
+
+go_macro_static_catalog_no_match_payloads_test(
+    name = "go_macro_static_catalog_no_match_payloads_test",
+    target_under_test = ":go_macro_static_catalog_no_match_target_topt_payloads",
+)
+
+go_macro_static_explicit_miss_target(
+    name = "go_macro_static_explicit_miss_target",
+    tags = ["manual"],
+)
+
+go_macro_static_explicit_miss_failure_test(
+    name = "go_macro_static_explicit_miss_failure_test",
+    target_under_test = ":go_macro_static_explicit_miss_target",
+)
+
 go_macro_static_disabled_target(
     name = "go_macro_static_disabled_target",
     tags = ["manual"],
@@ -894,10 +930,14 @@ test_suite(
         ":go_macro_stage_sources_rundir_wiring_test",
         ":go_macro_stage_sources_select_wiring_test",
         ":go_macro_stage_sources_wiring_test",
+        ":go_macro_static_catalog_no_match_metadata_test",
+        ":go_macro_static_catalog_no_match_payloads_test",
         ":go_macro_static_disabled_failure_test",
+        ":go_macro_static_explicit_miss_failure_test",
         ":go_macro_static_fallback_metadata_test",
         ":go_macro_static_identity_mismatch_failure_test",
         ":go_macro_static_module_metadata_test",
+        ":go_macro_static_module_payloads_test",
         ":go_macro_static_wiring_test",
         ":go_macro_test_optimization_linker_default_wiring_test",
         ":go_macro_test_optimization_linker_metadata_dbg_test",

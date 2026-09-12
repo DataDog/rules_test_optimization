@@ -291,6 +291,9 @@ import paths and the value is known to match the compiled package. When
 synchronized metadata exposes module groups, explicit `importpath` and
 `module_label_override` selections must match one or analysis fails. Inferred
 misses and metadata with no module groups use the canonical full bundle.
+Local-static descriptors follow the same rules: their stable repository-state
+target exposes the generated module catalog without requiring a load of
+`export.bzl`.
 
 Set `orchestrion_mode = "test_optimization"` for standard Go `testing`
 onboarding. The generated local wrapper should inject this mode; manual

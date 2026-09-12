@@ -233,6 +233,8 @@ def _disabled_export_and_build_shape_test(ctx):
         'name = "test_optimization_context"',
         'name = "test_optimization_repository_state"',
         'name = "test_optimization_runtime_module"',
+        "module_group_names = []",
+        "module_groups = []",
         "custom_topt/cache/http/settings.json",
         "custom_topt/cache/http/known_tests.json",
         "custom_topt/cache/http/test_management.json",
@@ -253,6 +255,7 @@ def _repository_state_and_runtime_module_rendering_test(ctx):
         runtime_name = "go",
         runtime_module_path = "example.com/repo",
         runtime_module_included = True,
+        module_group_names = ["module_example_com_repo_pkg"],
     )
     for fragment in [
         'name = "test_optimization_repository_state"',
@@ -261,6 +264,8 @@ def _repository_state_and_runtime_module_rendering_test(ctx):
         'runtime_name = "go"',
         'runtime_module_path = "example.com/repo"',
         "runtime_module_included = True",
+        'module_group_names = ["module_example_com_repo_pkg"]',
+        'module_groups = [":module_example_com_repo_pkg"]',
     ]:
         asserts.true(env, fragment in state, "missing state fragment %s" % fragment)
 

@@ -39,8 +39,12 @@ example_stub_repo.example_stub_repo(
 )
 example_stub_repo.example_stub_repo(
     name = "test_optimization_data_static_module",
-    go_module_included = True,
-    labels = ["example_com_stub"],
+    go_module_path = "github.com/DataDog/dd-source",
+    go_sanitized_module_path = "github_com_datadog_dd_source",
+    labels = [
+        "example_com_embed_pkg",
+        "example_com_other_pkg",
+    ],
     service_name = "static-module-service",
 )
 example_stub_repo.example_stub_repo(

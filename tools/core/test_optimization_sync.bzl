@@ -1479,8 +1479,10 @@ def _render_repository_state_target(
         runtime_name,
         runtime_module_path,
         runtime_module_included,
+        module_group_names = None,
         disabled_reason = ""):
     """Render the stable analysis-time repository-state target."""
+    module_group_names = list(module_group_names or [])
     return (
         "test_optimization_repository_state(\n" +
         '    name = "test_optimization_repository_state",\n' +
@@ -1490,6 +1492,8 @@ def _render_repository_state_target(
         "    runtime_name = %s,\n" % _bzl_string_literal(runtime_name or "") +
         "    runtime_module_path = %s,\n" % _bzl_string_literal(runtime_module_path or "") +
         "    runtime_module_included = %s,\n" % ("True" if runtime_module_included else "False") +
+        "    module_group_names = %s,\n" % repr(module_group_names) +
+        "    module_groups = %s,\n" % repr([":%s" % name for name in module_group_names]) +
         "    disabled_reason = %s,\n" % _bzl_string_literal(disabled_reason or "") +
         '    visibility = ["//visibility:public"],\n' +
         ")\n"
@@ -3177,6 +3181,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     known_by_label = {}
     tm_by_label = {}
     flaky_by_label = {}
+    labels_for_modules = []
     if module_specs_known or module_specs_tm or module_specs_flaky:
         labels_for_modules = labels
         if not labels_for_modules:
@@ -3260,6 +3265,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
             runtime_name = runtime_name,
             runtime_module_path = repository_runtime_module_path,
             runtime_module_included = repository_runtime_module_included,
+            module_group_names = ["module_%s" % label for label in labels_for_modules],
         )
     )
     if emit_surface:

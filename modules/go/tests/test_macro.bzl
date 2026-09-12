@@ -108,6 +108,12 @@ def _has_file_basename(items, basename):
             return True
     return False
 
+def _has_file_path_fragment(items, fragment):
+    for item in items:
+        if fragment in item.path:
+            return True
+    return False
+
 _go_test_capture_rule = rule(
     implementation = _go_test_capture_impl,
     attrs = {
@@ -287,14 +293,44 @@ def go_macro_static_target(name, tags = None):
     )
 
 def go_macro_static_module_target(name, tags = None):
-    """Target under test for an included stable runtime-module group."""
+    """Target whose inferred package exists although its repository root does not."""
     dd_topt_go_test(
         name = name,
         topt_data = _local_static_topt_data(
             repo_name = "test_optimization_data_static_module",
             service_name = "static-module-service",
+            runtime_module_path = "github.com/DataDog/dd-source",
         ),
         go_test_rule = _go_test_capture_rule,
+        embed = [":explicit_embed_library"],
+        tags = tags,
+    )
+
+def go_macro_static_catalog_no_match_target(name, tags = None):
+    """Target under test for an inferred package absent from a non-empty catalog."""
+    dd_topt_go_test(
+        name = name,
+        topt_data = _local_static_topt_data(
+            repo_name = "test_optimization_data_static_module",
+            service_name = "static-module-service",
+            runtime_module_path = "github.com/DataDog/dd-source",
+        ),
+        go_test_rule = _go_test_capture_rule,
+        tags = tags,
+    )
+
+def go_macro_static_explicit_miss_target(name, tags = None):
+    """Target under test for strict explicit selection against a static catalog."""
+    topt_go_payloads_selector(
+        name = name,
+        expected_repo_name = "test_optimization_data_static_module",
+        expected_runtime_module_path = "github.com/DataDog/dd-source",
+        expected_service_name = "static-module-service",
+        explicit_importpath = "example.com/missing/pkg",
+        full_files = "@test_optimization_data_static_module//:test_optimization_files",
+        include_per_module = True,
+        repository_state = "@test_optimization_data_static_module//:test_optimization_repository_state",
+        runtime_module = "@test_optimization_data_static_module//:test_optimization_runtime_module",
         tags = tags,
     )
 
@@ -691,18 +727,53 @@ def _go_macro_static_wiring_test_impl(ctx):
     return analysistest.end(env)
 
 def _go_macro_static_fallback_metadata_test_impl(ctx):
-    """Assert an absent stable module is reported as a full-bundle fallback."""
+    """Assert an empty static catalog uses the disabled full-bundle reason."""
     env = analysistest.begin(ctx)
     metadata = analysistest.target_under_test(env)[ToptGoBazelMetadataInfo].metadata
-    asserts.equals(env, "full_bundle_no_match", metadata["bazel.go.payload_selection"])
+    asserts.equals(env, "full_bundle_disabled", metadata["bazel.go.payload_selection"])
     asserts.equals(env, "test_optimization", metadata["bazel.go.orchestrion.mode"])
     return analysistest.end(env)
 
 def _go_macro_static_module_metadata_test_impl(ctx):
-    """Assert an included stable module is reported as module selection."""
+    """Assert static selection uses the inferred package, not the repository root."""
     env = analysistest.begin(ctx)
     metadata = analysistest.target_under_test(env)[ToptGoBazelMetadataInfo].metadata
     asserts.equals(env, "module", metadata["bazel.go.payload_selection"])
+    asserts.equals(env, "example.com/embed/pkg", metadata["bazel.go.importpath"])
+    asserts.equals(env, "inferred", metadata["bazel.go.importpath_source"])
+    return analysistest.end(env)
+
+def _go_macro_static_module_payloads_test_impl(ctx):
+    """Assert a static selector exposes only the inferred package's payload files."""
+    env = analysistest.begin(ctx)
+    files = analysistest.target_under_test(env)[DefaultInfo].files.to_list()
+    asserts.true(env, _has_file_path_fragment(files, "/module_example_com_embed_pkg/known_tests.json"))
+    asserts.true(env, _has_file_path_fragment(files, "/module_example_com_embed_pkg/test_management.json"))
+    asserts.false(env, _has_file_path_fragment(files, "/module_example_com_other_pkg/"))
+    asserts.false(env, _has_file_path_fragment(files, "/cache/http/known_tests.json"))
+    return analysistest.end(env)
+
+def _go_macro_static_catalog_no_match_metadata_test_impl(ctx):
+    """Assert an inferred miss in a populated static catalog uses the full bundle."""
+    env = analysistest.begin(ctx)
+    metadata = analysistest.target_under_test(env)[ToptGoBazelMetadataInfo].metadata
+    asserts.equals(env, "full_bundle_no_match", metadata["bazel.go.payload_selection"])
+    return analysistest.end(env)
+
+def _go_macro_static_catalog_no_match_payloads_test_impl(ctx):
+    """Assert a static inferred miss exposes the full bundle and no module files."""
+    env = analysistest.begin(ctx)
+    files = analysistest.target_under_test(env)[DefaultInfo].files.to_list()
+    asserts.true(env, _has_file_path_fragment(files, "/cache/http/known_tests.json"))
+    asserts.false(env, _has_file_path_fragment(files, "/module_example_com_embed_pkg/"))
+    asserts.false(env, _has_file_path_fragment(files, "/module_example_com_other_pkg/"))
+    return analysistest.end(env)
+
+def _go_macro_static_explicit_miss_failure_test_impl(ctx):
+    """Assert explicit static package mismatches fail with module diagnostics."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "explicit module identifier")
+    asserts.expect_failure(env, "Available module groups")
     return analysistest.end(env)
 
 def _go_macro_static_disabled_failure_test_impl(ctx):
@@ -1340,6 +1411,19 @@ go_macro_static_fallback_metadata_test = analysistest.make(
 )
 go_macro_static_module_metadata_test = analysistest.make(
     _go_macro_static_module_metadata_test_impl,
+)
+go_macro_static_module_payloads_test = analysistest.make(
+    _go_macro_static_module_payloads_test_impl,
+)
+go_macro_static_catalog_no_match_metadata_test = analysistest.make(
+    _go_macro_static_catalog_no_match_metadata_test_impl,
+)
+go_macro_static_catalog_no_match_payloads_test = analysistest.make(
+    _go_macro_static_catalog_no_match_payloads_test_impl,
+)
+go_macro_static_explicit_miss_failure_test = analysistest.make(
+    _go_macro_static_explicit_miss_failure_test_impl,
+    expect_failure = True,
 )
 go_macro_static_disabled_failure_test = analysistest.make(
     _go_macro_static_disabled_failure_test_impl,
