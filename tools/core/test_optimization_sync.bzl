@@ -1000,6 +1000,17 @@ def _decode_json_object_or_fail(content, context):
         fail_with_prefix("test_optimization_sync", "%s response must be a JSON object, got %s" % (context, type(obj)))
     return obj
 
+def _canonicalize_test_management_response(obj):
+    """Remove request-specific identity from cacheable test-management data."""
+    normalized = _clone_json_like(obj)
+    data = normalized.get("data")
+    if _is_dict(data) and "id" in data:
+        # The API changes this JSON:API resource id between equivalent
+        # responses. Test libraries consume attributes, not this envelope id,
+        # so retaining it would invalidate otherwise reusable Bazel actions.
+        data["id"] = "1"
+    return normalized
+
 def _parse_curl_time_ms(value):
     """Convert a curl-style seconds string into integer milliseconds."""
     text = (value or "").strip()
@@ -1979,6 +1990,7 @@ repository_environ_for_tests = _TEST_OPTIMIZATION_REPOSITORY_ENVIRON
 resolve_service_and_environment_for_tests = _resolve_service_and_environment
 fnv1a_32_for_tests = _fnv1a_32
 clone_payload_with_detached_attributes_for_tests = _clone_payload_with_detached_attributes
+canonicalize_test_management_response_for_tests = _canonicalize_test_management_response
 http_connect_timeout_seconds_for_tests = HTTP_CONNECT_TIMEOUT_SECONDS
 http_max_time_seconds_for_tests = HTTP_MAX_TIME_SECONDS
 http_retry_attempts_for_tests = HTTP_RETRY_ATTEMPTS
@@ -2980,6 +2992,8 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
         )
         ctx.report_progress("test_optimization_sync: test management tests complete")
         test_management_obj = _decode_json_object_or_fail(ctx.read(ctx.path(test_management_file)), test_management_file)
+        test_management_obj = _canonicalize_test_management_response(test_management_obj)
+        ctx.file(test_management_file, json.encode(test_management_obj) + "\n")
         _append_telemetry_count(telemetry_facts, "test_management_tests.request")
         _append_telemetry_distribution(telemetry_facts, "test_management_tests.request_ms", test_management_result.get("duration_ms", 0))
         _append_telemetry_distribution(telemetry_facts, "test_management_tests.response_bytes", test_management_result.get("response_bytes", 0))

@@ -21,6 +21,7 @@ load(
     "build_settings_response_tags_for_tests",
     "build_unix_read_abs_file_command_for_tests",
     "build_windows_read_abs_file_command_for_tests",
+    "canonicalize_test_management_response_for_tests",
     "clone_payload_with_detached_attributes_for_tests",
     "collect_env_for_tests",
     "collect_env_from_environ_for_tests",
@@ -79,6 +80,49 @@ def _contains_stripped_line(lines, expected):
         if line.strip() == expected:
             return True
     return False
+
+def _test_management_response_id_canonicalization_test(ctx):
+    """Equivalent responses remain byte-identical despite opaque API ids."""
+    env = unittest.begin(ctx)
+    attributes = {
+        "modules": {
+            "example.com/pkg": {
+                "suite": {
+                    "tests": {
+                        "test": {"properties": {"quarantined": True}},
+                    },
+                },
+            },
+        },
+    }
+    first = {
+        "data": {
+            "id": "first-request-id",
+            "type": "ci_app_libraries_tests",
+            "attributes": attributes,
+        },
+    }
+    second = {
+        "data": {
+            "id": "second-request-id",
+            "type": "ci_app_libraries_tests",
+            "attributes": attributes,
+        },
+    }
+
+    first_normalized = canonicalize_test_management_response_for_tests(first)
+    second_normalized = canonicalize_test_management_response_for_tests(second)
+    asserts.equals(env, json.encode(first_normalized), json.encode(second_normalized))
+    asserts.equals(env, "1", first_normalized["data"]["id"])
+    asserts.equals(env, "first-request-id", first["data"]["id"])
+
+    without_id = {"data": {"attributes": attributes}}
+    asserts.equals(
+        env,
+        without_id,
+        canonicalize_test_management_response_for_tests(without_id),
+    )
+    return unittest.end(env)
 
 def _fake_read_ctx(file_map):
     """Build a minimal fake ctx that supports path/read for parser helpers."""
@@ -2339,6 +2383,7 @@ dirname_test = unittest.make(_dirname_test)
 normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)
 collect_known_tests_modules_defensive_shape_test = unittest.make(_collect_known_tests_modules_defensive_shape_test)
 collect_test_management_modules_defensive_shape_test = unittest.make(_collect_test_management_modules_defensive_shape_test)
+test_management_response_id_canonicalization_test = unittest.make(_test_management_response_id_canonicalization_test)
 collect_flaky_tests_modules_defensive_shape_test = unittest.make(_collect_flaky_tests_modules_defensive_shape_test)
 export_bzl_manifest_path_test = unittest.make(_export_bzl_manifest_path_test)
 export_bzl_escaping_test = unittest.make(_export_bzl_escaping_test)

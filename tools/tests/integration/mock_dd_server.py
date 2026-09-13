@@ -75,15 +75,19 @@ class _ServerState:
         log_path: str,
         max_body_size: int,
         response_versions_path: Optional[str] = None,
+        vary_test_management_response_id: bool = False,
     ) -> None:
         """Internal helper for init behavior."""
         self.fixtures = fixtures
         self.log_path = log_path
         self.max_body_size = max_body_size
         self.response_versions_path = response_versions_path
+        self.vary_test_management_response_id = vary_test_management_response_id
         self.log_lock = threading.Lock()
         self.retry_lock = threading.Lock()
+        self.response_id_lock = threading.Lock()
         self.retry_counters: Dict[str, int] = {}
+        self.test_management_response_count = 0
 
     def log_request(self, path: str, method: str, headers: Dict[str, str], body: bytes) -> None:
         # Persist request bodies in base64 so multipart uploads can be snapshotted.
@@ -116,6 +120,16 @@ class _ServerState:
         """Reset all retry counters to keep scenarios isolated."""
         with self.retry_lock:
             self.retry_counters = {}
+
+    def test_management_fixture(self) -> Any:
+        """Return a fixture whose opaque id can vary without changing its data."""
+        fixture = copy.deepcopy(self.fixtures["test_management"])
+        if not self.vary_test_management_response_id:
+            return fixture
+        with self.response_id_lock:
+            self.test_management_response_count += 1
+            fixture["data"]["id"] = "response-%d" % self.test_management_response_count
+        return fixture
 
     def fixture_for_service(self, fixture_name: str, service: str) -> Any:
         """Return a fixture with optional invocation-controlled service versions."""
@@ -731,7 +745,7 @@ class _Handler(BaseHTTPRequestHandler):
                     extra_headers = {"Retry-After": "1"},
                 )
                 return
-            self._send_json(200, self.server.state.fixtures["test_management"])
+            self._send_json(200, self.server.state.test_management_fixture())
             return
 
         # Uploader test-events endpoint.
@@ -859,6 +873,11 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--vary-test-management-response-id",
+        action="store_true",
+        help="Vary the opaque response id to exercise deterministic consumers.",
+    )
+    parser.add_argument(
         "--max-body-size-bytes",
         type=int,
         default=max_body_size_default,
@@ -883,6 +902,7 @@ def main() -> int:
         args.log,
         args.max_body_size_bytes,
         response_versions_path=args.response_versions,
+        vary_test_management_response_id=args.vary_test_management_response_id,
     )
 
     server = _ReusableHTTPServer((args.host, args.port), _Handler)

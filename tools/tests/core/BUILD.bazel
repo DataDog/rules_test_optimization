@@ -210,6 +210,7 @@ load(
     "sync_success_metric_tags_parity_test",
     "telemetry_facts_document_test",
     "telemetry_response_counts_test",
+    "test_management_response_id_canonicalization_test",
 )
 load(
     "//tools/tests/core:test_test_optimization_targets_utils.bzl",
@@ -1448,6 +1449,12 @@ telemetry_response_counts_test(
     timeout = "short",
 )
 
+test_management_response_id_canonicalization_test(
+    name = "test_management_response_id_canonicalization_test",
+    size = "small",
+    timeout = "short",
+)
+
 count_flaky_tests_response_tests_test(
     name = "count_flaky_tests_response_tests_test",
     size = "small",
@@ -1906,6 +1913,7 @@ test_suite(
         ":set_context_tag_from_env_test",
         ":split_flaky_tests_by_module_test",
         ":strip_workspace_prefix_powershell_windows_test",
+        ":test_management_response_id_canonicalization_test",
         ":unknown_manifest_key_failure_test",
         ":unknown_manifest_version_failure_test",
         ":unsupported_manifest_runtime_failure_test",
