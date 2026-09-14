@@ -185,6 +185,9 @@ def _materialized_context(service, runtime_name, module_label):
             "%s/cache/http/flaky_tests.json" % root,
         ],
         "labels": [module_label],
+        "module_group_by_identifier": {
+            "github.com/DataDog/dd-source/domains/payments/apps/api": "module_%s" % module_label,
+        },
         "manifest_file": "%s/manifest.txt" % root,
         "module_files": {
             module_label: {
@@ -237,6 +240,10 @@ def _manifest_aggregate_rendering_test(ctx):
     asserts.true(
         env,
         '"module_group_names": ["module_github_com_datadog_dd_source_domains_payments_apps_api"]' in export_content,
+    )
+    asserts.true(
+        env,
+        '"module_group_by_identifier": {"github.com/DataDog/dd-source/domains/payments/apps/api": "module_github_com_datadog_dd_source_domains_payments_apps_api"}' in export_content,
     )
     asserts.true(
         env,

@@ -549,12 +549,13 @@ def dd_topt_go_test(
         macro_name = "dd_topt_go_test",
     )
 
-    # Build the list of per-module groups once (if any were exported)
-    # Use exported sanitized labels directly to avoid re-deriving naming policy
-    # in the macro and drifting from sync-side label generation.
+    # Generated exports pass their module labels directly. Local-static
+    # descriptors keep those labels behind the repository-state provider so
+    # consumer BUILD files do not need to load each service repo's export.bzl.
     if is_local_static:
         module_labels = []
         module_group_names = []
+        module_group_by_identifier = {}
         repository_state_label = "@%s//:test_optimization_repository_state" % sync_repo_name
         runtime_module_label = "@%s//:test_optimization_runtime_module" % sync_repo_name
         expected_service_name = _svc["service_name"]
@@ -566,6 +567,7 @@ def dd_topt_go_test(
             module_labels,
             macro_name = "dd_topt_go_test",
         )
+        module_group_by_identifier = _svc.get("module_group_by_identifier") or {}
         repository_state_label = None
         runtime_module_label = None
         expected_service_name = ""
@@ -590,6 +592,7 @@ def dd_topt_go_test(
         fallback_importpath = fallback_importpath,
         full_files = files_label,
         module_group_names = module_group_names,
+        module_group_by_identifier = module_group_by_identifier,
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override,
@@ -612,6 +615,7 @@ def dd_topt_go_test(
         explicit_importpath = explicit_importpath or "",
         fallback_importpath = fallback_importpath or "",
         module_group_names = module_group_names,
+        module_group_by_identifier = module_group_by_identifier,
         module_groups = module_labels,
         include_per_module = include_per_module_files,
         module_label_override = module_label_override or "",

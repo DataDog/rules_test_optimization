@@ -416,6 +416,7 @@ class ManifestSyncHarness:
                 str(self.request_log),
                 "--response-versions",
                 str(self.versions_path),
+                "--vary-test-management-response-id",
             ],
             cwd=self.workspace,
             stdout=subprocess.PIPE,

@@ -34,6 +34,7 @@ Maintenance notes:
   the safe full-bundle fallback.
 """
 
+load("@datadog-rules-test-optimization//tools/core:common_utils.bzl", "fail_with_prefix")
 load(
     "@datadog-rules-test-optimization//tools/core:test_optimization_repository_state.bzl",
     "TestOptimizationRepositoryStateInfo",
@@ -53,6 +54,41 @@ _selected_payload_runfiles = selected_payload_runfiles
 
 # Public alias for unit tests.
 select_module_group_name_for_tests = _select_module_group_name
+
+def _go_path_to_prefix(importpath):
+    """Mirror Go's symbol-prefix escaping for valid import paths.
+
+    Go escapes periods only in the last path segment. Percent signs and double
+    quotes are escaped everywhere; the remaining characters escaped by Go are
+    not valid in module import paths accepted by this integration.
+    """
+    slash = importpath.rfind("/")
+    path = importpath[:slash + 1]
+    name = importpath[slash + 1:]
+    return (
+        path.replace("%", "%25").replace("\"", "%22") +
+        name.replace("%", "%25").replace("\"", "%22").replace(".", "%2e")
+    )
+
+def _go_runtime_module_identifiers(importpath):
+    """Return package identifiers a rules_go test binary may emit."""
+    if not importpath:
+        return []
+    base = _go_path_to_prefix(importpath)
+    return [base, base + "_test"]
+
+go_runtime_module_identifiers_for_tests = _go_runtime_module_identifiers
+
+def _select_go_module_group_name(importpath, module_group_by_identifier, module_group_names, include_per_module):
+    """Select an exact backend module identifier without reversing labels."""
+    if not include_per_module:
+        return ""
+    available = {name: True for name in module_group_names}
+    for identifier in _go_runtime_module_identifiers(importpath):
+        name = module_group_by_identifier.get(identifier)
+        if name and available.get(name):
+            return name
+    return ""
 
 def _resolved_importpath(explicit_importpath, embeds, fallback_importpath):
     """Resolve the effective importpath and record which source supplied it."""
@@ -81,40 +117,68 @@ def _resolve_payload_selection(ctx):
     if ctx.attr.repository_state:
         state = ctx.attr.repository_state[TestOptimizationRepositoryStateInfo]
         _validate_static_repository_state(ctx, state)
-        return struct(
-            importpath = ip,
-            importpath_source = importpath_source,
-            selected_name = "test_optimization_runtime_module" if state.runtime_module_included else "",
-            chosen = ctx.attr.runtime_module if state.runtime_module_included else None,
-            selection = "module" if state.runtime_module_included else "full_bundle_no_match",
-        )
-
-    module_group_names = ctx.attr.module_group_names
-    if module_group_names:
-        if len(module_group_names) != len(ctx.attr.module_groups):
-            fail("module_group_names must contain one entry per module_groups entry")
+        module_group_names = state.module_group_names
+        module_group_by_identifier = state.module_group_by_identifier
+        module_files_by_name = state.module_files_by_name
     else:
-        module_group_names = [m.label.name for m in ctx.attr.module_groups]
+        module_group_names = ctx.attr.module_group_names
+        module_group_by_identifier = ctx.attr.module_group_by_identifier
+        if module_group_names:
+            if len(module_group_names) != len(ctx.attr.module_groups):
+                fail("module_group_names must contain one entry per module_groups entry")
+        else:
+            module_group_names = [m.label.name for m in ctx.attr.module_groups]
+        module_files_by_name = {
+            module_group_names[index]: ctx.attr.module_groups[index][DefaultInfo].files
+            for index in range(len(module_group_names))
+        }
     strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
         bool(ctx.attr.explicit_importpath) or bool(ctx.attr.module_label_override)
     )
-    selected_name = _select_module_group_name(
-        ip,
-        module_group_names,
-        ctx.attr.include_per_module,
-        ctx.attr.module_label_override,
-        fail_on_miss = strict_selection,
-        failure_context = "topt_go_payloads_selector",
-    )
+    if ctx.attr.module_label_override:
+        selected_name = _select_module_group_name(
+            ip,
+            module_group_names,
+            ctx.attr.include_per_module,
+            ctx.attr.module_label_override,
+            fail_on_miss = strict_selection,
+            failure_context = "topt_go_payloads_selector",
+        )
+    else:
+        selected_name = _select_go_module_group_name(
+            ip,
+            module_group_by_identifier,
+            module_group_names,
+            ctx.attr.include_per_module,
+        )
+        if not selected_name and not module_group_by_identifier:
+            # Generated repositories from older releases do not export the raw
+            # identifier map. Try the same Go runtime identifiers against their
+            # historical sanitized target names before using the full bundle.
+            for identifier in _go_runtime_module_identifiers(ip):
+                selected_name = _select_module_group_name(
+                    identifier,
+                    module_group_names,
+                    ctx.attr.include_per_module,
+                )
+                if selected_name:
+                    break
+        if not selected_name and strict_selection:
+            fail_with_prefix(
+                "topt_go_payloads_selector",
+                (
+                    "explicit module identifier '%s' did not match any runtime module identifier (%s). " +
+                    "Available module groups: %s"
+                ) % (
+                    ip,
+                    ", ".join(_go_runtime_module_identifiers(ip)),
+                    ", ".join(sorted(module_group_names)) or "<none>",
+                ),
+            )
 
-    chosen = None
-    if selected_name:
-        for index in range(len(module_group_names)):
-            if module_group_names[index] == selected_name:
-                chosen = ctx.attr.module_groups[index]
-                break
+    chosen_files = module_files_by_name.get(selected_name) if selected_name else None
 
-    if chosen != None:
+    if chosen_files != None:
         selection = "module_override" if ctx.attr.module_label_override else "module"
     elif ctx.attr.include_per_module and len(module_group_names) > 0:
         selection = "full_bundle_no_match"
@@ -125,7 +189,7 @@ def _resolve_payload_selection(ctx):
         importpath = ip,
         importpath_source = importpath_source,
         selected_name = selected_name or "",
-        chosen = chosen,
+        chosen_files = chosen_files,
         selection = selection,
     )
 
@@ -216,13 +280,14 @@ def _topt_go_payloads_selector_impl(ctx):
 
     # Fallback to the full bundle when no per-module group matches.
     # This avoids surprising build/test failures when module mapping drifts.
-    source = selection.chosen if selection.chosen != None else ctx.attr.full_files
+    source_files = selection.chosen_files
+    if source_files == None:
+        source_files = ctx.attr.full_files[DefaultInfo].files
 
     # Rebuild runfiles here so the main workspace controls the canonical
     # manifest-adjacent paths that downstream test code reads at runtime.
-    src_default = source[DefaultInfo]
     payload = _selected_payload_runfiles(
-        src_default.files.to_list(),
+        source_files.to_list(),
         include_flaky_tests = False,
     )
     return [DefaultInfo(
@@ -302,6 +367,9 @@ topt_go_payloads_selector = rule(
         # Optional logical names parallel to module_groups for namespaced repos.
         "module_group_names": attr.string_list(),
 
+        # Exact raw backend identifier -> logical module group mapping.
+        "module_group_by_identifier": attr.string_dict(),
+
         # Whether to prefer per-module files when available
         "include_per_module": attr.bool(default = True),
 
@@ -325,6 +393,7 @@ topt_go_bazel_metadata = rule(
         "explicit_importpath": attr.string(),
         "fallback_importpath": attr.string(),
         "module_group_names": attr.string_list(),
+        "module_group_by_identifier": attr.string_dict(),
         "module_groups": attr.label_list(),
         "include_per_module": attr.bool(default = True),
         "module_label_override": attr.string(),

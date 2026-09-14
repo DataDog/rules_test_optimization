@@ -18,6 +18,8 @@ _COMMON_MODULE_GROUPS = [
     ":module_custom_override",
 ]
 
+_RUNTIME_MODULE = "domains/example/go_default_test%2etopt__raw_go_test"
+
 def _payload_marker_impl(ctx):
     """Create a single marker file so selector choice is easy to assert."""
     out = ctx.actions.declare_file(ctx.label.name + ".payload")
@@ -82,6 +84,22 @@ def selector_payload_fixture_targets():
     _payload_marker(
         name = "module_custom_override",
         marker = "module:override",
+    )
+    _payload_marker(
+        name = "module_runtime_fallback",
+        marker = "module:runtime-fallback",
+    )
+    _payload_marker(
+        name = "module_external_test",
+        marker = "module:external-test",
+    )
+    _payload_marker(
+        name = "module_collision_first",
+        marker = "module:collision-first",
+    )
+    _payload_marker(
+        name = "module_collision_exact",
+        marker = "module:collision-exact",
     )
     _cache_payload(
         name = "module_example_com_cache_pkg",
@@ -150,6 +168,64 @@ def selector_fallback_target(name, tags = None):
         tags = tags,
     )
 
+def selector_runtime_fallback_target(name, tags = None):
+    """The Go runtime's escaped fallback identifier selects its exact group."""
+    topt_go_payloads_selector(
+        name = name,
+        embeds = [],
+        fallback_importpath = "domains/example/go_default_test.topt__raw_go_test",
+        full_files = ":full_payload",
+        module_group_by_identifier = {_RUNTIME_MODULE: "module_runtime_fallback"},
+        module_group_names = ["module_runtime_fallback"],
+        module_groups = [":module_runtime_fallback"],
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_legacy_runtime_fallback_target(name, tags = None):
+    """Older generated repositories still select escaped runtime labels."""
+    topt_go_payloads_selector(
+        name = name,
+        embeds = [],
+        fallback_importpath = "domains/example/go_default_test.topt__raw_go_test",
+        full_files = ":full_payload",
+        module_group_names = ["module_domains_example_go_default_test_2etopt__raw_go_test"],
+        module_groups = [":module_runtime_fallback"],
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_external_test_target(name, tags = None):
+    """An external-test-only backend module remains selectable."""
+    topt_go_payloads_selector(
+        name = name,
+        explicit_importpath = "example.com/external/pkg",
+        embeds = [],
+        full_files = ":full_payload",
+        module_group_by_identifier = {"example.com/external/pkg_test": "module_external_test"},
+        module_group_names = ["module_external_test"],
+        module_groups = [":module_external_test"],
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_exact_collision_target(name, tags = None):
+    """The raw identifier map disambiguates colliding sanitized labels."""
+    topt_go_payloads_selector(
+        name = name,
+        explicit_importpath = "example.com/a-b",
+        embeds = [],
+        full_files = ":full_payload",
+        module_group_by_identifier = {
+            "example.com/a-b": "module_collision_exact",
+            "example.com/a_b": "module_collision_first",
+        },
+        module_group_names = ["module_collision_first", "module_collision_exact"],
+        module_groups = [":module_collision_first", ":module_collision_exact"],
+        include_per_module = True,
+        tags = tags,
+    )
+
 def selector_no_match_fallback_target(name, tags = None):
     """Selector falls back to full_files when no module target matches."""
     topt_go_payloads_selector(
@@ -211,6 +287,22 @@ def selector_explicit_miss_failure_target(name, tags = None):
         fallback_importpath = "example.com/fallback/pkg",
         full_files = ":full_payload",
         module_groups = _COMMON_MODULE_GROUPS,
+        include_per_module = True,
+        tags = tags,
+    )
+
+def selector_exact_catalog_miss_failure_target(name, tags = None):
+    """An exact catalog miss must not fall back through sanitized labels."""
+    topt_go_payloads_selector(
+        name = name,
+        explicit_importpath = "example.com/explicit/pkg",
+        embeds = [],
+        full_files = ":full_payload",
+        module_group_by_identifier = {
+            "example.com/different/pkg": "module_example_com_explicit_pkg",
+        },
+        module_group_names = ["module_example_com_explicit_pkg"],
+        module_groups = [":module_example_com_explicit_pkg"],
         include_per_module = True,
         tags = tags,
     )
@@ -313,6 +405,26 @@ def _selector_fallback_test_impl(ctx):
     _assert_selected(env, target, "module_example_com_fallback_pkg")
     return analysistest.end(env)
 
+def _selector_runtime_fallback_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    _assert_selected(env, analysistest.target_under_test(env), "module_runtime_fallback")
+    return analysistest.end(env)
+
+def _selector_legacy_runtime_fallback_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    _assert_selected(env, analysistest.target_under_test(env), "module_runtime_fallback")
+    return analysistest.end(env)
+
+def _selector_external_test_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    _assert_selected(env, analysistest.target_under_test(env), "module_external_test")
+    return analysistest.end(env)
+
+def _selector_exact_collision_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    _assert_selected(env, analysistest.target_under_test(env), "module_collision_exact")
+    return analysistest.end(env)
+
 def _selector_no_match_fallback_test_impl(ctx):
     """Implement selector no match fallback test impl behavior."""
     env = analysistest.begin(ctx)
@@ -343,6 +455,13 @@ def _selector_override_test_impl(ctx):
 
 def _selector_explicit_miss_failure_test_impl(ctx):
     """Implement selector explicit mismatch failure test behavior."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "explicit module identifier")
+    asserts.expect_failure(env, "Available module groups")
+    return analysistest.end(env)
+
+def _selector_exact_catalog_miss_failure_test_impl(ctx):
+    """An exact raw-module catalog is authoritative when present."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "explicit module identifier")
     asserts.expect_failure(env, "Available module groups")
@@ -383,6 +502,18 @@ selector_inferred_embed_uses_fallback_test = analysistest.make(
 selector_fallback_test = analysistest.make(
     _selector_fallback_test_impl,
 )
+selector_runtime_fallback_test = analysistest.make(
+    _selector_runtime_fallback_test_impl,
+)
+selector_legacy_runtime_fallback_test = analysistest.make(
+    _selector_legacy_runtime_fallback_test_impl,
+)
+selector_external_test_test = analysistest.make(
+    _selector_external_test_test_impl,
+)
+selector_exact_collision_test = analysistest.make(
+    _selector_exact_collision_test_impl,
+)
 selector_no_match_fallback_test = analysistest.make(
     _selector_no_match_fallback_test_impl,
 )
@@ -397,6 +528,10 @@ selector_override_test = analysistest.make(
 )
 selector_explicit_miss_failure_test = analysistest.make(
     _selector_explicit_miss_failure_test_impl,
+    expect_failure = True,
+)
+selector_exact_catalog_miss_failure_test = analysistest.make(
+    _selector_exact_catalog_miss_failure_test_impl,
     expect_failure = True,
 )
 selector_override_miss_failure_test = analysistest.make(

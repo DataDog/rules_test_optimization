@@ -112,11 +112,11 @@ load(
     "disabled_context_contract_test",
     "disabled_export_and_build_shape_test",
     "disabled_runtime_module_path_precedence_test",
-    "repository_state_and_runtime_module_rendering_test",
     "disabled_telemetry_contract_test",
     "enabled_false_values_test",
     "enabled_truthy_values_test",
     "repository_environment_contains_bootstrap_inputs_test",
+    "repository_state_and_runtime_module_rendering_test",
     "service_environment_resolution_test",
 )
 load(
@@ -163,6 +163,8 @@ load(
     "first_env_ctx_test",
     "first_env_from_environ_test",
     "fnv1a_symbol_distinguishes_common_symbols_test",
+    "go_grouped_payload_split_test",
+    "go_module_group_members_test",
     "http_execute_timeout_seconds_test",
     "load_github_event_payload_ctx_test",
     "local_git_metadata_detached_head_has_no_branch_test",
@@ -208,6 +210,7 @@ load(
     "sync_success_metric_tags_parity_test",
     "telemetry_facts_document_test",
     "telemetry_response_counts_test",
+    "test_management_response_id_canonicalization_test",
 )
 load(
     "//tools/tests/core:test_test_optimization_targets_utils.bzl",
@@ -856,6 +859,18 @@ module_label_map_flaky_modules_test(
     timeout = "short",
 )
 
+go_module_group_members_test(
+    name = "go_module_group_members_test",
+    size = "small",
+    timeout = "short",
+)
+
+go_grouped_payload_split_test(
+    name = "go_grouped_payload_split_test",
+    size = "small",
+    timeout = "short",
+)
+
 enabled_truthy_values_test(
     name = "enabled_truthy_values_test",
     size = "small",
@@ -1434,6 +1449,12 @@ telemetry_response_counts_test(
     timeout = "short",
 )
 
+test_management_response_id_canonicalization_test(
+    name = "test_management_response_id_canonicalization_test",
+    size = "small",
+    timeout = "short",
+)
+
 count_flaky_tests_response_tests_test(
     name = "count_flaky_tests_response_tests_test",
     size = "small",
@@ -1819,6 +1840,8 @@ test_suite(
         ":first_env_ctx_test",
         ":first_env_from_environ_test",
         ":fnv1a_symbol_distinguishes_common_symbols_test",
+        ":go_grouped_payload_split_test",
+        ":go_module_group_members_test",
         ":http_execute_timeout_seconds_test",
         ":invalid_manifest_failure_test",
         ":invalid_service_derivation_failure_test",
@@ -1890,6 +1913,7 @@ test_suite(
         ":set_context_tag_from_env_test",
         ":split_flaky_tests_by_module_test",
         ":strip_workspace_prefix_powershell_windows_test",
+        ":test_management_response_id_canonicalization_test",
         ":unknown_manifest_key_failure_test",
         ":unknown_manifest_version_failure_test",
         ":unsupported_manifest_runtime_failure_test",

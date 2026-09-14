@@ -9,6 +9,7 @@
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_infer.bzl",
+    "go_runtime_module_identifiers_for_tests",
     "orchestrion_metadata_enabled_for_tests",
     "select_module_group_name_for_tests",
 )
@@ -95,6 +96,26 @@ def _select_module_group_name_test(ctx):
             groups,
             True,
         ),
+    )
+    return unittest.end(env)
+
+def _go_runtime_module_identifiers_test(ctx):
+    """Match the module names emitted by Go's test runtime."""
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        [
+            "domains/example/go_default_test%2etopt__raw_go_test",
+            "domains/example/go_default_test%2etopt__raw_go_test_test",
+        ],
+        go_runtime_module_identifiers_for_tests(
+            "domains/example/go_default_test.topt__raw_go_test",
+        ),
+    )
+    asserts.equals(
+        env,
+        ["example.com/pkg", "example.com/pkg_test"],
+        go_runtime_module_identifiers_for_tests("example.com/pkg"),
     )
     return unittest.end(env)
 
@@ -232,6 +253,7 @@ def _normalize_user_data_invalid_type_failure_test_impl(ctx):
 service_mapping_entries_filters_non_service_test = unittest.make(_service_mapping_entries_filters_non_service_test)
 resolve_topt_service_key_prefers_exact_then_sanitized_test = unittest.make(_resolve_topt_service_key_prefers_exact_then_sanitized_test)
 select_module_group_name_test = unittest.make(_select_module_group_name_test)
+go_runtime_module_identifiers_test = unittest.make(_go_runtime_module_identifiers_test)
 normalize_user_data_handles_none_test = unittest.make(_normalize_user_data_handles_none_test)
 build_module_labels_valid_test = unittest.make(_build_module_labels_valid_test)
 go_stub_includes_manifest_in_files_test = unittest.make(_go_stub_includes_manifest_in_files_test)

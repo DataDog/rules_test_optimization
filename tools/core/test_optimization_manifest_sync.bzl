@@ -306,6 +306,7 @@ def _context_topt_data(aggregate_repo_name, context_key, materialized):
         "files_label": "@%s//:test_optimization_files_%s" % (aggregate_repo_name, context_key),
         "manifest_label": "@%s//:%s" % (aggregate_repo_name, materialized["manifest_file"]),
         "module_labels": module_labels,
+        "module_group_by_identifier": materialized.get("module_group_by_identifier", {}),
         "module_group_names": module_group_names,
         "context_label": "@%s//:test_optimization_context_%s" % (aggregate_repo_name, context_key),
     }
