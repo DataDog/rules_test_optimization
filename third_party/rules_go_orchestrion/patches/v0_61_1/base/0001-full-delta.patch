@@ -4334,7 +4334,7 @@ index 809ede6..6751455 100644
  
  def _check_ternary(name, value):
 diff --git a/go/tools/builders/BUILD.bazel b/go/tools/builders/BUILD.bazel
-index ae68ab5..0799931 100644
+index ae68ab5..32c4aec 100644
 --- a/go/tools/builders/BUILD.bazel
 +++ b/go/tools/builders/BUILD.bazel
 @@ -23,11 +23,8 @@ go_test(
@@ -4363,13 +4363,14 @@ index ae68ab5..0799931 100644
      ],
      data = ["@go_sdk//:files"],
      rundir = ".",
-@@ -74,9 +68,77 @@ go_test(
+@@ -74,9 +68,78 @@ go_test(
      name = "env_test",
      size = "small",
      srcs = [
 -        "env.go",
          "env_test.go",
 -        "flags.go",
++        "filter_buildid_test.go",
 +        ":builder_srcs",
 +    ],
 +    x_defs = {
@@ -4443,7 +4444,7 @@ index ae68ab5..0799931 100644
      ],
  )
  
-@@ -109,6 +171,7 @@ filegroup(
+@@ -109,6 +172,7 @@ filegroup(
          "edit.go",
          "embedcfg.go",
          "env.go",
@@ -4451,7 +4452,7 @@ index ae68ab5..0799931 100644
          "filter.go",
          "filter_buildid.go",
          "flags.go",
-@@ -116,12 +179,20 @@ filegroup(
+@@ -116,12 +180,20 @@ filegroup(
          "generate_test_main.go",
          "importcfg.go",
          "link.go",
@@ -4472,7 +4473,7 @@ index ae68ab5..0799931 100644
      ] + select({
          "@bazel_tools//src/conditions:windows": ["path_windows.go"],
          "//conditions:default": ["path.go"],
-@@ -135,6 +206,7 @@ go_source(
+@@ -135,6 +207,7 @@ go_source(
          "constants.go",
          "env.go",
          "flags.go",
@@ -4480,7 +4481,7 @@ index ae68ab5..0799931 100644
          "nogo_fix.go",
          "nogo_goversions_go117.go",
          "nogo_goversions_go118.go",
-@@ -145,6 +217,13 @@ go_source(
+@@ -145,6 +218,13 @@ go_source(
          "nogo_typeparams_go118.go",
          "nogo_version.go",
          "nolint.go",
@@ -4494,7 +4495,7 @@ index ae68ab5..0799931 100644
      ],
      # //go/tools/builders:nogo_srcs is considered a different target by
      # Bazel's visibility check than
-@@ -166,6 +245,14 @@ go_binary(
+@@ -166,6 +246,14 @@ go_binary(
          "env.go",
          "flags.go",
          "go_path.go",
@@ -4509,7 +4510,7 @@ index ae68ab5..0799931 100644
      ],
      visibility = ["//visibility:public"],
  )
-@@ -182,6 +269,7 @@ go_binary(
+@@ -182,6 +270,7 @@ go_binary(
          "env.go",
          "flags.go",
          "info.go",
@@ -4517,7 +4518,7 @@ index ae68ab5..0799931 100644
      ],
      visibility = ["//visibility:public"],
  )
-@@ -199,6 +287,7 @@ go_binary(
+@@ -199,6 +288,7 @@ go_binary(
      srcs = [
          "env.go",
          "flags.go",
@@ -9073,10 +9074,10 @@ index 979c230..3a776cc 100644
 +	return result
 +}
 diff --git a/go/tools/builders/filter_buildid.go b/go/tools/builders/filter_buildid.go
-index 893a0f6..16955a7 100644
+index 893a0f6..52336d1 100644
 --- a/go/tools/builders/filter_buildid.go
 +++ b/go/tools/builders/filter_buildid.go
-@@ -18,6 +18,7 @@ import (
+@@ -18,27 +18,134 @@ import (
  	"os"
  	"os/exec"
  	"runtime"
@@ -9084,10 +9085,11 @@ index 893a0f6..16955a7 100644
  	"syscall"
  )
  
-@@ -33,6 +34,15 @@ func filterBuildID(args []string) error {
- 		}
- 		newArgs = append(newArgs, arg)
- 	}
+ // filterBuildID executes the tool on the command line, filtering out any
+ // -buildid arguments. It is intended to be used with -toolexec.
+ func filterBuildID(args []string) error {
+-	newArgs := make([]string, 0, len(args))
++	newArgs := withoutBuildID(args)
 +	if orchestrion := strings.TrimSpace(os.Getenv("RULES_GO_ORCHESTRION_FILTERBUILDID")); orchestrion != "" {
 +		orchestrionArgs := []string{orchestrion}
 +		logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL")
@@ -9097,13 +9099,15 @@ index 893a0f6..16955a7 100644
 +		orchestrionArgs = append(orchestrionArgs, "toolexec")
 +		newArgs = append(orchestrionArgs, newArgs...)
 +	}
- 	if runtime.GOOS == "windows" {
- 		cmd := exec.Command(newArgs[0], newArgs[1:]...)
- 		cmd.Stdout = os.Stdout
-@@ -42,3 +52,97 @@ func filterBuildID(args []string) error {
- 		return syscall.Exec(newArgs[0], newArgs, os.Environ())
- 	}
- }
++	if runtime.GOOS == "windows" {
++		cmd := exec.Command(newArgs[0], newArgs[1:]...)
++		cmd.Stdout = os.Stdout
++		cmd.Stderr = os.Stderr
++		return cmd.Run()
++	} else {
++		return syscall.Exec(newArgs[0], newArgs, os.Environ())
++	}
++}
 +
 +// orchestrionFilterBuildID is a stdlib-focused toolexec wrapper.
 +// Some stdlib compiles arrive without TOOLEXEC_IMPORTPATH even though the
@@ -9139,15 +9143,7 @@ index 893a0f6..16955a7 100644
 +			return err
 +		}
 +	}
-+	newArgs := make([]string, 0, len(toolArgs))
-+	for i := 0; i < len(toolArgs); i++ {
-+		arg := toolArgs[i]
-+		if arg == "-buildid" {
-+			i++
-+			continue
-+		}
-+		newArgs = append(newArgs, arg)
-+	}
++	newArgs := withoutBuildID(toolArgs)
 +	if strings.TrimSpace(os.Getenv("TOOLEXEC_IMPORTPATH")) == "" {
 +		if pkg := packageFromCompileArgs(newArgs); pkg != "" {
 +			_ = os.Setenv("TOOLEXEC_IMPORTPATH", pkg)
@@ -9170,6 +9166,26 @@ index 893a0f6..16955a7 100644
 +	return cmd.Run()
 +}
 +
++// withoutBuildID removes both command-line forms accepted by the Go tools.
++// Build IDs depend on the invocation environment, so passing one through would
++// make otherwise identical instrumented standard-library archives differ.
++func withoutBuildID(args []string) []string {
++	filtered := make([]string, 0, len(args))
+ 	for i := 0; i < len(args); i++ {
+ 		arg := args[i]
+ 		if arg == "-buildid" {
+ 			i++
+ 			continue
+ 		}
+-		newArgs = append(newArgs, arg)
++		if strings.HasPrefix(arg, "-buildid=") {
++			continue
++		}
++		filtered = append(filtered, arg)
++	}
++	return filtered
++}
++
 +func shouldRunOrchestrionForStdlibPackage(pkg string, mode string) bool {
 +	if effectiveOrchestrionMode(mode) != orchestrionModeTestOptimization {
 +		return true
@@ -9180,13 +9196,16 @@ index 893a0f6..16955a7 100644
 +func execToolexecArgs(args []string) error {
 +	if len(args) == 0 {
 +		return nil
-+	}
-+	if runtime.GOOS == "windows" {
+ 	}
+ 	if runtime.GOOS == "windows" {
+-		cmd := exec.Command(newArgs[0], newArgs[1:]...)
 +		cmd := exec.Command(args[0], args[1:]...)
-+		cmd.Stdout = os.Stdout
-+		cmd.Stderr = os.Stderr
-+		return cmd.Run()
-+	}
+ 		cmd.Stdout = os.Stdout
+ 		cmd.Stderr = os.Stderr
+ 		return cmd.Run()
+-	} else {
+-		return syscall.Exec(newArgs[0], newArgs, os.Environ())
+ 	}
 +	return syscall.Exec(args[0], args, os.Environ())
 +}
 +
@@ -9197,6 +9216,69 @@ index 893a0f6..16955a7 100644
 +		}
 +	}
 +	return ""
+ }
+diff --git a/go/tools/builders/filter_buildid_test.go b/go/tools/builders/filter_buildid_test.go
+new file mode 100644
+index 0000000..f4b0e33
+--- /dev/null
++++ b/go/tools/builders/filter_buildid_test.go
+@@ -0,0 +1,57 @@
++// Copyright 2026 Datadog, Inc.
++//
++// Licensed under the Apache License, Version 2.0 (the "License");
++// you may not use this file except in compliance with the License.
++// You may obtain a copy of the License at
++//
++//     https://www.apache.org/licenses/LICENSE-2.0
++//
++// Unless required by applicable law or agreed to in writing, software
++// distributed under the License is distributed on an "AS IS" BASIS,
++// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++// See the License for the specific language governing permissions and
++// limitations under the License.
++
++package main
++
++import (
++	"reflect"
++	"testing"
++)
++
++func TestWithoutBuildID(t *testing.T) {
++	tests := []struct {
++		name string
++		args []string
++		want []string
++	}{
++		{
++			name: "separate argument",
++			args: []string{"compile", "-buildid", "environment-specific", "-p", "testing"},
++			want: []string{"compile", "-p", "testing"},
++		},
++		{
++			name: "equals argument",
++			args: []string{"compile", "-buildid=environment-specific", "-p", "testing"},
++			want: []string{"compile", "-p", "testing"},
++		},
++		{
++			name: "empty build ID",
++			args: []string{"link", "-buildid=", "archive.a"},
++			want: []string{"link", "archive.a"},
++		},
++		{
++			name: "similar flag",
++			args: []string{"compile", "-buildidfile", "stable", "-p", "testing"},
++			want: []string{"compile", "-buildidfile", "stable", "-p", "testing"},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if got := withoutBuildID(tt.args); !reflect.DeepEqual(got, tt.want) {
++				t.Fatalf("withoutBuildID(%q) = %q, want %q", tt.args, got, tt.want)
++			}
++		})
++	}
 +}
 diff --git a/go/tools/builders/importcfg.go b/go/tools/builders/importcfg.go
 index c25763a..7c19d36 100644

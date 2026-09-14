@@ -78,6 +78,7 @@ go_test(
     size = "small",
     srcs = [
         "env_test.go",
+        "filter_buildid_test.go",
         ":builder_srcs",
     ],
     x_defs = {

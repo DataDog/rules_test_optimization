@@ -12,9 +12,9 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `56`
+- Total changed paths: `57`
 - Modified files: `31`
-- Added files: `25`
+- Added files: `26`
 - Removed files: `0`
 
 ## Modified files
@@ -60,6 +60,7 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/cc_test.go`
 - `go/tools/builders/compilepkg_test.go`
 - `go/tools/builders/env_orchestrion.go`
+- `go/tools/builders/filter_buildid_test.go`
 - `go/tools/builders/importcfg_test.go`
 - `go/tools/builders/module_proxy.go`
 - `go/tools/builders/orchestrion.go`
