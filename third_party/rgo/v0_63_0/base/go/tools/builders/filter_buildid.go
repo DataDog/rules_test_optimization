@@ -25,15 +25,7 @@ import (
 // filterBuildID executes the tool on the command line, filtering out any
 // -buildid arguments. It is intended to be used with -toolexec.
 func filterBuildID(args []string) error {
-	newArgs := make([]string, 0, len(args))
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "-buildid" {
-			i++
-			continue
-		}
-		newArgs = append(newArgs, arg)
-	}
+	newArgs := withoutBuildID(args)
 	if orchestrion := strings.TrimSpace(os.Getenv("RULES_GO_ORCHESTRION_FILTERBUILDID")); orchestrion != "" {
 		orchestrionArgs := []string{orchestrion}
 		logLevel := os.Getenv("ORCHESTRION_LOG_LEVEL")
@@ -87,15 +79,7 @@ parsedWrapperArgs:
 			return err
 		}
 	}
-	newArgs := make([]string, 0, len(toolArgs))
-	for i := 0; i < len(toolArgs); i++ {
-		arg := toolArgs[i]
-		if arg == "-buildid" {
-			i++
-			continue
-		}
-		newArgs = append(newArgs, arg)
-	}
+	newArgs := withoutBuildID(toolArgs)
 	if strings.TrimSpace(os.Getenv("TOOLEXEC_IMPORTPATH")) == "" {
 		if pkg := packageFromCompileArgs(newArgs); pkg != "" {
 			_ = os.Setenv("TOOLEXEC_IMPORTPATH", pkg)
@@ -116,6 +100,25 @@ parsedWrapperArgs:
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// withoutBuildID removes both command-line forms accepted by the Go tools.
+// Build IDs depend on the invocation environment, so passing one through would
+// make otherwise identical instrumented standard-library archives differ.
+func withoutBuildID(args []string) []string {
+	filtered := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "-buildid" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "-buildid=") {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
 }
 
 func shouldRunOrchestrionForStdlibPackage(pkg string, mode string) bool {
