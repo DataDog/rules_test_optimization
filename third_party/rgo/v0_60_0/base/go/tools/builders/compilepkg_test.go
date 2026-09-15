@@ -185,6 +185,74 @@ func TestSharedSyntheticTestmainHelperBundleNormalizesGoBuildIDs(t *testing.T) {
 	}
 }
 
+func TestSyntheticTestmainPackagefileFallbackNormalizesGoBuildIDs(t *testing.T) {
+	const contentID = "cccccccccccccccccccc"
+	archive := func(actionID string) []byte {
+		buildID := actionID + "/" + contentID
+		return []byte("!<arch>\narchive header\ngo object test\nbuild id \"" + buildID + "\"\npayload build id \"" + buildID + "\"\n")
+	}
+	publish := func(actionID string) ([]byte, []byte, string) {
+		t.Helper()
+		source := filepath.Join(t.TempDir(), "helper.a")
+		original := archive(actionID)
+		if err := os.WriteFile(source, original, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		outputDir := t.TempDir()
+		manifest, err := publishSyntheticTestmainPackagefiles(
+			[]byte("packagefile example.com/helper="+source+"\n"),
+			outputDir,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries, err := os.ReadDir(outputDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) != 1 {
+			t.Fatalf("published %d fallback archives, want 1", len(entries))
+		}
+		publishedPath := filepath.Join(outputDir, entries[0].Name())
+		published, err := os.ReadFile(publishedPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		unchanged, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(unchanged, original) {
+			t.Fatal("fallback publication modified the source archive")
+		}
+		return published, manifest, publishedPath
+	}
+
+	first, firstManifest, firstPath := publish("aaaaaaaaaaaaaaaaaaaa")
+	second, secondManifest, secondPath := publish("bbbbbbbbbbbbbbbbbbbb")
+	if !reflect.DeepEqual(first, second) {
+		t.Fatal("equivalent fallback archives produced different bytes")
+	}
+	wantBuildID := contentID + "/" + contentID
+	if got := strings.Count(string(first), wantBuildID); got != 2 {
+		t.Fatalf("normalized build ID occurs %d times, want 2", got)
+	}
+	if !strings.Contains(string(firstManifest), firstPath) || !strings.Contains(string(secondManifest), secondPath) {
+		t.Fatal("fallback manifests do not reference their published archives")
+	}
+}
+
+func TestSyntheticTestmainPackagefileFallbackLeavesRelativePathsAlone(t *testing.T) {
+	input := []byte("packagefile example.com/helper=relative/helper.a\n")
+	got, err := publishSyntheticTestmainPackagefiles(input, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, input) {
+		t.Fatalf("relative packagefile changed: got %q want %q", got, input)
+	}
+}
+
 func TestSharedSyntheticTestmainHelperBundleFallsBackOnTargetOverlap(t *testing.T) {
 	rootPackage := syntheticTestmainRootPackagesTestOptimization[0].packagePath
 	sourceDir := t.TempDir()

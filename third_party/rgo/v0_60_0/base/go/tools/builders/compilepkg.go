@@ -205,7 +205,7 @@ func publishSyntheticTestmainPackagefiles(data []byte, outputDir string) ([]byte
 		digest := sha256.Sum256([]byte(packagePath))
 		publishedPath := filepath.Join(outputDir, fmt.Sprintf("%x.a", digest[:8]))
 		if !published[publishedPath] {
-			if err := copyArchiveFile(archivePath, publishedPath); err != nil {
+			if err := publishNormalizedGoArchive(archivePath, publishedPath); err != nil {
 				return nil, fmt.Errorf("publish synthetic testmain helper %s: %w", packagePath, err)
 			}
 			published[publishedPath] = true
@@ -1923,12 +1923,9 @@ func writeSharedSyntheticTestmainHelperBundle(outputDir string, compiled map[str
 		if published := publishedPaths[source]; published != "" {
 			return published, nil
 		}
-		data, err := os.ReadFile(source)
+		data, err := normalizedGoArchive(source)
 		if err != nil {
-			return "", fmt.Errorf("read shared synthetic helper archive %s: %w", source, err)
-		}
-		if err := normalizePublishedGoArchiveBuildID(data); err != nil {
-			return "", fmt.Errorf("normalize shared synthetic helper archive %s: %w", source, err)
+			return "", fmt.Errorf("prepare shared synthetic helper archive %s: %w", source, err)
 		}
 		digest := fmt.Sprintf("%x", sha256.Sum256(data))
 		destination := filepath.Join(outputDir, "archives", digest+".a")
@@ -2015,6 +2012,25 @@ func normalizePublishedGoArchiveBuildID(data []byte) error {
 		offset = index + len(buildID)
 	}
 	return nil
+}
+
+func normalizedGoArchive(source string) ([]byte, error) {
+	data, err := os.ReadFile(source)
+	if err != nil {
+		return nil, fmt.Errorf("read archive: %w", err)
+	}
+	if err := normalizePublishedGoArchiveBuildID(data); err != nil {
+		return nil, fmt.Errorf("normalize build ID: %w", err)
+	}
+	return data, nil
+}
+
+func publishNormalizedGoArchive(source, destination string) error {
+	data, err := normalizedGoArchive(source)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(destination, data, 0o644)
 }
 
 // reusableSharedSyntheticTestmainHelperBundle returns the declared shared
