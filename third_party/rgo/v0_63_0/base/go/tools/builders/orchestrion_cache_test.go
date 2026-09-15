@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,9 +85,9 @@ func TestAcquireCacheLockReplacesStaleLock(t *testing.T) {
 	}
 }
 
-func TestAcquireCacheLockWaitsForActiveOwnerPastTimeout(t *testing.T) {
+func TestAcquireCacheLockWaitsForActiveOwnerWithinTimeout(t *testing.T) {
 	lockDir := filepath.Join(t.TempDir(), "cache.lock")
-	releaseOwner, err := tryAcquireCacheLock(lockDir, time.Minute)
+	releaseOwner, err := tryAcquireCacheLock(lockDir, 20*time.Millisecond)
 	if err != nil {
 		t.Fatalf("acquire owner lock: %v", err)
 	}
@@ -95,29 +96,118 @@ func TestAcquireCacheLockWaitsForActiveOwnerPastTimeout(t *testing.T) {
 		releaseOwner()
 	}()
 
-	releaseWaiter, err := acquireCacheLockWithTimings(lockDir, 20*time.Millisecond, time.Minute, 5*time.Millisecond)
+	releaseWaiter, err := acquireCacheLockWithTimings(lockDir, 2*time.Second, 20*time.Millisecond, 2*time.Millisecond)
 	if err != nil {
 		t.Fatalf("wait for active owner: %v", err)
 	}
 	releaseWaiter()
 }
 
-func TestAcquireCacheLockDoesNotStealLiveOwnerPastStaleThreshold(t *testing.T) {
+func TestAcquireCacheLockTimesOutWithoutStealingActiveOwner(t *testing.T) {
 	lockDir := filepath.Join(t.TempDir(), "cache.lock")
 	releaseOwner, err := tryAcquireCacheLock(lockDir, 20*time.Millisecond)
 	if err != nil {
 		t.Fatalf("acquire owner lock: %v", err)
 	}
-	go func() {
-		time.Sleep(80 * time.Millisecond)
-		releaseOwner()
-	}()
+	defer releaseOwner()
 
-	releaseWaiter, err := acquireCacheLockWithTimings(lockDir, 15*time.Millisecond, 20*time.Millisecond, 2*time.Millisecond)
-	if err != nil {
-		t.Fatalf("wait for live owner: %v", err)
+	started := time.Now()
+	_, err = acquireCacheLockWithTimings(lockDir, 100*time.Millisecond, 20*time.Millisecond, 2*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timeout acquiring cache lock") {
+		t.Fatalf("wait for active owner error = %v, want timeout", err)
 	}
-	releaseWaiter()
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("wait for active owner took %s, want a bounded wait", elapsed)
+	}
+	if _, err := os.Stat(lockDir); err != nil {
+		t.Fatalf("waiter removed the active owner's lock: %v", err)
+	}
+}
+
+func TestRemoveStaleCacheLockPreservesRenewedOwner(t *testing.T) {
+	lockDir := filepath.Join(t.TempDir(), "cache.lock")
+	releaseOwner, err := tryAcquireCacheLock(lockDir, time.Hour)
+	if err != nil {
+		t.Fatalf("acquire owner lock: %v", err)
+	}
+	defer releaseOwner()
+
+	staleAfter := time.Minute
+	staleTime := time.Now().Add(-2 * staleAfter)
+	entries, err := os.ReadDir(lockDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerPath := filepath.Join(lockDir, entries[0].Name())
+	if err := os.Chtimes(ownerPath, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(lockDir, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, stale, err := inspectCacheLock(lockDir, staleAfter)
+	if err != nil || !stale {
+		t.Fatalf("inspect stale lock: stale=%v err=%v", stale, err)
+	}
+
+	now := time.Now()
+	if err := os.Chtimes(ownerPath, now, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(lockDir, now, now); err != nil {
+		t.Fatal(err)
+	}
+	removed, err := removeStaleCacheLock(lockDir, snapshot, staleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("removed a lock renewed after inspection")
+	}
+	if _, err := os.Stat(ownerPath); err != nil {
+		t.Fatalf("renewed owner marker was removed: %v", err)
+	}
+}
+
+func TestRemoveStaleCacheLockPreservesReplacementOwner(t *testing.T) {
+	lockDir := filepath.Join(t.TempDir(), "cache.lock")
+	releaseOld, err := tryAcquireCacheLock(lockDir, time.Hour)
+	if err != nil {
+		t.Fatalf("acquire old lock: %v", err)
+	}
+	staleAfter := time.Minute
+	staleTime := time.Now().Add(-2 * staleAfter)
+	entries, err := os.ReadDir(lockDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(filepath.Join(lockDir, entries[0].Name()), staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(lockDir, staleTime, staleTime); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, stale, err := inspectCacheLock(lockDir, staleAfter)
+	if err != nil || !stale {
+		t.Fatalf("inspect stale lock: stale=%v err=%v", stale, err)
+	}
+	releaseOld()
+
+	releaseReplacement, err := tryAcquireCacheLock(lockDir, time.Hour)
+	if err != nil {
+		t.Fatalf("acquire replacement lock: %v", err)
+	}
+	defer releaseReplacement()
+	removed, err := removeStaleCacheLock(lockDir, snapshot, staleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed {
+		t.Fatal("removed a replacement lock")
+	}
+	if _, err := os.Stat(lockDir); err != nil {
+		t.Fatalf("replacement lock was removed: %v", err)
+	}
 }
 
 func TestOldCacheLockReleaseDoesNotRemoveReplacementOwner(t *testing.T) {
