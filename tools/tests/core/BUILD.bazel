@@ -173,6 +173,7 @@ load(
     "module_label_map_collision_test",
     "module_label_map_empty_inputs_test",
     "module_label_map_flaky_modules_test",
+    "nonreproducible_repository_metadata_test",
     "normalize_out_dir_absolute_failure_test",
     "normalize_out_dir_absolute_target_rule",
     "normalize_out_dir_control_chars_failure_test",
@@ -501,6 +502,12 @@ runtime_selection_mixed_source_target_rule(
 # Starlark unit tests for core helpers (sync, uploader, common utils).
 dd_site_normalization_test(
     name = "dd_site_normalization_test",
+    size = "small",
+    timeout = "short",
+)
+
+nonreproducible_repository_metadata_test(
+    name = "nonreproducible_repository_metadata_test",
     size = "small",
     timeout = "short",
 )
@@ -1869,6 +1876,7 @@ test_suite(
         ":module_label_map_empty_inputs_test",
         ":module_label_map_flaky_modules_test",
         ":noncanonical_manifest_label_failure_test",
+        ":nonreproducible_repository_metadata_test",
         ":normalize_out_dir_absolute_failure_test",
         ":normalize_out_dir_control_chars_failure_test",
         ":normalize_out_dir_empty_failure_test",

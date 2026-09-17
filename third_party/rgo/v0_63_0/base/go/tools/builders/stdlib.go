@@ -29,6 +29,13 @@ import (
 const syntheticStdlibModulePath = "module github.com/DataDog/dd-trace-go/v2/bazel_orchestrion_stdlib"
 const orchestrionStdlibCacheManifestName = ".orchestrion_stdlib_cache_manifest"
 
+func syntheticStdlibDownloadModules(orchestrionMode string) []string {
+	return append(
+		[]string{"github.com/DataDog/orchestrion"},
+		ddTraceGoModulesForMode(orchestrionMode)...,
+	)
+}
+
 // stdlib builds the standard library in the appropriate mode into a new goroot.
 func stdlib(args []string) (err error) {
 	span := beginProbe("stdlib.action")
@@ -230,13 +237,8 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
 					_ = os.Setenv(parts[0], parts[1])
 				}
 			}
-			syntheticDownloads := [][]string{
-				{"mod", "download", "github.com/DataDog/orchestrion"},
-				{"mod", "download", "github.com/DataDog/dd-trace-go/v2"},
-				{"mod", "download", "github.com/DataDog/dd-trace-go/contrib/net/http/v2"},
-				{"mod", "download", "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"},
-			}
-			for _, dl := range syntheticDownloads {
+			for _, module := range syntheticStdlibDownloadModules(orchestrionMode) {
+				dl := []string{"mod", "download", module}
 				downloadSpan := beginProbe("stdlib.synthetic_download", newProbeField("command", strings.Join(dl, " ")))
 				if err := goenv.runCommand(goenv.goCmd(dl[0], dl[1:]...)); err != nil && goenv.verbose {
 					downloadSpan.End(err)
