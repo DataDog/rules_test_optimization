@@ -2695,6 +2695,16 @@ def _sync_spec_from_attrs(ctx):
         "debug": ctx.attr.debug,
     }
 
+def _nonreproducible_repository_metadata(ctx):
+    """Return metadata for a repository backed by live service responses."""
+    if hasattr(ctx, "repo_metadata"):
+        return ctx.repo_metadata(reproducible = False)
+
+    # repository_ctx.repo_metadata was added after the oldest Bazel versions
+    # supported by this module. The rule is local, so older Bazel versions do
+    # not place its contents in the cross-workspace repository cache.
+    return None
+
 def _impl(ctx):
     """Repository rule orchestration entrypoint.
 
@@ -2747,7 +2757,8 @@ def _impl(ctx):
         ctx.report_progress("test_optimization_sync: disabled")
         return
 
-    return _materialize_enabled_context(ctx, _sync_spec_from_attrs(ctx))
+    _materialize_enabled_context(ctx, _sync_spec_from_attrs(ctx))
+    return _nonreproducible_repository_metadata(ctx)
 
 def _materialize_enabled_context(ctx, spec, emit_surface = True):
     """Fetch and materialize one service/runtime context.
@@ -3407,6 +3418,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
 # Shared only with the manifest repository implementation. Keeping this public
 # load symbol avoids copying HTTP, telemetry, and per-module splitting logic.
 materialize_test_optimization_context = _materialize_enabled_context
+nonreproducible_repository_metadata_for_tests = _nonreproducible_repository_metadata
 render_test_optimization_module_runfiles = _render_module_runfiles_bzl
 test_optimization_enabled = _is_test_optimization_enabled
 test_optimization_repository_environ = _TEST_OPTIMIZATION_REPOSITORY_ENVIRON

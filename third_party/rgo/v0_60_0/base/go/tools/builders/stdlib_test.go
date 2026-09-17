@@ -11,6 +11,41 @@ import (
 	"testing"
 )
 
+func TestSyntheticStdlibDownloadModulesRespectOrchestrionMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want []string
+	}{
+		{
+			name: "general",
+			mode: orchestrionModeGeneral,
+			want: []string{
+				"github.com/DataDog/orchestrion",
+				"github.com/DataDog/dd-trace-go/v2",
+				"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
+				"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
+			},
+		},
+		{
+			name: "test optimization",
+			mode: orchestrionModeTestOptimization,
+			want: []string{
+				"github.com/DataDog/orchestrion",
+				"github.com/DataDog/dd-trace-go/v2",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := syntheticStdlibDownloadModules(tt.mode); !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("syntheticStdlibDownloadModules(%q) = %#v, want %#v", tt.mode, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnsureSyntheticOrchestrionToolGoCreatesExpectedContents(t *testing.T) {
 	workDir := t.TempDir()
 	previousWD, err := os.Getwd()

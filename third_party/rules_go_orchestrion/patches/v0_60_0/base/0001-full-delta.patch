@@ -17040,10 +17040,10 @@ index 0000000..9edae16
 +	}
 +}
 diff --git a/go/tools/builders/stdlib.go b/go/tools/builders/stdlib.go
-index cfcb991..8ea6331 100644
+index cfcb991..0d7e502 100644
 --- a/go/tools/builders/stdlib.go
 +++ b/go/tools/builders/stdlib.go
-@@ -21,15 +21,29 @@ import (
+@@ -21,15 +21,36 @@ import (
  	"os"
  	"path/filepath"
  	"regexp"
@@ -17054,6 +17054,13 @@ index cfcb991..8ea6331 100644
  
 +const syntheticStdlibModulePath = "module github.com/DataDog/dd-trace-go/v2/bazel_orchestrion_stdlib"
 +const orchestrionStdlibCacheManifestName = ".orchestrion_stdlib_cache_manifest"
++
++func syntheticStdlibDownloadModules(orchestrionMode string) []string {
++	return append(
++		[]string{"github.com/DataDog/orchestrion"},
++		ddTraceGoModulesForMode(orchestrionMode)...,
++	)
++}
 +
  // stdlib builds the standard library in the appropriate mode into a new goroot.
 -func stdlib(args []string) error {
@@ -17074,7 +17081,7 @@ index cfcb991..8ea6331 100644
  	race := flags.Bool("race", false, "Build in race mode")
  	msan := flags.Bool("msan", false, "Build in msan mode")
  	shared := flags.Bool("shared", false, "Build in shared mode")
-@@ -45,6 +59,14 @@ func stdlib(args []string) error {
+@@ -45,6 +66,14 @@ func stdlib(args []string) error {
  	if err := goenv.checkFlagsAndSetGoroot(); err != nil {
  		return err
  	}
@@ -17089,7 +17096,7 @@ index cfcb991..8ea6331 100644
  	goroot := os.Getenv("GOROOT")
  	if goroot == "" {
  		return fmt.Errorf("GOROOT not set")
-@@ -58,27 +80,35 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -58,27 +87,35 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	}
  
  	// Link in the bare minimum needed to the new GOROOT
@@ -17133,7 +17140,7 @@ index cfcb991..8ea6331 100644
  	os.Setenv("GO111MODULE", "off")
  
  	// Make sure we have an absolute path to the C compiler.
-@@ -89,6 +119,19 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -89,6 +126,19 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	for _, path := range filepath.SplitList(os.Getenv("PATH")) {
  		absPaths = append(absPaths, abs(path))
  	}
@@ -17153,7 +17160,7 @@ index cfcb991..8ea6331 100644
  	os.Setenv("PATH", strings.Join(absPaths, string(os.PathListSeparator)))
  
  	sandboxPath := abs(".")
-@@ -113,7 +156,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -113,7 +163,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  		}
  	}
  	os.Setenv("CGO_LDFLAGS_ALLOW", b.String())
@@ -17162,7 +17169,7 @@ index cfcb991..8ea6331 100644
  
  	// Build the commands needed to build the std library in the right mode
  	// NOTE: the go command stamps compiled .a files with build ids, which are
-@@ -121,7 +164,117 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -121,7 +171,112 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	// creating reproducible builds because the build ids are hashed from
  	// CGO_CFLAGS, which frequently contains absolute paths. As a workaround,
  	// we strip the build ids, since they won't be used after this.
@@ -17233,13 +17240,8 @@ index cfcb991..8ea6331 100644
 +					_ = os.Setenv(parts[0], parts[1])
 +				}
 +			}
-+			syntheticDownloads := [][]string{
-+				{"mod", "download", "github.com/DataDog/orchestrion"},
-+				{"mod", "download", "github.com/DataDog/dd-trace-go/v2"},
-+				{"mod", "download", "github.com/DataDog/dd-trace-go/contrib/net/http/v2"},
-+				{"mod", "download", "github.com/DataDog/dd-trace-go/contrib/log/slog/v2"},
-+			}
-+			for _, dl := range syntheticDownloads {
++			for _, module := range syntheticStdlibDownloadModules(orchestrionMode) {
++				dl := []string{"mod", "download", module}
 +				downloadSpan := beginProbe("stdlib.synthetic_download", newProbeField("command", strings.Join(dl, " ")))
 +				if err := goenv.runCommand(goenv.goCmd(dl[0], dl[1:]...)); err != nil && goenv.verbose {
 +					downloadSpan.End(err)
@@ -17281,7 +17283,7 @@ index cfcb991..8ea6331 100644
  	if len(build.Default.BuildTags) > 0 {
  		installArgs = append(installArgs, "-tags", strings.Join(build.Default.BuildTags, ","))
  	}
-@@ -135,7 +288,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -135,7 +290,7 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  		installArgs = append(installArgs, "-msan")
  	}
  	if *pgoprofile != "" {
@@ -17290,7 +17292,7 @@ index cfcb991..8ea6331 100644
  	}
  	if *shared {
  		gcflags = append(gcflags, "-shared")
-@@ -167,8 +320,393 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
+@@ -167,8 +322,393 @@ You may need to use the flags --cpu=x64_windows --compiler=mingw-gcc.`)
  	}
  
  	installArgs = append(installArgs, packages...)
@@ -17686,10 +17688,10 @@ index cfcb991..8ea6331 100644
 +}
 diff --git a/go/tools/builders/stdlib_test.go b/go/tools/builders/stdlib_test.go
 new file mode 100644
-index 0000000..1d4cf60
+index 0000000..56d5bf9
 --- /dev/null
 +++ b/go/tools/builders/stdlib_test.go
-@@ -0,0 +1,477 @@
+@@ -0,0 +1,512 @@
 +package main
 +
 +import (
@@ -17702,6 +17704,41 @@ index 0000000..1d4cf60
 +	"strings"
 +	"testing"
 +)
++
++func TestSyntheticStdlibDownloadModulesRespectOrchestrionMode(t *testing.T) {
++	tests := []struct {
++		name string
++		mode string
++		want []string
++	}{
++		{
++			name: "general",
++			mode: orchestrionModeGeneral,
++			want: []string{
++				"github.com/DataDog/orchestrion",
++				"github.com/DataDog/dd-trace-go/v2",
++				"github.com/DataDog/dd-trace-go/contrib/net/http/v2",
++				"github.com/DataDog/dd-trace-go/contrib/log/slog/v2",
++			},
++		},
++		{
++			name: "test optimization",
++			mode: orchestrionModeTestOptimization,
++			want: []string{
++				"github.com/DataDog/orchestrion",
++				"github.com/DataDog/dd-trace-go/v2",
++			},
++		},
++	}
++
++	for _, tt := range tests {
++		t.Run(tt.name, func(t *testing.T) {
++			if got := syntheticStdlibDownloadModules(tt.mode); !reflect.DeepEqual(got, tt.want) {
++				t.Fatalf("syntheticStdlibDownloadModules(%q) = %#v, want %#v", tt.mode, got, tt.want)
++			}
++		})
++	}
++}
 +
 +func TestEnsureSyntheticOrchestrionToolGoCreatesExpectedContents(t *testing.T) {
 +	workDir := t.TempDir()

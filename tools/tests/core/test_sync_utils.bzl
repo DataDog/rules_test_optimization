@@ -47,6 +47,7 @@ load(
     "load_github_event_payload_for_tests",
     "missing_required_git_metadata_for_tests",
     "new_telemetry_facts_for_tests",
+    "nonreproducible_repository_metadata_for_tests",
     "normalize_out_dir_or_fail_for_tests",
     "normalize_ref_for_tests",
     "parse_curl_time_ms_for_tests",
@@ -184,6 +185,29 @@ def _fake_module_path_ctx(environ):
         workspace_root = "",
         execute = _execute,
     )
+
+def _nonreproducible_repository_metadata_test(ctx):
+    """Live sync results are metadata, never repository attribute overrides."""
+    env = unittest.begin(ctx)
+    calls = []
+
+    def _repo_metadata(reproducible):
+        calls.append(reproducible)
+        return struct(reproducible = reproducible)
+
+    metadata = nonreproducible_repository_metadata_for_tests(struct(
+        repo_metadata = _repo_metadata,
+    ))
+    asserts.equals(env, [False], calls)
+    asserts.false(env, metadata.reproducible)
+
+    # Bazel versions before repository_ctx.repo_metadata remain supported.
+    asserts.equals(
+        env,
+        None,
+        nonreproducible_repository_metadata_for_tests(struct()),
+    )
+    return unittest.end(env)
 
 def _dd_site_normalization_test(ctx):
     """Validate DD_SITE normalization into canonical API base URL."""
@@ -2379,6 +2403,7 @@ sync_environment_keys_allowlist_test = unittest.make(_sync_environment_keys_allo
 read_abs_file_command_escaping_test = unittest.make(_read_abs_file_command_escaping_test)
 parse_go_module_path_test = unittest.make(_parse_go_module_path_test)
 runtime_module_path_from_environ_test = unittest.make(_runtime_module_path_from_environ_test)
+nonreproducible_repository_metadata_test = unittest.make(_nonreproducible_repository_metadata_test)
 dirname_test = unittest.make(_dirname_test)
 normalize_out_dir_or_fail_test = unittest.make(_normalize_out_dir_or_fail_test)
 collect_known_tests_modules_defensive_shape_test = unittest.make(_collect_known_tests_modules_defensive_shape_test)
