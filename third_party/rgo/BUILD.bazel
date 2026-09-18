@@ -14,6 +14,8 @@ exports_files(
         "v0_62_0/base.CHANGED_FILES.md",
         "v0_63_0/base.METADATA.json",
         "v0_63_0/base.CHANGED_FILES.md",
+        "v0_63_0_1b78046/base.METADATA.json",
+        "v0_63_0_1b78046/base.CHANGED_FILES.md",
     ],
     visibility = ["//visibility:public"],
 )

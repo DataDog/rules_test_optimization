@@ -1,0 +1,11 @@
+{
+  "upstream": {
+    "repository": "https://github.com/bazel-contrib/rules_go.git",
+    "commit": "1b78046436028ebd84b36ffc2422c82467a01bfc",
+    "tag": "",
+    "archive_sha256": "ebd3a8c263a31c4b20e8455a8aada00da05c5f144f346c3f2e947bf70da5d980"
+  },
+  "fork_path": "third_party/rgo/v0_63_0_1b78046/base",
+  "generated_report": "third_party/rgo/v0_63_0_1b78046/base.CHANGED_FILES.md",
+  "generator": "python3 tools/dev/diff_rules_go_fork.py --upstream v0_63_0_1b78046 --variant base --write-report"
+}

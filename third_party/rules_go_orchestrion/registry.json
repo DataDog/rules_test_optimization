@@ -74,6 +74,24 @@
           "series": "third_party/rules_go_orchestrion/patches/v0_63_0/base.series"
         }
       }
+    },
+    "v0_63_0_1b78046": {
+      "rules_go_version": "0.63.0",
+      "upstream": {
+        "repository": "https://github.com/bazel-contrib/rules_go.git",
+        "commit": "1b78046436028ebd84b36ffc2422c82467a01bfc",
+        "tag": "",
+        "archive_sha256": "ebd3a8c263a31c4b20e8455a8aada00da05c5f144f346c3f2e947bf70da5d980"
+      },
+      "patch_root": "third_party/rules_go_orchestrion/patches/v0_63_0_1b78046",
+      "variants": {
+        "base": {
+          "tree_path": "third_party/rgo/v0_63_0_1b78046/base",
+          "metadata_path": "third_party/rgo/v0_63_0_1b78046/base.METADATA.json",
+          "changed_files_report": "third_party/rgo/v0_63_0_1b78046/base.CHANGED_FILES.md",
+          "series": "third_party/rules_go_orchestrion/patches/v0_63_0_1b78046/base.series"
+        }
+      }
     }
   }
 }

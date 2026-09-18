@@ -103,7 +103,7 @@ class ForkRegistry:
             upstream=UpstreamInfo(
                 repository=_require_string(upstream_info, "repository"),
                 commit=_require_string(upstream_info, "commit"),
-                tag=_require_string(upstream_info, "tag"),
+                tag=_optional_string(upstream_info, "tag"),
                 archive_sha256=_require_string(upstream_info, "archive_sha256"),
             ),
             patch_root=_repo_path(self.repo_root, _require_string(upstream_entry, "patch_root")),
@@ -224,6 +224,19 @@ def _require_string(data: dict[str, Any], key: str) -> str:
     value = data.get(key)
     if not isinstance(value, str) or not value:
         raise ValueError("registry field %s must be a non-empty string" % key)
+    return value
+
+
+def _optional_string(data: dict[str, Any], key: str) -> str:
+    """Return a required string field that may be empty.
+
+    Used for ``upstream.tag``: commit-based support lines have no real tag, so
+    they record an explicit empty string while tag-based releases keep the
+    exact upstream tag.
+    """
+    value = data.get(key)
+    if not isinstance(value, str):
+        raise ValueError("registry field %s must be a string" % key)
     return value
 
 
