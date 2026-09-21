@@ -179,6 +179,10 @@ go_transition = transition(
     ] + TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
 )
 
+_ORCHESTRION_ENABLED_SETTING = "//go/private/orchestrion:enabled"
+_ORCHESTRION_MODE_SETTING = "//go/private/orchestrion:mode"
+_ORCHESTRION_MODE_GENERAL = "general"
+
 _common_reset_transition_dict = dict({
     "//go/private:request_nogo": False,
     "//go/config:static": False,
