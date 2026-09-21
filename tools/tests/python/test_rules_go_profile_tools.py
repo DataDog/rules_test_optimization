@@ -454,6 +454,37 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                 env = self.mod.smoke_bazel_env(Path(raw_tmp) / "output-user-root")
 
         self.assertEqual("8.8.0", env["USE_BAZEL_VERSION"])
+        self.assertEqual(
+            (Path(raw_tmp) / "home" / ".cache" / "go-build").as_posix(),
+            env["GOCACHE"],
+        )
+        self.assertEqual(
+            (Path(raw_tmp) / "home" / "go" / "pkg" / "mod").as_posix(),
+            env["GOMODCACHE"],
+        )
+        self.assertEqual(
+            (Path(raw_tmp) / "home" / ".cache").as_posix(),
+            env["XDG_CACHE_HOME"],
+        )
+
+    def test_bootstrap_cache_ownership_rejects_nested_go_caches(self) -> None:
+        """The persistent Datadog cache owns artifacts, not GOCACHE/GOMODCACHE."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            run_root = Path(raw_tmp)
+            cache_root = (
+                run_root / "home" / ".cache" / "datadog-orchestrion-go-cache"
+            )
+            (cache_root / "bootstrap").mkdir(parents=True)
+            _write(run_root / "home" / ".cache" / "go-build" / "entry", "build")
+            _write(run_root / "home" / "go" / "pkg" / "mod" / "entry", "module")
+            self.mod.assert_bootstrap_cache_ownership(run_root, Path("profile.patch"))
+
+            (cache_root / "go").mkdir()
+            with self.assertRaisesRegex(ValueError, "still owns GOCACHE/GOMODCACHE"):
+                self.mod.assert_bootstrap_cache_ownership(
+                    run_root,
+                    Path("profile.patch"),
+                )
 
     def test_stdlib_cache_snapshot_accepts_manifested_data_entries(self) -> None:
         """The determinism verifier accepts only sorted manifested data entries."""

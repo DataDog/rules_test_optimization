@@ -2214,10 +2214,10 @@ index 0000000..177eeaf
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..4487054
+index 0000000..c6a64da
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
-@@ -0,0 +1,1765 @@
+@@ -0,0 +1,1763 @@
 +# Copyright 2024 The Bazel Authors. All rights reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -2321,9 +2321,6 @@ index 0000000..4487054
 +        return host_root
 +    return _bootstrap_repo_local_cache_root(ctx)
 +
-+def _bootstrap_go_cache_root(ctx):
-+    return _path_join(ctx, _bootstrap_cache_root(ctx), "go")
-+
 +def _git_env(ctx):
 +    # GOPROXY=direct may invoke Git. Keep that fallback independent from host
 +    # rewrites, credential helpers, and interactive prompts.
@@ -2349,13 +2346,13 @@ index 0000000..4487054
 +    }
 +
 +def _go_env(ctx):
-+    go_cache_root = _bootstrap_go_cache_root(ctx)
++    # These are ordinary host-side Go commands. Let Go reuse the caller's
++    # configured or platform-default build and module caches; the Datadog cache
++    # is reserved for the final patched bootstrap artifacts below.
 +    env = {
 +        "GO111MODULE": "on",
 +        "GOWORK": "off",
 +        "GOTOOLCHAIN": "local" if ctx.attr.go_sdk_root.strip() else "go1.25.0+auto",
-+        "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
-+        "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
 +    }
 +    env.update(_go_module_fetch_env(ctx))
 +    env.update(_git_env(ctx))
@@ -3478,6 +3475,7 @@ index 0000000..4487054
 +    declared_go_tool_identity = _declared_go_tool_identity,
 +    fallback_go_tool_identity = _fallback_go_tool_identity,
 +    git_env = _git_env,
++    go_env = _go_env,
 +    go_module_fetch_env = _go_module_fetch_env,
 +    host_path_is_writable = _host_path_is_writable,
 +    module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
@@ -18699,10 +18697,10 @@ index a1cd2ea..406e52f 100644
      )
 diff --git a/tests/core/starlark/orchestrion_extension_tests.bzl b/tests/core/starlark/orchestrion_extension_tests.bzl
 new file mode 100644
-index 0000000..884076a
+index 0000000..97fcb0a
 --- /dev/null
 +++ b/tests/core/starlark/orchestrion_extension_tests.bzl
-@@ -0,0 +1,334 @@
+@@ -0,0 +1,353 @@
 +load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 +load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 +
@@ -18937,6 +18935,24 @@ index 0000000..884076a
 +
 +go_module_fetch_env_test = unittest.make(_go_module_fetch_env_test)
 +
++def _go_env_uses_standard_caches_test(ctx):
++    env = unittest.begin(ctx)
++
++    go_env = orchestrion_extension_test_helpers.go_env(struct(
++        attr = struct(go_sdk_root = ""),
++        os = struct(environ = {}, name = "linux"),
++    ))
++
++    asserts.false(env, "GOCACHE" in go_env, "ordinary Go work must inherit the standard build cache")
++    asserts.false(env, "GOMODCACHE" in go_env, "ordinary Go work must inherit the standard module cache")
++    asserts.equals(env, "on", go_env["GO111MODULE"])
++    asserts.equals(env, "off", go_env["GOWORK"])
++    asserts.equals(env, "go1.25.0+auto", go_env["GOTOOLCHAIN"])
++
++    return unittest.end(env)
++
++go_env_uses_standard_caches_test = unittest.make(_go_env_uses_standard_caches_test)
++
 +def _fallback_go_tool_identity_test(ctx):
 +    env = unittest.begin(ctx)
 +
@@ -19028,6 +19044,7 @@ index 0000000..884076a
 +        declared_go_tool_identity_test,
 +        fallback_go_tool_identity_test,
 +        git_env_test,
++        go_env_uses_standard_caches_test,
 +        go_module_fetch_env_test,
 +        host_platform_normalization_test,
 +        module_proxy_exact_dd_trace_go_queries_test,

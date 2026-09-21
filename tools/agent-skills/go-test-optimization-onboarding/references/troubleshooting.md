@@ -298,7 +298,10 @@ validate it with real tests, doctor, dry-run, and upload.
 ## Local Disk Pressure
 
 Go/Orchestrion validation can use significant disk through Bazel output bases,
-Go caches, and Orchestrion caches.
+Go caches, and Orchestrion bootstrap artifacts. Ordinary host-side Go work uses
+the standard Go build and module caches. The persistent Datadog cache stores
+the patched Orchestrion binary, its metadata, and the offline module proxy;
+disabled Test Optimization runs do not create it.
 
 Safe cleanup sequence:
 
@@ -311,4 +314,5 @@ go clean -cache
 ```
 
 Do not delete a consumer repository's `.git` directory. Do not clear
-`~/go/pkg/mod` unless you explicitly accept the redownload cost.
+`~/go/pkg/mod` or run `go clean -modcache` unless you explicitly accept the
+redownload cost.

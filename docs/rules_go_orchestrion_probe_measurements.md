@@ -243,6 +243,10 @@ In that earlier baseline, the largest single measured phase in that area was
 This section records the intermediate bootstrap-cache experiment that preceded
 the later no-tool-repin design.
 
+It is not the current cache contract. The maintained extension now reuses Go's
+standard host build and module caches for ordinary Go work and reserves the
+persistent Datadog cache for final bootstrap artifacts.
+
 The next optimization pass focused only on the Orchestrion bootstrap path in
 `go/private/orchestrion/extensions.bzl`.
 

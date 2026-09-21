@@ -125,6 +125,11 @@ Notes:
 - The Orchestrion tool bootstrap records these versions in
   `dd_trace_go_versions.json`, but it no longer rewrites the downloaded
   Orchestrion source repo's own `go.mod`.
+- Ordinary host-side Go commands used by the repository bootstrap inherit the
+  configured or platform-default `GOCACHE` and `GOMODCACHE`. The separate
+  persistent Datadog cache contains only the patched bootstrap artifacts and
+  offline module proxy. Config-disabled evaluation returns before either cache
+  is used.
 - Bootstrap writes `dd_trace_go_version` when all traced modules resolve to one
   shared version, and `dd_trace_go_versions` when they resolve to different
   exact versions.

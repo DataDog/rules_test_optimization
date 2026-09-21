@@ -206,6 +206,7 @@ def verify_workspace_runtime_functional_smoke(
                 private_safe_patterns=private_safe_patterns,
             )
         )
+        assert_bootstrap_cache_ownership(run_root, patch)
         plain_snapshots.append(
             run_plain_reproducibility_snapshot(
                 bazel,
@@ -273,6 +274,29 @@ def verify_workspace_runtime_functional_smoke(
         second_orchestrion.actions,
         patch,
     )
+
+
+def assert_bootstrap_cache_ownership(run_root: Path, patch: Path) -> None:
+    """Require the persistent Datadog cache to contain artifacts, not Go caches."""
+    smoke_home = run_root / "home"
+    cache_root = smoke_home / ".cache" / "datadog-orchestrion-go-cache"
+    if not (cache_root / "bootstrap").is_dir():
+        raise ValueError("Orchestrion bootstrap cache was not populated for %s" % patch)
+    legacy_go_cache = cache_root / "go"
+    if legacy_go_cache.exists():
+        raise ValueError(
+            "Orchestrion bootstrap cache still owns GOCACHE/GOMODCACHE data for %s: %s"
+            % (patch, legacy_go_cache)
+        )
+    for standard_cache in (
+        smoke_home / ".cache" / "go-build",
+        smoke_home / "go" / "pkg" / "mod",
+    ):
+        if not standard_cache.is_dir() or not any(standard_cache.iterdir()):
+            raise ValueError(
+                "standard Go cache was not populated for %s: %s"
+                % (patch, standard_cache)
+            )
 
 
 def cgo_reproducibility_flags() -> list[str]:
@@ -1194,6 +1218,8 @@ def smoke_bazel_env(output_user_root: Path) -> dict[str, str]:
     path_entries.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin"])
     env = {
         "HOME": smoke_home.as_posix(),
+        "GOCACHE": (smoke_home / ".cache" / "go-build").as_posix(),
+        "GOMODCACHE": (smoke_home / "go" / "pkg" / "mod").as_posix(),
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "LOGNAME": "rules_go_smoke",
@@ -1204,6 +1230,7 @@ def smoke_bazel_env(output_user_root: Path) -> dict[str, str]:
             "USE_BAZEL_VERSION",
             (REPO_ROOT / ".bazelversion").read_text().strip(),
         ),
+        "XDG_CACHE_HOME": (smoke_home / ".cache").as_posix(),
     }
     for key in ("JAVA_HOME", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
         if key in os.environ:

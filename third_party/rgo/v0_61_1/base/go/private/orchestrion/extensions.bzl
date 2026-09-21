@@ -101,9 +101,6 @@ def _bootstrap_cache_root(ctx):
         return host_root
     return _bootstrap_repo_local_cache_root(ctx)
 
-def _bootstrap_go_cache_root(ctx):
-    return _path_join(ctx, _bootstrap_cache_root(ctx), "go")
-
 def _git_env(ctx):
     # GOPROXY=direct may invoke Git. Keep that fallback independent from host
     # rewrites, credential helpers, and interactive prompts.
@@ -129,13 +126,13 @@ def _go_module_fetch_env(ctx):
     }
 
 def _go_env(ctx):
-    go_cache_root = _bootstrap_go_cache_root(ctx)
+    # These are ordinary host-side Go commands. Let Go reuse the caller's
+    # configured or platform-default build and module caches; the Datadog cache
+    # is reserved for the final patched bootstrap artifacts below.
     env = {
         "GO111MODULE": "on",
         "GOWORK": "off",
         "GOTOOLCHAIN": "local" if ctx.attr.go_sdk_root.strip() else "go1.25.0+auto",
-        "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
-        "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
     }
     env.update(_go_module_fetch_env(ctx))
     env.update(_git_env(ctx))
@@ -1258,6 +1255,7 @@ orchestrion_extension_test_helpers = struct(
     declared_go_tool_identity = _declared_go_tool_identity,
     fallback_go_tool_identity = _fallback_go_tool_identity,
     git_env = _git_env,
+    go_env = _go_env,
     go_module_fetch_env = _go_module_fetch_env,
     host_path_is_writable = _host_path_is_writable,
     module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,

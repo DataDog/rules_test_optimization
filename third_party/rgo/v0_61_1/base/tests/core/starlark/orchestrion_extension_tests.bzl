@@ -232,6 +232,24 @@ def _go_module_fetch_env_test(ctx):
 
 go_module_fetch_env_test = unittest.make(_go_module_fetch_env_test)
 
+def _go_env_uses_standard_caches_test(ctx):
+    env = unittest.begin(ctx)
+
+    go_env = orchestrion_extension_test_helpers.go_env(struct(
+        attr = struct(go_sdk_root = ""),
+        os = struct(environ = {}, name = "linux"),
+    ))
+
+    asserts.false(env, "GOCACHE" in go_env, "ordinary Go work must inherit the standard build cache")
+    asserts.false(env, "GOMODCACHE" in go_env, "ordinary Go work must inherit the standard module cache")
+    asserts.equals(env, "on", go_env["GO111MODULE"])
+    asserts.equals(env, "off", go_env["GOWORK"])
+    asserts.equals(env, "go1.25.0+auto", go_env["GOTOOLCHAIN"])
+
+    return unittest.end(env)
+
+go_env_uses_standard_caches_test = unittest.make(_go_env_uses_standard_caches_test)
+
 def _fallback_go_tool_identity_test(ctx):
     env = unittest.begin(ctx)
 
@@ -323,6 +341,7 @@ def orchestrion_extension_test_suite():
         declared_go_tool_identity_test,
         fallback_go_tool_identity_test,
         git_env_test,
+        go_env_uses_standard_caches_test,
         go_module_fetch_env_test,
         host_platform_normalization_test,
         module_proxy_exact_dd_trace_go_queries_test,
