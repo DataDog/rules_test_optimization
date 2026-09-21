@@ -79,6 +79,7 @@ BAZEL_EXTRA_ARGS=(
   "--repo_env=DD_GIT_REPOSITORY_URL=${FIXTURE_GIT_REPOSITORY_URL}"
   "--repo_env=DD_GIT_BRANCH=${FIXTURE_GIT_BRANCH}"
   "--repo_env=DD_GIT_COMMIT_SHA=${FIXTURE_GIT_COMMIT_SHA}"
+  "--repo_env=GITHUB_EVENT_PATH="
 )
 HERMETIC_BUILD_FLAGS=(
   --spawn_strategy=sandboxed
