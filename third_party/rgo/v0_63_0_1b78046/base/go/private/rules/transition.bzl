@@ -179,10 +179,6 @@ go_transition = transition(
     ] + TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
 )
 
-_ORCHESTRION_ENABLED_SETTING = "//go/private/orchestrion:enabled"
-_ORCHESTRION_MODE_SETTING = "//go/private/orchestrion:mode"
-_ORCHESTRION_MODE_GENERAL = "general"
-
 _common_reset_transition_dict = dict({
     "//go/private:request_nogo": False,
     "//go/config:static": False,
@@ -197,15 +193,11 @@ _common_reset_transition_dict = dict({
 
 _reset_transition_dict = dict(_common_reset_transition_dict, **{
     "//go/private:bootstrap_nogo": True,
-    _ORCHESTRION_ENABLED_SETTING: False,
-    _ORCHESTRION_MODE_SETTING: _ORCHESTRION_MODE_GENERAL,
 })
 
 _reset_transition_keys = sorted(_reset_transition_dict.keys())
 
 _stdlib_keep_keys = sorted([
-    _ORCHESTRION_ENABLED_SETTING,
-    _ORCHESTRION_MODE_SETTING,
     "//go/config:msan",
     "//go/config:race",
     "//go/config:pure",
@@ -228,9 +220,6 @@ def _go_tool_transition_impl(settings, _attr):
 
     The settings in TOOL_INHERITED_SETTING_KEYS are an exception: they keep the
     value they had before the last go_transition.
-    Tool binaries still do not inherit Orchestrion from instrumented tests,
-    because proto generators and other build tools are not part of the test
-    binary under observation.
     """
     new_settings = dict(settings, **_reset_transition_dict)
     for key in TOOL_INHERITED_SETTING_KEYS:
@@ -420,23 +409,12 @@ def _non_go_transition_impl(settings, _attr):
         #    and cause incorrect Go setting values.
         new_settings[original_key] = ""
 
-    # Runtime tools and files reached through non-Go attributes such as data
-    # are separate executables, not part of the selected instrumented target.
-    new_settings[_ORCHESTRION_ENABLED_SETTING] = False
-    new_settings[_ORCHESTRION_MODE_SETTING] = _ORCHESTRION_MODE_GENERAL
-
     return new_settings
 
 non_go_transition = transition(
     implementation = _non_go_transition_impl,
-    inputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values() + [
-        _ORCHESTRION_ENABLED_SETTING,
-        _ORCHESTRION_MODE_SETTING,
-    ],
-    outputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values() + [
-        _ORCHESTRION_ENABLED_SETTING,
-        _ORCHESTRION_MODE_SETTING,
-    ],
+    inputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
+    outputs = TRANSITIONED_GO_SETTING_KEYS + _SETTING_KEY_TO_ORIGINAL_SETTING_KEY.values(),
 )
 
 def _check_ternary(name, value):
