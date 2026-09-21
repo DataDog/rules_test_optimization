@@ -299,9 +299,10 @@ validate it with real tests, doctor, dry-run, and upload.
 
 Go/Orchestrion validation can use significant disk through Bazel output bases,
 Go caches, and Orchestrion bootstrap artifacts. Ordinary host-side Go work uses
-the standard Go build and module caches. The persistent Datadog cache stores
-the patched Orchestrion binary, its metadata, and the offline module proxy;
-disabled Test Optimization runs do not create it.
+the standard Go build and module caches when they are writable and falls back
+to a repository-local cache when they are not. The persistent Datadog cache
+stores the patched Orchestrion binary, its metadata, and the offline module
+proxy; disabled Test Optimization runs do not create it.
 
 Safe cleanup sequence:
 

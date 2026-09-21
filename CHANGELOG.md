@@ -38,9 +38,10 @@ versioning.
 ### Changed
 
 - Orchestrion repository bootstrap now reuses Go's configured or default build
-  and module caches for ordinary Go work. The Datadog cache is reserved for
-  final patched bootstrap artifacts, and the config-disabled path leaves the
-  persistent cache untouched.
+  and module caches for ordinary Go work when they are writable, with a
+  repository-local fallback for read-only environments. The Datadog cache is
+  reserved for final patched bootstrap artifacts, and the config-disabled path
+  leaves the persistent cache untouched.
 - Go payload selection now matches the exact module identifiers emitted by the
   test runtime, including escaped fallback target names and external `_test`
   packages. One package shard carries both internal and external test metadata

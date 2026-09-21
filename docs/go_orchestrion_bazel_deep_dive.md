@@ -647,9 +647,10 @@ fail inside Bazel sandboxes even when the outer action is otherwise correct.
 
 The repository bootstrap and sandboxed builders have different cache needs:
 
-- ordinary host-side `go build` and `go list` commands inherit Go's configured
-  or platform-default `GOCACHE` and `GOMODCACHE`; this reuses the same caches as
-  other Go tooling instead of duplicating their contents
+- ordinary host-side `go build` and `go list` commands resolve Go's configured
+  or platform-default `GOCACHE` and `GOMODCACHE` and reuse each writable cache;
+  a read-only cache falls back to the repository-local
+  `.orchestrion_bootstrap_go_cache` tree instead of failing bootstrap
 - the persistent host `datadog-orchestrion-go-cache` selected by the repository
   bootstrap stores only reusable Test Optimization artifacts: the patched
   Orchestrion binary, its exact version metadata, and the offline module proxy

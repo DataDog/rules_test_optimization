@@ -221,7 +221,8 @@ Kept in the extension path:
 - host-side cache for the built Orchestrion binary, exact version metadata,
   and offline module proxy
 - standard Go `GOMODCACHE` and `GOCACHE` reuse for the ordinary `go build` and
-  `go list` work that produces those artifacts
+  `go list` work that produces those artifacts, with a repository-local
+  fallback when either standard cache is read-only
 
 Effect:
 

@@ -158,6 +158,9 @@ def verify_workspace_runtime_functional_smoke(
     optimized_snapshots = []
     for run_name in ("first", "second"):
         run_root = work_root / run_name
+        read_only_standard_caches = run_name == "second" and os.name != "nt"
+        if read_only_standard_caches:
+            prepare_read_only_standard_go_caches(run_root)
         rules_go_root = run_root / "rules_go_patched"
         workspace = run_root / "workspace"
         output_user_root = run_root / "bazel_output_user_root"
@@ -206,7 +209,11 @@ def verify_workspace_runtime_functional_smoke(
                 private_safe_patterns=private_safe_patterns,
             )
         )
-        assert_bootstrap_cache_ownership(run_root, patch)
+        assert_bootstrap_cache_ownership(
+            run_root,
+            patch,
+            expect_standard_cache_population=not read_only_standard_caches,
+        )
         plain_snapshots.append(
             run_plain_reproducibility_snapshot(
                 bazel,
@@ -276,7 +283,28 @@ def verify_workspace_runtime_functional_smoke(
     )
 
 
-def assert_bootstrap_cache_ownership(run_root: Path, patch: Path) -> None:
+def standard_go_cache_paths(run_root: Path) -> tuple[Path, Path]:
+    """Return the build and module cache paths used by the profile smoke."""
+    smoke_home = run_root / "home"
+    return (
+        smoke_home / ".cache" / "go-build",
+        smoke_home / "go" / "pkg" / "mod",
+    )
+
+
+def prepare_read_only_standard_go_caches(run_root: Path) -> None:
+    """Create empty read-only caches to exercise the repository-local fallback."""
+    for cache_path in standard_go_cache_paths(run_root):
+        cache_path.mkdir(parents=True, exist_ok=True)
+        cache_path.chmod(0o555)
+
+
+def assert_bootstrap_cache_ownership(
+    run_root: Path,
+    patch: Path,
+    *,
+    expect_standard_cache_population: bool = True,
+) -> None:
     """Require the persistent Datadog cache to contain artifacts, not Go caches."""
     smoke_home = run_root / "home"
     cache_root = smoke_home / ".cache" / "datadog-orchestrion-go-cache"
@@ -288,13 +316,16 @@ def assert_bootstrap_cache_ownership(run_root: Path, patch: Path) -> None:
             "Orchestrion bootstrap cache still owns GOCACHE/GOMODCACHE data for %s: %s"
             % (patch, legacy_go_cache)
         )
-    for standard_cache in (
-        smoke_home / ".cache" / "go-build",
-        smoke_home / "go" / "pkg" / "mod",
-    ):
-        if not standard_cache.is_dir() or not any(standard_cache.iterdir()):
+    for standard_cache in standard_go_cache_paths(run_root):
+        populated = standard_cache.is_dir() and any(standard_cache.iterdir())
+        if expect_standard_cache_population and not populated:
             raise ValueError(
                 "standard Go cache was not populated for %s: %s"
+                % (patch, standard_cache)
+            )
+        if not expect_standard_cache_population and populated:
+            raise ValueError(
+                "read-only standard Go cache was modified for %s: %s"
                 % (patch, standard_cache)
             )
 
@@ -1208,6 +1239,7 @@ def smoke_bazel_env(output_user_root: Path) -> dict[str, str]:
     """Return the minimal environment needed by the Bazel smoke test."""
     smoke_home = output_user_root.parent / "home"
     smoke_tmp = output_user_root.parent / "tmp"
+    go_build_cache, go_module_cache = standard_go_cache_paths(output_user_root.parent)
     smoke_home.mkdir(parents=True, exist_ok=True)
     smoke_tmp.mkdir(parents=True, exist_ok=True)
     path_entries: list[str] = []
@@ -1218,8 +1250,8 @@ def smoke_bazel_env(output_user_root: Path) -> dict[str, str]:
     path_entries.extend(["/usr/bin", "/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin"])
     env = {
         "HOME": smoke_home.as_posix(),
-        "GOCACHE": (smoke_home / ".cache" / "go-build").as_posix(),
-        "GOMODCACHE": (smoke_home / "go" / "pkg" / "mod").as_posix(),
+        "GOCACHE": go_build_cache.as_posix(),
+        "GOMODCACHE": go_module_cache.as_posix(),
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "LOGNAME": "rules_go_smoke",
