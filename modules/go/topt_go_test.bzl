@@ -587,6 +587,9 @@ def dd_topt_go_test(
     # phase, keeping runtime logic and user callsites simple.
     topt_go_payloads_selector(
         name = selector_name,
+        # The public test owns selection; this implementation detail should
+        # never become a top-level target through wildcard expansion.
+        tags = ["manual"],
         embeds = embed_labels,
         explicit_importpath = explicit_importpath,
         fallback_importpath = fallback_importpath,
@@ -611,6 +614,9 @@ def dd_topt_go_test(
     # configuration does not produce a false positive.
     topt_go_bazel_metadata(
         name = metadata_name,
+        # Keep metadata generation attached to the public test instead of
+        # exposing it as an independently selectable wildcard target.
+        tags = ["manual"],
         embeds = embed_labels,
         explicit_importpath = explicit_importpath or "",
         fallback_importpath = fallback_importpath or "",
