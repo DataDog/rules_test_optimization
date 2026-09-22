@@ -18,7 +18,7 @@ with a lightweight fake executable rule so we can capture what the macro
 forwards at analysis time without compiling Go code.
 """
 
-load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
+load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "loadingtest", "unittest")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_infer.bzl",
@@ -362,6 +362,45 @@ def go_macro_static_identity_mismatch_target(name, tags = None):
         repository_state = "@test_optimization_data_static//:test_optimization_repository_state",
         runtime_module = "@test_optimization_data_static//:test_optimization_runtime_module",
         tags = tags,
+    )
+
+def go_macro_internal_helper_tags_loading_tests(
+        name,
+        dynamic_target,
+        static_target,
+        disabled_target):
+    """Assert generated implementation targets stay out of wildcard selection."""
+    env = loadingtest.make(name)
+
+    for target_kind, target_name in [
+        ("dynamic", dynamic_target),
+        ("static", static_target),
+    ]:
+        for helper_kind, suffix in [
+            ("payloads", "_topt_payloads"),
+            ("metadata", "_topt_bazel_metadata"),
+        ]:
+            helper = native.existing_rule(target_name + suffix)
+            loadingtest.equals(
+                env,
+                "%s_%s_helper_tags" % (target_kind, helper_kind),
+                ("manual",),
+                helper.get("tags", []) if helper else None,
+            )
+
+    # Generated exports already know they are disabled during macro expansion,
+    # so they must continue to emit only the caller's ordinary Go test.
+    loadingtest.equals(
+        env,
+        "disabled_payloads_helper_absent",
+        None,
+        native.existing_rule(disabled_target + "_topt_payloads"),
+    )
+    loadingtest.equals(
+        env,
+        "disabled_metadata_helper_absent",
+        None,
+        native.existing_rule(disabled_target + "_topt_bazel_metadata"),
     )
 
 def go_macro_disabled_raw_target(name, tags = None):
