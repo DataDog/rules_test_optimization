@@ -138,7 +138,7 @@ def _base_go_env(ctx):
 def _parse_go_cache_paths(output):
     values = [value.strip() for value in output.strip().split("\n")]
     if len(values) != 2 or not values[0] or not values[1]:
-        fail("Unexpected output from go env GOCACHE GOMODCACHE: %r" % output)
+        return None
     return struct(gocache = values[0], gomodcache = values[1])
 
 def _select_go_cache_env(ctx, gocache, gomodcache, fallback_root, gocache_writable, gomodcache_writable):
@@ -147,19 +147,36 @@ def _select_go_cache_env(ctx, gocache, gomodcache, fallback_root, gocache_writab
         "GOMODCACHE": gomodcache if gomodcache_writable else _path_join(ctx, fallback_root, "pkg", "mod"),
     }
 
+def _fallback_go_cache_env(ctx, fallback_root):
+    return _select_go_cache_env(ctx, "", "", fallback_root, False, False)
+
+def _go_cache_probe_env(ctx):
+    env = _base_go_env(ctx)
+
+    # Resolving cache paths does not need the requested Go 1.25 toolchain. Keep
+    # this probe on the installed Go binary so an automatic toolchain download
+    # cannot fail in the read-only GOMODCACHE that we are about to replace.
+    env["GOTOOLCHAIN"] = "local"
+    return env
+
 def _go_env(ctx, go_path):
     # These are ordinary host-side Go commands. Reuse the configured or
     # platform-default caches when they are writable, but keep a repository-local
     # fallback for hermetic environments that expose read-only host cache paths.
     env = _base_go_env(ctx)
-    result = _ctx_execute_or_fail(
+    result = _ctx_execute_checked(
         ctx,
         [str(go_path), "env", "GOCACHE", "GOMODCACHE"],
-        env,
-        "Failed to resolve standard Go cache paths",
+        environment = _go_cache_probe_env(ctx),
     )
-    paths = _parse_go_cache_paths(result.stdout)
     fallback_root = str(ctx.path(".orchestrion_bootstrap_go_cache"))
+    if result.return_code != 0:
+        env.update(_fallback_go_cache_env(ctx, fallback_root))
+        return env
+    paths = _parse_go_cache_paths(result.stdout)
+    if paths == None:
+        env.update(_fallback_go_cache_env(ctx, fallback_root))
+        return env
     env.update(_select_go_cache_env(
         ctx,
         paths.gocache,
@@ -1287,8 +1304,10 @@ orchestrion_extension_test_helpers = struct(
     declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
     declared_go_tool_identity = _declared_go_tool_identity,
     fallback_go_tool_identity = _fallback_go_tool_identity,
+    fallback_go_cache_env = _fallback_go_cache_env,
     git_env = _git_env,
     go_module_fetch_env = _go_module_fetch_env,
+    go_cache_probe_env = _go_cache_probe_env,
     host_path_is_writable = _host_path_is_writable,
     module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
     module_proxy_exact_dd_trace_go_queries = _module_proxy_exact_dd_trace_go_queries,

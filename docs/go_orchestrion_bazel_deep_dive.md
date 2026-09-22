@@ -650,7 +650,10 @@ The repository bootstrap and sandboxed builders have different cache needs:
 - ordinary host-side `go build` and `go list` commands resolve Go's configured
   or platform-default `GOCACHE` and `GOMODCACHE` and reuse each writable cache;
   a read-only cache falls back to the repository-local
-  `.orchestrion_bootstrap_go_cache` tree instead of failing bootstrap
+  `.orchestrion_bootstrap_go_cache` tree instead of failing bootstrap; the
+  path probe itself sets `GOTOOLCHAIN=local` so it cannot start an automatic
+  toolchain download before that fallback is selected, and an unsupported or
+  failed cache query falls back both cache paths to that local tree
 - the persistent host `datadog-orchestrion-go-cache` selected by the repository
   bootstrap stores only reusable Test Optimization artifacts: the patched
   Orchestrion binary, its exact version metadata, and the offline module proxy

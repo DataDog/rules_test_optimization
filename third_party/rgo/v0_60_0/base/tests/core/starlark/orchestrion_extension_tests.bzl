@@ -246,9 +246,17 @@ def _go_cache_selection_test(ctx):
     asserts.equals(env, "off", base_env["GOWORK"])
     asserts.equals(env, "go1.25.0+auto", base_env["GOTOOLCHAIN"])
 
+    probe_env = orchestrion_extension_test_helpers.go_cache_probe_env(struct(
+        attr = struct(go_sdk_root = ""),
+        os = struct(environ = {}, name = "linux"),
+    ))
+    asserts.equals(env, "local", probe_env["GOTOOLCHAIN"])
+    asserts.equals(env, "go1.25.0+auto", base_env["GOTOOLCHAIN"], "cache probing must not mutate the bootstrap environment")
+
     parsed = orchestrion_extension_test_helpers.parse_go_cache_paths("/home/user/.cache/go-build\r\n/home/user/go/pkg/mod\r\n")
     asserts.equals(env, "/home/user/.cache/go-build", parsed.gocache)
     asserts.equals(env, "/home/user/go/pkg/mod", parsed.gomodcache)
+    asserts.equals(env, None, orchestrion_extension_test_helpers.parse_go_cache_paths("unsupported\n"))
 
     linux_ctx = struct(os = struct(name = "linux"))
     standard = orchestrion_extension_test_helpers.select_go_cache_env(
@@ -283,6 +291,13 @@ def _go_cache_selection_test(ctx):
     )
     asserts.equals(env, "C:\\Users\\runner\\go-build", windows_fallback["GOCACHE"])
     asserts.equals(env, "C:\\repo\\.orchestrion_bootstrap_go_cache\\pkg\\mod", windows_fallback["GOMODCACHE"])
+
+    probe_failure_fallback = orchestrion_extension_test_helpers.fallback_go_cache_env(
+        linux_ctx,
+        "/repo/.orchestrion_bootstrap_go_cache",
+    )
+    asserts.equals(env, "/repo/.orchestrion_bootstrap_go_cache/cache", probe_failure_fallback["GOCACHE"])
+    asserts.equals(env, "/repo/.orchestrion_bootstrap_go_cache/pkg/mod", probe_failure_fallback["GOMODCACHE"])
 
     return unittest.end(env)
 

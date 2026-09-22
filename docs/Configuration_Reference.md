@@ -130,8 +130,11 @@ Notes:
   when it is writable. A read-only cache is replaced for that repository
   evaluation by `.orchestrion_bootstrap_go_cache/{cache,pkg/mod}`. The separate
   persistent Datadog cache contains only the patched bootstrap artifacts and
-  offline module proxy. Config-disabled evaluation returns before any cache is
-  selected.
+  offline module proxy. Cache-path discovery uses the installed Go binary with
+  `GOTOOLCHAIN=local`, so the probe cannot begin a toolchain download through a
+  read-only module cache. If that binary cannot report cache paths, both caches
+  use the repository-local fallback. Config-disabled evaluation returns before
+  any cache is selected.
 - Bootstrap writes `dd_trace_go_version` when all traced modules resolve to one
   shared version, and `dd_trace_go_versions` when they resolve to different
   exact versions.

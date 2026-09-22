@@ -2221,10 +2221,10 @@ index 0000000..31a01c3
 +)
 diff --git a/go/private/orchestrion/extensions.bzl b/go/private/orchestrion/extensions.bzl
 new file mode 100644
-index 0000000..e346030
+index 0000000..a6a4f18
 --- /dev/null
 +++ b/go/private/orchestrion/extensions.bzl
-@@ -0,0 +1,1797 @@
+@@ -0,0 +1,1816 @@
 +# Copyright 2024 The Bazel Authors. All rights reserved.
 +#
 +# Licensed under the Apache License, Version 2.0 (the "License");
@@ -2365,7 +2365,7 @@ index 0000000..e346030
 +def _parse_go_cache_paths(output):
 +    values = [value.strip() for value in output.strip().split("\n")]
 +    if len(values) != 2 or not values[0] or not values[1]:
-+        fail("Unexpected output from go env GOCACHE GOMODCACHE: %r" % output)
++        return None
 +    return struct(gocache = values[0], gomodcache = values[1])
 +
 +def _select_go_cache_env(ctx, gocache, gomodcache, fallback_root, gocache_writable, gomodcache_writable):
@@ -2374,19 +2374,36 @@ index 0000000..e346030
 +        "GOMODCACHE": gomodcache if gomodcache_writable else _path_join(ctx, fallback_root, "pkg", "mod"),
 +    }
 +
++def _fallback_go_cache_env(ctx, fallback_root):
++    return _select_go_cache_env(ctx, "", "", fallback_root, False, False)
++
++def _go_cache_probe_env(ctx):
++    env = _base_go_env(ctx)
++
++    # Resolving cache paths does not need the requested Go 1.25 toolchain. Keep
++    # this probe on the installed Go binary so an automatic toolchain download
++    # cannot fail in the read-only GOMODCACHE that we are about to replace.
++    env["GOTOOLCHAIN"] = "local"
++    return env
++
 +def _go_env(ctx, go_path):
 +    # These are ordinary host-side Go commands. Reuse the configured or
 +    # platform-default caches when they are writable, but keep a repository-local
 +    # fallback for hermetic environments that expose read-only host cache paths.
 +    env = _base_go_env(ctx)
-+    result = _ctx_execute_or_fail(
++    result = _ctx_execute_checked(
 +        ctx,
 +        [str(go_path), "env", "GOCACHE", "GOMODCACHE"],
-+        env,
-+        "Failed to resolve standard Go cache paths",
++        environment = _go_cache_probe_env(ctx),
 +    )
-+    paths = _parse_go_cache_paths(result.stdout)
 +    fallback_root = str(ctx.path(".orchestrion_bootstrap_go_cache"))
++    if result.return_code != 0:
++        env.update(_fallback_go_cache_env(ctx, fallback_root))
++        return env
++    paths = _parse_go_cache_paths(result.stdout)
++    if paths == None:
++        env.update(_fallback_go_cache_env(ctx, fallback_root))
++        return env
 +    env.update(_select_go_cache_env(
 +        ctx,
 +        paths.gocache,
@@ -3514,8 +3531,10 @@ index 0000000..e346030
 +    declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
 +    declared_go_tool_identity = _declared_go_tool_identity,
 +    fallback_go_tool_identity = _fallback_go_tool_identity,
++    fallback_go_cache_env = _fallback_go_cache_env,
 +    git_env = _git_env,
 +    go_module_fetch_env = _go_module_fetch_env,
++    go_cache_probe_env = _go_cache_probe_env,
 +    host_path_is_writable = _host_path_is_writable,
 +    module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
 +    module_proxy_exact_dd_trace_go_queries = _module_proxy_exact_dd_trace_go_queries,
@@ -18739,10 +18758,10 @@ index a1cd2ea..406e52f 100644
      )
 diff --git a/tests/core/starlark/orchestrion_extension_tests.bzl b/tests/core/starlark/orchestrion_extension_tests.bzl
 new file mode 100644
-index 0000000..9fcadae
+index 0000000..229fbc3
 --- /dev/null
 +++ b/tests/core/starlark/orchestrion_extension_tests.bzl
-@@ -0,0 +1,391 @@
+@@ -0,0 +1,406 @@
 +load("@bazel_skylib//lib:unittest.bzl", "asserts", "unittest")
 +load("//go/private/orchestrion:extensions.bzl", "orchestrion_extension_test_helpers")
 +
@@ -18991,9 +19010,17 @@ index 0000000..9fcadae
 +    asserts.equals(env, "off", base_env["GOWORK"])
 +    asserts.equals(env, "go1.25.0+auto", base_env["GOTOOLCHAIN"])
 +
++    probe_env = orchestrion_extension_test_helpers.go_cache_probe_env(struct(
++        attr = struct(go_sdk_root = ""),
++        os = struct(environ = {}, name = "linux"),
++    ))
++    asserts.equals(env, "local", probe_env["GOTOOLCHAIN"])
++    asserts.equals(env, "go1.25.0+auto", base_env["GOTOOLCHAIN"], "cache probing must not mutate the bootstrap environment")
++
 +    parsed = orchestrion_extension_test_helpers.parse_go_cache_paths("/home/user/.cache/go-build\r\n/home/user/go/pkg/mod\r\n")
 +    asserts.equals(env, "/home/user/.cache/go-build", parsed.gocache)
 +    asserts.equals(env, "/home/user/go/pkg/mod", parsed.gomodcache)
++    asserts.equals(env, None, orchestrion_extension_test_helpers.parse_go_cache_paths("unsupported\n"))
 +
 +    linux_ctx = struct(os = struct(name = "linux"))
 +    standard = orchestrion_extension_test_helpers.select_go_cache_env(
@@ -19028,6 +19055,13 @@ index 0000000..9fcadae
 +    )
 +    asserts.equals(env, "C:\\Users\\runner\\go-build", windows_fallback["GOCACHE"])
 +    asserts.equals(env, "C:\\repo\\.orchestrion_bootstrap_go_cache\\pkg\\mod", windows_fallback["GOMODCACHE"])
++
++    probe_failure_fallback = orchestrion_extension_test_helpers.fallback_go_cache_env(
++        linux_ctx,
++        "/repo/.orchestrion_bootstrap_go_cache",
++    )
++    asserts.equals(env, "/repo/.orchestrion_bootstrap_go_cache/cache", probe_failure_fallback["GOCACHE"])
++    asserts.equals(env, "/repo/.orchestrion_bootstrap_go_cache/pkg/mod", probe_failure_fallback["GOMODCACHE"])
 +
 +    return unittest.end(env)
 +

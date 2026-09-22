@@ -41,7 +41,9 @@ versioning.
   and module caches for ordinary Go work when they are writable, with a
   repository-local fallback for read-only environments. The Datadog cache is
   reserved for final patched bootstrap artifacts, and the config-disabled path
-  leaves the persistent cache untouched.
+  leaves the persistent cache untouched. Cache discovery stays on the installed
+  Go toolchain so read-only module caches cannot block fallback selection, and
+  unsupported cache queries fall back instead of aborting bootstrap.
 - Go payload selection now matches the exact module identifiers emitted by the
   test runtime, including escaped fallback target names and external `_test`
   packages. One package shard carries both internal and external test metadata
