@@ -477,6 +477,7 @@ class ManifestSyncHarness:
             "DD_ENV": "ci",
             "DD_TEST_OPTIMIZATION_ENABLED": "1" if enabled else "0",
             "DISABLE_CI_METADATA": "1",
+            "GITHUB_EVENT_PATH": "",
         }
         if enabled:
             values.update(

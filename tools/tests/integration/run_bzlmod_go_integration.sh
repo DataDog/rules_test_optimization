@@ -91,6 +91,7 @@ BAZEL_EXTRA_ARGS+=(
   "--repo_env=DD_GIT_REPOSITORY_URL=${FIXTURE_GIT_REPOSITORY_URL}"
   "--repo_env=DD_GIT_BRANCH=${FIXTURE_GIT_BRANCH}"
   "--repo_env=DD_GIT_COMMIT_SHA=${FIXTURE_GIT_COMMIT_SHA}"
+  "--repo_env=GITHUB_EVENT_PATH="
 )
 
 source "$REPO_ROOT/tools/tests/integration/go_integration_mock_server.sh"
@@ -1318,6 +1319,9 @@ run_disabled_no_fetch_smoke() {
   local genquery_log="$TMP_ROOT/disabled-genquery.log"
   local repository_files="$TMP_ROOT/disabled-orchestrion-repository.files"
   local test_log="$TMP_ROOT/disabled-test.log"
+  local disabled_home="$TMP_ROOT/disabled-home"
+  local disabled_xdg="$TMP_ROOT/disabled-xdg-cache"
+  local disabled_orchestrion_cache="$disabled_xdg/datadog-orchestrion-go-cache"
   local test_target_path="${HELLO_TEST_TARGET#//}"
   local test_package="${test_target_path%%:*}"
   local test_name="${test_target_path#*:}"
@@ -1330,6 +1334,8 @@ run_disabled_no_fetch_smoke() {
     -u DD_API_KEY
     -u DD_SITE
     -u DD_TEST_OPTIMIZATION_ENABLED
+    HOME="$disabled_home"
+    XDG_CACHE_HOME="$disabled_xdg"
   )
   local aliases=(
     tool_binary
@@ -1340,7 +1346,8 @@ run_disabled_no_fetch_smoke() {
   )
 
   rm -rf "$ws_dir"
-  mkdir -p "$ws_dir"
+  rm -rf "$disabled_orchestrion_cache"
+  mkdir -p "$ws_dir" "$disabled_home" "$disabled_xdg"
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir" "rules_go"
@@ -1460,6 +1467,12 @@ run_disabled_no_fetch_smoke() {
       exit 1
     fi
   done
+
+  if [[ -e "$disabled_orchestrion_cache" ]]; then
+    echo "error: disabled Bzlmod smoke wrote the Test Optimization Orchestrion cache" >&2
+    find "$disabled_orchestrion_cache" -maxdepth 3 -print >&2
+    exit 1
+  fi
 }
 
 run_windows_enabled_smoke() {

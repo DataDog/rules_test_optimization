@@ -218,15 +218,22 @@ Effect:
 
 Kept in the extension path:
 
-- host-side cache for the built Orchestrion binary and
-  `dd_trace_go_versions.json`
-- stable host-side `GOMODCACHE` and `GOCACHE`
+- host-side cache for the built Orchestrion binary, exact version metadata,
+  and offline module proxy
+- standard Go `GOMODCACHE` and `GOCACHE` reuse for the ordinary `go build` and
+  `go list` work that produces those artifacts, with a repository-local
+  fallback when either standard cache is read-only
 
 Effect:
 
 - warm bootstrap reuse is now real across fresh Bazel output bases
 - warm bootstrap dropped from "rebuild the tool again" to "restore cached
   artifact and continue"
+- the Test Optimization cache no longer duplicates Go's normal module and
+  build caches
+
+The config-disabled repository exits before Go discovery and cache selection,
+so it does not create or update the Test Optimization cache.
 
 ### 3. Removing tool-side Orchestrion module repinning
 

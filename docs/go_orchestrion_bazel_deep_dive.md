@@ -643,22 +643,31 @@ injectors and package files.
 Without writable caches and module storage, Orchestrion's internal `go` calls
 fail inside Bazel sandboxes even when the outer action is otherwise correct.
 
-### Shared cache reuse
+### Cache ownership
 
-Bootstrap and sandboxed builder steps share the
-`datadog-orchestrion-go-cache` namespace, but not always the exact same root
-path.
+The repository bootstrap and sandboxed builders have different cache needs:
 
-- the builder and extension prefer a persistent host cache root
-- the guided bootstrap CLI uses a temp-rooted cache location for its own local
-  workflow unless you override the environment
+- ordinary host-side `go build` and `go list` commands resolve Go's configured
+  or platform-default `GOCACHE` and `GOMODCACHE` and reuse each writable cache;
+  a read-only cache falls back to the repository-local
+  `.orchestrion_bootstrap_go_cache` tree instead of failing bootstrap; the
+  path probe itself sets `GOTOOLCHAIN=local` so it cannot start an automatic
+  toolchain download before that fallback is selected, and an unsupported or
+  failed cache query falls back both cache paths to that local tree
+- the persistent host `datadog-orchestrion-go-cache` selected by the repository
+  bootstrap stores only reusable Test Optimization artifacts: the patched
+  Orchestrion binary, its exact version metadata, and the offline module proxy
+- builder subprocesses keep writable action-specific Go caches because Bazel
+  sandboxes cannot safely depend on a developer's host cache and must resolve
+  instrumented dependencies through the declared offline proxy; those
+  transient roots may use the same namespace but are not the host bootstrap
+  cache
+- stdlib instrumentation remains in Bazel-declared outputs rather than either
+  host cache
 
-This still lets Orchestrion reuse fetched modules instead of redownloading them
-for each sandboxed step.
-
-The shared cache is not just a performance optimization. It keeps bootstrap-time
-pinning and sandboxed builder steps working against the same downloaded module
-set.
+The config-disabled repository returns its empty interface before it discovers
+the Go SDK or selects a bootstrap cache, so an ordinary build does not create a
+Test Optimization cache directory.
 
 ### GOROOT and SDK compatibility
 

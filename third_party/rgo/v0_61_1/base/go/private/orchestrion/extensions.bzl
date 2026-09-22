@@ -101,9 +101,6 @@ def _bootstrap_cache_root(ctx):
         return host_root
     return _bootstrap_repo_local_cache_root(ctx)
 
-def _bootstrap_go_cache_root(ctx):
-    return _path_join(ctx, _bootstrap_cache_root(ctx), "go")
-
 def _git_env(ctx):
     # GOPROXY=direct may invoke Git. Keep that fallback independent from host
     # rewrites, credential helpers, and interactive prompts.
@@ -128,17 +125,66 @@ def _go_module_fetch_env(ctx):
         "GOSUMDB": "sum.golang.org https://sum.golang.org",
     }
 
-def _go_env(ctx):
-    go_cache_root = _bootstrap_go_cache_root(ctx)
+def _base_go_env(ctx):
     env = {
         "GO111MODULE": "on",
         "GOWORK": "off",
         "GOTOOLCHAIN": "local" if ctx.attr.go_sdk_root.strip() else "go1.25.0+auto",
-        "GOMODCACHE": _path_join(ctx, go_cache_root, "pkg", "mod"),
-        "GOCACHE": _path_join(ctx, go_cache_root, "cache"),
     }
     env.update(_go_module_fetch_env(ctx))
     env.update(_git_env(ctx))
+    return env
+
+def _parse_go_cache_paths(output):
+    values = [value.strip() for value in output.strip().split("\n")]
+    if len(values) != 2 or not values[0] or not values[1]:
+        return None
+    return struct(gocache = values[0], gomodcache = values[1])
+
+def _select_go_cache_env(ctx, gocache, gomodcache, fallback_root, gocache_writable, gomodcache_writable):
+    return {
+        "GOCACHE": gocache if gocache_writable else _path_join(ctx, fallback_root, "cache"),
+        "GOMODCACHE": gomodcache if gomodcache_writable else _path_join(ctx, fallback_root, "pkg", "mod"),
+    }
+
+def _fallback_go_cache_env(ctx, fallback_root):
+    return _select_go_cache_env(ctx, "", "", fallback_root, False, False)
+
+def _go_cache_probe_env(ctx):
+    env = _base_go_env(ctx)
+
+    # Resolving cache paths does not need the requested Go 1.25 toolchain. Keep
+    # this probe on the installed Go binary so an automatic toolchain download
+    # cannot fail in the read-only GOMODCACHE that we are about to replace.
+    env["GOTOOLCHAIN"] = "local"
+    return env
+
+def _go_env(ctx, go_path):
+    # These are ordinary host-side Go commands. Reuse the configured or
+    # platform-default caches when they are writable, but keep a repository-local
+    # fallback for hermetic environments that expose read-only host cache paths.
+    env = _base_go_env(ctx)
+    result = _ctx_execute_checked(
+        ctx,
+        [str(go_path), "env", "GOCACHE", "GOMODCACHE"],
+        environment = _go_cache_probe_env(ctx),
+    )
+    fallback_root = str(ctx.path(".orchestrion_bootstrap_go_cache"))
+    if result.return_code != 0:
+        env.update(_fallback_go_cache_env(ctx, fallback_root))
+        return env
+    paths = _parse_go_cache_paths(result.stdout)
+    if paths == None:
+        env.update(_fallback_go_cache_env(ctx, fallback_root))
+        return env
+    env.update(_select_go_cache_env(
+        ctx,
+        paths.gocache,
+        paths.gomodcache,
+        fallback_root,
+        paths.gocache != "off" and _host_path_is_writable(ctx, paths.gocache),
+        _host_path_is_writable(ctx, paths.gomodcache),
+    ))
     return env
 
 def _probe_enabled(ctx):
@@ -494,7 +540,7 @@ def _parse_key_value_lines(output, expected_keys, error_prefix):
     return resolved
 
 def _batch_resolve_module_versions(ctx, go_path, check_dir, query_by_module, error_prefix):
-    env = _go_env(ctx)
+    env = _go_env(ctx, go_path)
     format_expr = "{{if .Path}}{{.Path}}={{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}{{end}}"
     args = [
         str(go_path),
@@ -519,7 +565,7 @@ def _batch_resolve_module_versions(ctx, go_path, check_dir, query_by_module, err
     return _parse_key_value_lines(result.stdout, _DD_TRACE_GO_MODULES, error_prefix)
 
 def _run_dd_trace_go_package_preflight(ctx, go_path, version_map):
-    env = _go_env(ctx)
+    env = _go_env(ctx, go_path)
     check_dir = ".ddtrace_version_check"
     ctx.file(check_dir + "/go.mod", _neutral_dd_trace_check_go_mod(version_map))
 
@@ -630,7 +676,7 @@ def _validated_pin_file_dd_trace_go_versions(ctx, go_path, pin_files):
     check_dir = ".ddtrace_pin_check"
     ctx.file(check_dir + "/go.mod", ctx.read(ctx.path(go_mod)))
     ctx.file(check_dir + "/go.sum", ctx.read(ctx.path(go_sum)))
-    env = _go_env(ctx)
+    env = _base_go_env(ctx)
     pin_cache_root = str(ctx.path(".ddtrace_pin_check_go"))
     env["GOMODCACHE"] = _path_join(ctx, pin_cache_root, "pkg", "mod")
     env["GOCACHE"] = _path_join(ctx, pin_cache_root, "cache")
@@ -997,7 +1043,7 @@ def _write_orchestrion_module_proxy(ctx, go_path, version, version_map):
     seed_dir = ".orchestrion_module_proxy_seed"
     seed_cache_root = ".orchestrion_module_proxy_seed_go"
     seed_cache_root_path = str(ctx.path(seed_cache_root))
-    seed_env = _go_env(ctx)
+    seed_env = _base_go_env(ctx)
     seed_env["GOMODCACHE"] = _path_join(ctx, seed_cache_root_path, "pkg", "mod")
     seed_env["GOCACHE"] = _path_join(ctx, seed_cache_root_path, "cache")
 
@@ -1254,11 +1300,14 @@ orchestrion_extension_test_helpers = struct(
     bootstrap_manifest_content = _bootstrap_manifest_content,
     bootstrap_cache_paths = _bootstrap_cache_paths_with_root,
     bootstrap_cache_required_entries = _bootstrap_cache_required_entries,
+    base_go_env = _base_go_env,
     declared_dd_trace_go_versions = _declared_dd_trace_go_versions,
     declared_go_tool_identity = _declared_go_tool_identity,
     fallback_go_tool_identity = _fallback_go_tool_identity,
+    fallback_go_cache_env = _fallback_go_cache_env,
     git_env = _git_env,
     go_module_fetch_env = _go_module_fetch_env,
+    go_cache_probe_env = _go_cache_probe_env,
     host_path_is_writable = _host_path_is_writable,
     module_proxy_resolved_modules_json = _module_proxy_resolved_modules_json,
     module_proxy_exact_dd_trace_go_queries = _module_proxy_exact_dd_trace_go_queries,
@@ -1266,7 +1315,9 @@ orchestrion_extension_test_helpers = struct(
     normalize_host_goarch = _normalize_host_goarch,
     normalize_host_goos = _normalize_host_goos,
     parse_certutil_sha256 = _parse_certutil_sha256,
+    parse_go_cache_paths = _parse_go_cache_paths,
     powershell_single_quoted_literal = _powershell_single_quoted_literal,
+    select_go_cache_env = _select_go_cache_env,
     patch_resolver_cycle_guard = _patch_resolver_cycle_guard,
 )
 
@@ -1594,7 +1645,7 @@ func fallbackLookup(primary func(string) (io.ReadCloser, error)) func(string) (i
     # Build the patched Orchestrion tool from its upstream module graph. The
     # configured tracer versions are written to dd_trace_go_versions.json and
     # enforced later against the target module by the builder/runtime path.
-    go_env = _go_env(ctx)
+    go_env = _go_env(ctx, go_path)
     build_args = [
         str(go_path),
         "build",
