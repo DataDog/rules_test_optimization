@@ -1308,7 +1308,7 @@ filegroup(
     throw "execution-log uploader dry-run failed with exit code $executionLogExitCode`n$(Get-Content -LiteralPath $executionLogTranscript -Raw -ErrorAction SilentlyContinue)"
   }
   $executionLogOutput = Get-Content -LiteralPath $executionLogTranscript -Raw -Encoding UTF8
-  if (-not $executionLogOutput.Contains("skipping cached or non-current test output")) {
+  if (-not $executionLogOutput.Contains("freshness summary: skipped_cached_or_non_current_outputs=")) {
     throw "execution-log uploader dry-run did not report a cached-output skip"
   }
   if (-not $executionLogOutput.Contains("dry-run validated 1 test payloads")) {
@@ -1395,7 +1395,7 @@ filegroup(
   if (-not $bepDryRunOutput.Contains("dry-run validated 1 test payloads")) {
     throw "BEP uploader dry-run did not process exactly one fresh payload`n$bepDryRunOutput"
   }
-  if (-not $bepDryRunOutput.Contains("skipping cached or non-current test output")) {
+  if (-not $bepDryRunOutput.Contains("freshness summary: skipped_cached_or_non_current_outputs=")) {
     throw "BEP uploader dry-run did not report cached/non-current skips`n$bepDryRunOutput"
   }
   if ($bepDryRunOutput.Contains("bazel.target metadata is missing")) {
@@ -1719,7 +1719,7 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 	  if (-not $bepOptionalFilterOutput.Contains("freshness filtering enabled: source=bep") -or -not $bepOptionalFilterOutput.Contains("dry-run validated 1 test payloads")) {
 	    throw "optional BEP dry-run did not filter to the fresh payload`n$bepOptionalFilterOutput"
 	  }
-	  if (-not $bepOptionalFilterOutput.Contains("skipping cached or non-current test output")) {
+	  if (-not $bepOptionalFilterOutput.Contains("freshness summary: skipped_cached_or_non_current_outputs=")) {
 	    throw "optional BEP dry-run did not report cached/non-current skips`n$bepOptionalFilterOutput"
 	  }
 	  if (@(Read-NewLogEntries -Path $mockLog -StartIndex $bepOptionalFilterStart).Count -ne 0) {
@@ -1774,7 +1774,7 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 	    throw "cached-only BEP upload sent requests to the mock server"
 	  }
 	  $bepCachedOnlyOutput = Get-Content -LiteralPath $bepCachedOnlyTranscript -Raw -Encoding UTF8
-	  if (-not $bepCachedOnlyOutput.Contains("skipping cached or non-current test output")) {
+	  if (-not $bepCachedOnlyOutput.Contains("freshness summary: skipped_cached_or_non_current_outputs=")) {
 	    throw "cached-only BEP upload did not report cached/non-current skips`n$bepCachedOnlyOutput"
 	  }
 	  if (-not (Test-Path -LiteralPath (Join-Path $bepCachedLocalOutputs "payloads/tests/span_events_cached_local_bep.json") -PathType Leaf) -or -not (Test-Path -LiteralPath (Join-Path $bepCachedRemoteOutputs "payloads/tests/span_events_cached_remote_bep.json") -PathType Leaf)) {
@@ -2038,7 +2038,7 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 	    throw "optional BEP remote-only scenario failed with exit code $bepOptionalRemoteOnlyExitCode`n$(Get-Content -LiteralPath $bepOptionalRemoteOnlyTranscript -Raw -ErrorAction SilentlyContinue)"
 	  }
 	  $bepOptionalRemoteOnlyOutput = Get-Content -LiteralPath $bepOptionalRemoteOnlyTranscript -Raw -Encoding UTF8
-		  if (-not $bepOptionalRemoteOnlyOutput.Contains("freshness filtering enabled: source=bep") -or -not $bepOptionalRemoteOnlyOutput.Contains("warning: BEP references remote-only test outputs") -or -not $bepOptionalRemoteOnlyOutput.Contains("skipping cached or non-current test output") -or -not $bepOptionalRemoteOnlyOutput.Contains("--remote_download_minimal") -or -not $bepOptionalRemoteOnlyOutput.Contains("--remote_download_regex=.*test[.]outputs.*")) {
+		  if (-not $bepOptionalRemoteOnlyOutput.Contains("freshness filtering enabled: source=bep") -or -not $bepOptionalRemoteOnlyOutput.Contains("warning: BEP references remote-only test outputs") -or -not $bepOptionalRemoteOnlyOutput.Contains("freshness summary: skipped_cached_or_non_current_outputs=") -or -not $bepOptionalRemoteOnlyOutput.Contains("--remote_download_minimal") -or -not $bepOptionalRemoteOnlyOutput.Contains("--remote_download_regex=.*test[.]outputs.*")) {
 		    throw "optional BEP remote-only scenario did not warn and skip`n$bepOptionalRemoteOnlyOutput"
 		  }
 
@@ -2051,7 +2051,7 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 	    throw "optional BEP missing-output scenario failed with exit code $bepOptionalMissingOutputExitCode`n$(Get-Content -LiteralPath $bepOptionalMissingOutputTranscript -Raw -ErrorAction SilentlyContinue)"
 	  }
 	  $bepOptionalMissingOutputOutput = Get-Content -LiteralPath $bepOptionalMissingOutputTranscript -Raw -Encoding UTF8
-		  if (-not $bepOptionalMissingOutputOutput.Contains("skipping cached or non-current test output") -or -not $bepOptionalMissingOutputOutput.Contains("warning: BEP optional freshness skipped") -or -not $bepOptionalMissingOutputOutput.Contains("did not contain a mappable test.outputs reference")) {
+		  if (-not $bepOptionalMissingOutputOutput.Contains("freshness summary: skipped_cached_or_non_current_outputs=") -or -not $bepOptionalMissingOutputOutput.Contains("warning: BEP optional freshness skipped") -or -not $bepOptionalMissingOutputOutput.Contains("did not contain a mappable test.outputs reference")) {
 		    throw "optional BEP missing-output scenario did not warn and skip local payloads`n$bepOptionalMissingOutputOutput"
 		  }
 

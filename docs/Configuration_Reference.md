@@ -692,6 +692,54 @@ Additional mapped metadata inputs include:
 - `TRAVIS_JOB_WEB_URL`
 - `BUILD_URL`
 
+## Log levels
+
+`DD_TEST_OPTIMIZATION_LOG_LEVEL` controls this rule's metadata-sync, doctor,
+schema-validator, and uploader diagnostics. It applies to the Python uploader
+and the legacy Bash and PowerShell runtimes.
+
+| Level | Output |
+| --- | --- |
+| `ERROR` | Failures, including configuration and upload errors |
+| `WARN` | Errors and warnings about recoverable problems |
+| `INFO` | Warnings, errors, progress, and summary counts; this is the default |
+| `DEBUG` | All of the above plus individual cached-output paths and diagnostic details |
+
+Values are case-insensitive; surrounding whitespace is ignored. An empty value
+acts as unset. Other values fail with a configuration error. An explicit level
+takes precedence over `debug = True`, `DD_TEST_OPTIMIZATION_DEBUG=1`, the
+uploader's `--debug`, and the schema validator's debug switch. Those switches
+continue to work when the new setting is unset.
+
+Export the variable for host-side tools and forward it to Bazel repositories:
+
+```bash
+export DD_TEST_OPTIMIZATION_LOG_LEVEL=WARN
+bazel test --config=test-optimization \
+  --repo_env=DD_TEST_OPTIMIZATION_LOG_LEVEL //pkg:test.topt
+bazel run --config=test-optimization \
+  --repo_env=DD_TEST_OPTIMIZATION_LOG_LEVEL //tools/test_optimization:dd_test_optimization_doctor
+bazel run --config=test-optimization \
+  --repo_env=DD_TEST_OPTIMIZATION_LOG_LEVEL //tools/test_optimization:dd_upload_payloads
+```
+
+For repeated use, add `common --repo_env=DD_TEST_OPTIMIZATION_LOG_LEVEL` to
+your `.bazelrc`. In PowerShell, set `$env:DD_TEST_OPTIMIZATION_LOG_LEVEL = "WARN"`
+before the same Bazel commands. Do not pass this variable through `--test_env`
+or `--action_env`.
+
+Changing a tracked repository environment value can make Bazel reevaluate
+metadata repositories and fetch again. The log level itself is not written
+into generated test inputs. Unchanged backend metadata still produces the
+same test inputs; request timing in post-test telemetry may differ.
+
+Filtering affects human-readable diagnostics on their existing stdout/stderr
+streams. It does not change JSON reports, helper return values, payload
+selection, uploads, or exit codes. Errors remain visible at every level.
+Bazel's own output, compiler/Orchestrion subprocess diagnostics, explicitly
+requested bootstrap probe records, and test/tracer logs keep their own
+controls. This setting does not enable `DD_TRACE_DEBUG` or add GitLab sections.
+
 ## Uploader runtime environment variables
 
 The doctor and/or uploader runtimes read these variables at `bazel run` time:
@@ -704,7 +752,8 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_AGENTLESS_URL` | Optional agentless intake base override for test/dev setups |
 | `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | Keep payload files after successful upload |
 | `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` uploads all payloads; `1` restricts to `span_events_*.json` / `coverage_*.json` |
-| `DD_TEST_OPTIMIZATION_DEBUG` | Enable verbose uploader logs |
+| `DD_TEST_OPTIMIZATION_LOG_LEVEL` | `ERROR`, `WARN`, `INFO` (default), or `DEBUG`; see [log levels](#log-levels) |
+| `DD_TEST_OPTIMIZATION_DEBUG` | Legacy verbose logging switch, used when `DD_TEST_OPTIMIZATION_LOG_LEVEL` is unset |
 | `DD_TEST_OPTIMIZATION_GZIP` | Gzip test payloads before upload |
 | `DD_TEST_OPTIMIZATION_WORKERS` | Override the maximum independent payload-file workers in Python mode; must be a positive integer |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | Override uploader max wait |

@@ -19,6 +19,7 @@ deterministic so they can be tested without executing a repository rule.
 load(
     "//tools/core:common_utils.bzl",
     "fail_with_prefix",
+    "resolve_log_level",
     "sanitize_label_fragment",
     "validate_runtime_name",
     "validate_runtime_version",
@@ -125,13 +126,13 @@ def _normalize_runtime(runtime, location):
         "module_path": module_path,
     }
 
-def _normalize_context(raw_context, index):
+def _normalize_context(raw_context, index, log_level = "INFO"):
     location = "contexts[%d]" % index
     if not _is_dict(raw_context):
         _fail("%s must be an object" % location)
     _validate_keys(raw_context, ["key", "service", "runtime"], location)
     service = _required_string(raw_context.get("service"), "%s.service" % location)
-    validate_service_name(service, False)
+    validate_service_name(service, False, log_level)
     runtime = _normalize_runtime(raw_context.get("runtime"), "%s.runtime" % location)
     expected_key = _context_key(service, runtime["name"])
     key = _required_string(raw_context.get("key"), "%s.key" % location)
@@ -170,7 +171,7 @@ def _normalize_target(raw_target, index, contexts):
         "service_derivation": derivation,
     }
 
-def _normalize_manifest(value):
+def _normalize_manifest(value, log_level = "INFO"):
     """Validate and deterministically normalize a decoded manifest object."""
     if not _is_dict(value):
         _fail("manifest root must be an object")
@@ -190,7 +191,7 @@ def _normalize_manifest(value):
 
     contexts_by_key = {}
     for index in range(len(raw_contexts)):
-        context = _normalize_context(raw_contexts[index], index)
+        context = _normalize_context(raw_contexts[index], index, log_level)
         key = context["key"]
         if key in contexts_by_key:
             _fail("duplicate context key %r" % key)
@@ -219,11 +220,11 @@ def _normalize_manifest(value):
         "targets": [targets_by_label[label] for label in sorted(targets_by_label.keys())],
     }
 
-def _decode_manifest(content):
+def _decode_manifest(content, log_level = "INFO"):
     """Decode and normalize manifest JSON content."""
     if not _is_string(content) or not content.strip():
         _fail("manifest file must contain non-empty UTF-8 JSON")
-    return _normalize_manifest(json.decode(content))
+    return _normalize_manifest(json.decode(content), log_level)
 
 def _render_expected_targets(manifest):
     """Render the exact sorted selected-target contract for doctor."""
@@ -459,7 +460,7 @@ def _manifest_sync_impl(ctx):
     manifest_path = (ctx.os.environ.get(_MANIFEST_ENV) or "").strip()
     if not manifest_path:
         _fail("%s must point to the invocation-scoped manifest while enabled" % _MANIFEST_ENV)
-    manifest = _decode_manifest(ctx.read(ctx.path(manifest_path)))
+    manifest = _decode_manifest(ctx.read(ctx.path(manifest_path)), resolve_log_level(ctx.os.environ))
 
     aggregate_repo_name = ctx.attr.repo_name or ctx.name
     context_root = (ctx.attr.out_dir or "contexts").strip().strip("/")

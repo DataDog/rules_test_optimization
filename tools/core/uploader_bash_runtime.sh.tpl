@@ -11,12 +11,24 @@ set -euo pipefail
 # by Starlark during rule execution. Double braces { and } are literal braces
 # (escaped for Python .format() compatibility).
 
-# Logging functions (defined first so other functions can use them)
-# DEBUG is set later, so we use a function that checks the variable at runtime
-log() { echo "[dd-uploader] $1"; }
+# Keep filtering at the diagnostic boundary, not on stdout: helper functions
+# also return machine-readable paths and values on that stream.
+LOG_LEVEL=$(printf '%s' "${DD_TEST_OPTIMIZATION_LOG_LEVEL:-}" | tr '[:lower:]' '[:upper:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+case "$LOG_LEVEL" in
+    ''|ERROR|WARN|INFO|DEBUG) ;;
+    *) echo '[dd-uploader] error: DD_TEST_OPTIMIZATION_LOG_LEVEL must be ERROR, WARN, INFO, or DEBUG' >&2; exit 2 ;;
+esac
+log_enabled() {
+    case "$1" in
+        error:*|ERROR:*|*upload\ failed:*|done\ with*) return 0 ;;
+        warning:*|WARNING:*) [[ "$LOG_LEVEL" != "ERROR" ]] ;;
+        *) [[ "$LOG_LEVEL" != "ERROR" && "$LOG_LEVEL" != "WARN" ]] ;;
+    esac
+}
+log() { if log_enabled "$1"; then echo "[dd-uploader] $1"; fi; }
 # Selector helpers sometimes run under command substitution, so warnings that
 # must stay visible need an explicit stderr path instead of stdout.
-log_stderr() { echo "[dd-uploader] $1" >&2; }
+log_stderr() { if log_enabled "$1"; then echo "[dd-uploader] $1" >&2; fi; }
 optional_bep_unavailable() {
     local message="$1"
     if [[ "${FRESHNESS_MODE:-}" != "optional" ]]; then
@@ -30,6 +42,10 @@ optional_bep_unavailable() {
 DEBUG_BOOTSTRAP=$(echo "${DD_TEST_OPTIMIZATION_DEBUG:-0}" | tr '[:upper:]' '[:lower:]')
 # Handle dbg behavior.
 dbg() {
+    if [[ -n "$LOG_LEVEL" ]]; then
+        if [[ "$LOG_LEVEL" == "DEBUG" ]]; then echo "[dd-uploader][dbg] $1" >&2; fi
+        return 0
+    fi
     local dbg_val="${DEBUG:-$DEBUG_BOOTSTRAP}"
     dbg_val=$(echo "$dbg_val" | tr '[:upper:]' '[:lower:]')
     if [[ "$dbg_val" == "1" || "$dbg_val" == "true" || "$dbg_val" == "yes" ]]; then
@@ -800,6 +816,10 @@ FAIL_ON_ERROR=$(normalize_bool "__DDTPL_FAIL_ON_ERROR__")
 KEEP_PAYLOADS=$(normalize_bool "${DD_TEST_OPTIMIZATION_KEEP_PAYLOADS:-__DDTPL_KEEP_PAYLOADS__}")
 FILTER_PREFIX=$(normalize_bool "${DD_TEST_OPTIMIZATION_FILTER_PREFIX:-__DDTPL_FILTER_PREFIX__}")
 DEBUG=$(normalize_bool "${DD_TEST_OPTIMIZATION_DEBUG:-__DDTPL_DEBUG__}")
+if [[ -n "$LOG_LEVEL" ]]; then
+    DEBUG=0
+    if [[ "$LOG_LEVEL" == "DEBUG" ]]; then DEBUG=1; fi
+fi
 GZIP_PAYLOADS=$(normalize_bool "${DD_TEST_OPTIMIZATION_GZIP:-__DDTPL_GZIP_PAYLOADS__}")
 TEST_PAYLOAD_SPLIT_TARGET_BYTES=4500000
 TEST_PAYLOAD_MAX_BYTES=5000000
@@ -3826,7 +3846,7 @@ log_execution_skip_once() {
     fi
     printf '%s\n' "$outputs_dir" >>"$EXECUTION_SKIPPED_OUTPUTS_FILE"
   fi
-  log "skipping cached test output: $outputs_dir ($reason)"
+  dbg "skipping cached test output: $outputs_dir ($reason)"
 }
 
 log_freshness_skip_once() {
@@ -3839,7 +3859,7 @@ log_freshness_skip_once() {
     fi
     printf '%s\n' "$outputs_dir" >>"$FRESHNESS_SKIPPED_OUTPUTS_FILE"
   fi
-  log "skipping cached or non-current test output: $outputs_dir ($reason)"
+  dbg "skipping cached or non-current test output: $outputs_dir ($reason)"
   FRESHNESS_SKIP_WAS_EMITTED=1
   return 0
 }
@@ -5766,6 +5786,7 @@ upload_all_tests
 upload_all_coverage
 upload_all_telemetry
 validate_fresh_outputs_handled
+log "freshness summary: skipped_cached_or_non_current_outputs=$(report_count_lines_file "${FRESHNESS_SKIPPED_OUTPUTS_FILE:-}")"
 
 # Exit with appropriate code based on upload results
 if (( UPLOAD_FAILURES > 0 )); then

@@ -583,7 +583,7 @@ run_bep_freshness_scenario() {
   assert_bep_has_cached_test_result "$cached_bep"
   assert_log_contains "$cached_log" "freshness filtering enabled: source=bep" "cached BEP run did not select BEP freshness"
   assert_log_contains "$cached_log" "dry-run validated 0 test payloads" "cached BEP run did not suppress cached payloads"
-  assert_log_contains "$cached_log" "skipping cached or non-current test output" "cached BEP run did not log a cached-output skip"
+  assert_log_contains "$cached_log" "freshness summary: skipped_cached_or_non_current_outputs=1" "cached BEP run did not report one cached-output skip"
 
   (
     cd "$ws_dir"

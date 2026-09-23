@@ -24,6 +24,7 @@ sh_test(
         "fixtures/bep_fresh_remote_bytestream.ndjson",
         "fixtures/bep_fresh_test_outputs_file_uri.ndjson",
         "fixtures/bep_snake_case_remote_cached.ndjson",
+        "test_log_level_tools.py",
         "test_python_tools.py",
         "test_rules_go_profile_tools.py",
         "test_rules_go_variant_tools.py",

@@ -1506,9 +1506,14 @@ terminal contract error: the uploader has already applied the preventive limit,
 so retrying or splitting adaptively would hide a defect. A single event that
 cannot fit within the limit is rejected locally without spending a request.
 
-At the end of the run, the uploader prints deterministic totals for files,
-payload types, chunks, requests, retries, and cleanup. Use `--debug` for verbose,
-redacted diagnostics. Use `--dry-run --validate-enrichment` to exercise
+At the default `INFO` log level, the uploader prints totals for files,
+payload types, chunks, requests, retries, and cleanup. Cached or non-current
+outputs are reported as a count; individual paths appear only at `DEBUG`.
+Set `DD_TEST_OPTIMIZATION_LOG_LEVEL` to `ERROR`, `WARN`, `INFO`, or `DEBUG`
+to control sync, doctor, and uploader diagnostics. See
+[log levels](docs/Configuration_Reference.md#log-levels) for environment
+forwarding and compatibility with the existing debug switches.
+Use `--dry-run --validate-enrichment` to exercise
 discovery, enrichment, validation, splitting, and request preparation without
 contacting the backend or deleting source files.
 
@@ -2225,11 +2230,13 @@ Fast checks before diving deep:
   references HTTP/HTTPS `outputs.zip` artifacts, use `--artifact-source=bep`
   with `--remote-artifacts=download` or `required`. For bytestream/CAS or
   HTTP endpoints requiring custom auth, also configure a downloader.
-- Enable debug logging on sync/uploader rules for richer diagnostics
+- Set `DD_TEST_OPTIMIZATION_LOG_LEVEL=DEBUG` for detailed sync, doctor, and
+  uploader diagnostics; pass it through `--repo_env` for sync.
 - If needed, file an issue with sanitized logs:
   - open an issue in the repository issue tracker
 
 ## Tips
 
 - Maintainers: this repository's `./bazelw` supports `FETCH_SALT_TTL` (for example: `FETCH_SALT_TTL=3600 ./bazelw build //tools/... //examples/...`).
-- For debugging, set `debug = True` when calling the extension to get verbose logs, including request bodies and detected OS info.
+- The existing `debug = True` attribute still enables verbose diagnostics
+  when `DD_TEST_OPTIMIZATION_LOG_LEVEL` is unset.

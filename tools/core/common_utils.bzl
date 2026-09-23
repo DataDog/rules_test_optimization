@@ -32,9 +32,7 @@ Maintenance notes:
 # Logging utilities
 # ##########################################################################
 #
-# Logging is split into:
-# - log_info: always-on progress messages visible to users.
-# - log_debug: gated diagnostics controlled by each rule's debug flag.
+# Repository diagnostics use the same severity contract as host-side tools.
 #
 # Keep log messages short and actionable because they appear in Bazel output.
 
@@ -75,9 +73,27 @@ def missing_api_key_message_for_tests():
     """Return the missing API-key diagnostic for unit tests."""
     return _MISSING_API_KEY_MESSAGE
 
-def log_info(message):
-    """Print user-facing progress messages."""
-    print("test_optimization: %s" % message)
+_LOG_LEVELS = {"DEBUG": 10, "INFO": 20, "WARN": 30, "ERROR": 40}
+
+def resolve_log_level(environ, debug = False):
+    """Resolve the shared environment setting ahead of legacy debug switches."""
+    level = environ.get("DD_TEST_OPTIMIZATION_LOG_LEVEL", "").strip().upper()
+    if level:
+        if level not in _LOG_LEVELS:
+            fail("test_optimization: DD_TEST_OPTIMIZATION_LOG_LEVEL must be ERROR, WARN, INFO, or DEBUG")
+        return level
+    legacy_debug = environ.get("DD_TEST_OPTIMIZATION_DEBUG", "").strip().lower() in ["1", "true", "yes", "on"]
+    return "DEBUG" if debug or legacy_debug else "INFO"
+
+def log_enabled(level, severity):
+    """Whether to emit a diagnostic; never used to gate repository work."""
+    return _LOG_LEVELS[severity] >= _LOG_LEVELS[level]
+
+def log_info(message, level = "INFO"):
+    """Print progress or a legacy warning at the configured severity."""
+    severity = "WARN" if message.lower().startswith("warning:") else "INFO"
+    if log_enabled(level, severity):
+        print("test_optimization: %s" % message)
 
 def log_debug(debug_enabled, category, message):
     """Print debug messages when debug is enabled.
@@ -179,10 +195,11 @@ def sanitize_label_fragment(name):
 # Validation utilities
 # ##########################################################################
 
-def validate_service_name(service, debug = False):
+def validate_service_name(service, debug = False, log_level = "INFO"):
     """Validate a service name and fail with helpful error messages.
 
     Args:
+      log_level: Severity threshold for validation warnings.
       service: The service name to validate
       debug: Whether debug logging is enabled
 
@@ -212,7 +229,7 @@ Please use a shorter service name.
 
     # Warn about potential issues
     if " " in trimmed:
-        log_info("WARNING: service name contains spaces; this may cause issues: '%s'" % trimmed)
+        log_info("WARNING: service name contains spaces; this may cause issues: '%s'" % trimmed, log_level)
 
     if trimmed != service:
         log_debug(debug, "validation", "Service name trimmed: '%s' -> '%s'" % (service, trimmed))

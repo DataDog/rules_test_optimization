@@ -16,6 +16,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, TextIO
 
+from topt_runtime.log_levels import enabled
+
 from .json_utils import strict_json_dumps
 from .models import FileResult, FileStatus, MAX_TEST_PAYLOAD_BYTES, PayloadType
 
@@ -368,10 +370,14 @@ def emit_report(
     stream: TextIO,
     report_json: Path | None = None,
     legacy_report_context: LegacyReportContext | None = None,
+    log_level: str = "INFO",
 ) -> None:
     """Render stdout and optional JSON from one immutable aggregate report."""
-    for line in report.human_lines():
-        print(line, file=stream)
+    if enabled("INFO", level=log_level):
+        for line in report.human_lines():
+            print(line, file=stream)
+    elif report.exit_code:
+        print(report.human_lines()[0], file=stream)
     if report_json is None:
         return
     try:
@@ -380,11 +386,12 @@ def emit_report(
         else:
             write_schema_v1_report(report_json, report, legacy_report_context)
     except OSError as exc:
-        print(
-            "[dd-uploader] warning: failed to write uploader report: "
-            f"{type(exc).__name__}",
-            file=stream,
-        )
+        if enabled("WARN", level=log_level):
+            print(
+                "[dd-uploader] warning: failed to write uploader report: "
+                f"{type(exc).__name__}",
+                file=stream,
+            )
 
 
 def _write_json(path: Path, payload: Mapping[str, Any]) -> None:

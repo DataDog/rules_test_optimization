@@ -30,6 +30,7 @@ import urllib.request
 from urllib.parse import unquote, urlparse
 import uuid
 import zipfile
+from topt_runtime.log_levels import enabled, resolve_log_level
 
 
 FORBIDDEN_TEST_ENV_RE = re.compile(
@@ -164,11 +165,18 @@ def _fail(message: str) -> None:
 
 
 def _warn(message: str) -> None:
-    print(f"[dd-test-optimization-doctor] warning: {message}", file=sys.stderr)
+    if enabled("WARN"):
+        print(f"[dd-test-optimization-doctor] warning: {message}", file=sys.stderr)
 
 
 def _info(message: str) -> None:
-    print(f"[dd-test-optimization-doctor] {message}", file=sys.stderr)
+    if enabled("INFO"):
+        print(f"[dd-test-optimization-doctor] {message}", file=sys.stderr)
+
+
+def _summary(message: str) -> None:
+    if enabled("INFO"):
+        print(f"[dd-test-optimization-doctor] {message}")
 
 
 def _load_json(path: Path) -> Any:
@@ -2592,7 +2600,7 @@ def _write_doctor_support_bundle(args: argparse.Namespace, report: dict[str, Any
         return
     collector_path = _support_bundle_collector_path(args)
     if collector_path is None:
-        print("[dd-test-optimization-doctor] warning: support bundle collector not found", file=sys.stderr)
+        _warn("support bundle collector not found")
         return
     output = Path(args.support_bundle).expanduser()
     previous_renderer = os.environ.get("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER")
@@ -2645,10 +2653,7 @@ def _write_doctor_support_bundle(args: argparse.Namespace, report: dict[str, Any
                 collector_args.extend(["--bep-json", str(bep_file)])
             collector.main(collector_args)
     except Exception as exc:
-        print(
-            f"[dd-test-optimization-doctor] warning: failed to create support bundle {output}: {exc}",
-            file=sys.stderr,
-        )
+        _warn(f"failed to create support bundle {output}: {exc}")
     finally:
         if previous_renderer is None:
             os.environ.pop("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER", None)
@@ -2785,6 +2790,10 @@ def _record_diagnostic_failure(report: dict[str, Any], exc: BaseException) -> No
 def main(argv: list[str]) -> int:
     global _LAST_FAILURE_MESSAGE
     _LAST_FAILURE_MESSAGE = None
+    try:
+        resolve_log_level()
+    except ValueError as exc:
+        _fail(str(exc))
     args = _parse_args(argv)
     report = _new_diagnostic_report(args)
     try:
@@ -2913,11 +2922,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 "--freshness-mode=required."
             )
         elif args.freshness_source == "bep":
-            print(
-                "[dd-test-optimization-doctor] warning: BEP freshness source was selected but no "
-                "BEP JSON file was configured; skipping BEP freshness validation",
-                file=sys.stderr,
-            )
+            _warn("BEP freshness source was selected but no BEP JSON file was configured; skipping BEP freshness validation")
 
         selected_bep_artifact_outputs: set[tuple[str, str]] = set()
         blocked_bep_artifact_labels: set[str] = set()
@@ -3014,8 +3019,8 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             if non_fresh_expected_targets:
                 _update_diagnostic_output_summary(report, [])
                 report["summary"]["payload_selection"] = {}
-                print(
-                    "[dd-test-optimization-doctor] OK: all expected targets were cached "
+                _summary(
+                    "OK: all expected targets were cached "
                     "or skipped as platform-incompatible; no fresh payloads require validation"
                 )
                 return 0
@@ -3045,11 +3050,11 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             target_by_output_dir=target_by_output_dir,
         )
         report["summary"]["payload_selection"] = dict(sorted(selection_summary.items()))
-        print(
-            "[dd-test-optimization-doctor] payload selection summary: "
+        _summary(
+            "payload selection summary: "
             f"{_format_selection_summary(selection_summary)}"
         )
-        print(f"[dd-test-optimization-doctor] OK: validated {len(output_dirs)} test output directorie(s)")
+        _summary(f"OK: validated {len(output_dirs)} test output directorie(s)")
         return 0
     finally:
         if staged and staging_base is not None:

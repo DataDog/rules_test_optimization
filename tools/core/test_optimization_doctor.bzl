@@ -389,7 +389,7 @@ exit /b %%ERRORLEVEL%%
         config_file,
         ps_file,
         bat_file,
-    ] + ctx.files.data
+    ] + ctx.files.data + ctx.files._diagnostic_runtime
     if expected_targets_file:
         runfiles_files.append(expected_targets_file)
     runfiles = ctx.runfiles(files = runfiles_files)
@@ -412,6 +412,7 @@ dd_test_optimization_doctor = rule(
         "allowed_payload_selections": attr.string_list(default = [], doc = "Optional explicit allowlist for bazel.go.payload_selection values."),
         "expected_payload_selection_by_target": attr.string_dict(default = {}, doc = "Optional map of local target labels to their expected bazel.go.payload_selection value."),
         "_runtime": attr.label(default = "//tools/core:test_optimization_doctor.py", allow_single_file = True),
+        "_diagnostic_runtime": attr.label(default = "//tools/core:diagnostic_runtime"),
         "_support_bundle_collector": attr.label(default = "//tools/test_optimization:create_support_bundle.py", allow_single_file = True),
         "_support_bundle_renderer": attr.label(default = "//tools/test_optimization:render_report_summary.py", allow_single_file = True),
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),

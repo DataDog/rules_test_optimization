@@ -26,6 +26,7 @@ import os
 import re
 import sys
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Set, Tuple
+from topt_runtime.log_levels import enabled, resolve_log_level
 
 DEFAULT_MAX_ERRORS = 20
 _DEBUG_TRUTHY = {"1", "true", "yes", "on"}
@@ -78,19 +79,20 @@ def _reset_stats() -> None:
     _STATS = _new_stats()
 
 
-def _debug_enabled() -> bool:
+def _debug_enabled(debug: bool = False) -> bool:
     """Read the schema-specific debug switch with uploader fallback."""
     configured = os.getenv("DD_TEST_OPTIMIZATION_SCHEMA_DEBUG")
     if configured is None:
         configured = os.getenv("DD_TEST_OPTIMIZATION_DEBUG")
-    if configured is None:
-        return False
-    return str(configured).strip().lower() in _DEBUG_TRUTHY
+    return resolve_log_level(
+        {"DD_TEST_OPTIMIZATION_LOG_LEVEL": os.getenv("DD_TEST_OPTIMIZATION_LOG_LEVEL", "")},
+        debug=debug or str(configured).strip().lower() in _DEBUG_TRUTHY,
+    ) == "DEBUG"
 
 
 def _debug(msg: str, debug: bool = False) -> None:
     """Emit schema diagnostics only when explicit debug is enabled."""
-    if debug or _debug_enabled():
+    if _debug_enabled(debug):
         print(f"[schema-validator][dbg] {msg}", file=sys.stderr)
 
 
@@ -287,7 +289,8 @@ def _validate(
                     f"at {path} is ignored"
                 )
                 if warning_output is None:
-                    print(warning, file=sys.stderr)
+                    if enabled("WARN"):
+                        print(warning, file=sys.stderr)
                 else:
                     warning_output(warning)
                 warned_unsupported.add(keyword)
@@ -500,7 +503,11 @@ def validate_payload(
 def main() -> int:
     """Run CLI entrypoint logic and return process exit code."""
     global _STATS
-    debug = _debug_enabled()
+    try:
+        debug = _debug_enabled()
+    except ValueError as exc:
+        print(f"[schema-validator] error: {exc}", file=sys.stderr)
+        return 2
     _reset_stats()
     try:
         args = _parse_args(sys.argv[1:])
@@ -580,7 +587,8 @@ def main() -> int:
     )
     errors = list(result.errors)
     for warning in result.warnings:
-        print(warning, file=sys.stderr)
+        if enabled("WARN"):
+            print(warning, file=sys.stderr)
     _STATS = dict(result.stats)
 
     if errors:

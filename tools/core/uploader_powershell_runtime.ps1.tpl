@@ -241,6 +241,11 @@ function Resolve-RuntimeFilePath {
 }
 
 # Logging functions (defined early so other functions can use them)
+$script:LogLevel = ([string]$env:DD_TEST_OPTIMIZATION_LOG_LEVEL).Trim().ToUpperInvariant()
+if ($script:LogLevel -and $script:LogLevel -notin @('ERROR', 'WARN', 'INFO', 'DEBUG')) {
+    [Console]::Error.WriteLine('[dd-uploader] error: DD_TEST_OPTIMIZATION_LOG_LEVEL must be ERROR, WARN, INFO, or DEBUG')
+    exit 2
+}
 # Note: $Debug is set later, so Dbg checks the variable at runtime
 $script:DebugMode = $false  # Will be set properly after Normalize-Bool is defined
 if ($env:DD_TEST_OPTIMIZATION_DEBUG) {
@@ -248,11 +253,17 @@ if ($env:DD_TEST_OPTIMIZATION_DEBUG) {
         { $_ -in '1', 'true', 'yes' } { $script:DebugMode = $true }
     }
 }
-function Log([string]$msg) { [Console]::Out.WriteLine("[dd-uploader] $msg") }
-function Log-Stderr([string]$msg) { [Console]::Error.WriteLine("[dd-uploader] $msg") }
+if ($script:LogLevel) { $script:DebugMode = $script:LogLevel -eq 'DEBUG' }
+function Test-LogEnabled([string]$msg) {
+    if ($msg -match '^(error:|(?:coverage )?upload failed:|done with)') { return $true }
+    if ($msg -match '^warning:') { return $script:LogLevel -ne 'ERROR' }
+    return $script:LogLevel -notin @('ERROR', 'WARN')
+}
+function Log([string]$msg) { if (Test-LogEnabled $msg) { [Console]::Out.WriteLine("[dd-uploader] $msg") } }
+function Log-Stderr([string]$msg) { if (Test-LogEnabled $msg) { [Console]::Error.WriteLine("[dd-uploader] $msg") } }
 function Use-OptionalBepUnavailable([string]$msg) {
     if ($script:FreshnessMode -ne "optional") { return $false }
-    [Console]::Out.WriteLine("[dd-uploader] warning: $msg; BEP freshness filtering skipped and cached test outputs may be uploaded")
+    Log "warning: $msg; BEP freshness filtering skipped and cached test outputs may be uploaded"
     $script:FreshnessSelectedSource = "none"
     $script:FreshnessEligibilityEnabled = $false
     return $true
@@ -766,6 +777,7 @@ $FailOnError = Normalize-Bool "__DDTPL_FAIL_ON_ERROR__"
 $KeepPayloads = if ($env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_KEEP_PAYLOADS } else { Normalize-Bool "__DDTPL_KEEP_PAYLOADS__" }
 $FilterPrefix = if ($env:DD_TEST_OPTIMIZATION_FILTER_PREFIX) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_FILTER_PREFIX } else { Normalize-Bool "__DDTPL_FILTER_PREFIX__" }
 $Debug = if ($env:DD_TEST_OPTIMIZATION_DEBUG) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_DEBUG } else { Normalize-Bool "__DDTPL_DEBUG__" }
+if ($script:LogLevel) { $Debug = $script:LogLevel -eq 'DEBUG' }
 $GzipPayloads = if ($env:DD_TEST_OPTIMIZATION_GZIP) { Normalize-Bool $env:DD_TEST_OPTIMIZATION_GZIP } else { Normalize-Bool "__DDTPL_GZIP_PAYLOADS__" }
 $script:TestPayloadSplitTargetBytes = 4500000
 $script:TestPayloadMaxBytes = 5000000
@@ -3460,7 +3472,7 @@ function Assert-ExpectedTargetCoverage {
 
 function Write-ExecutionSkipOnce([string]$OutputsDir, [string]$Reason) {
   if ($script:ExecutionSkippedOutputs.Add($OutputsDir)) {
-    [Console]::Out.WriteLine("[dd-uploader] skipping cached test output: $OutputsDir ($Reason)")
+    Dbg "skipping cached test output: $OutputsDir ($Reason)"
   }
 }
 
@@ -3490,7 +3502,7 @@ function Assert-NoRequiredRemoteOnlyBepOutputs {
 function Write-FreshnessSkipOnce([string]$OutputsDir, [string]$Reason) {
   $script:FreshnessSkipWasWritten = $false
   if ($script:FreshnessSkippedOutputs.Add($OutputsDir)) {
-    [Console]::Out.WriteLine("[dd-uploader] skipping cached or non-current test output: $OutputsDir ($Reason)")
+    Dbg "skipping cached or non-current test output: $OutputsDir ($Reason)"
     $script:FreshnessSkipWasWritten = $true
   }
 }
@@ -5367,6 +5379,7 @@ try {
     Upload-AllCoverage
     Upload-AllTelemetry
     Assert-FreshOutputsHandled
+    Log "freshness summary: skipped_cached_or_non_current_outputs=$($script:FreshnessSkippedOutputs.Count)"
 
     # Exit with appropriate code based on upload results
     if ($script:UploadFailures -gt 0) {
