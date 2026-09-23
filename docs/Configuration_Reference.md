@@ -214,6 +214,25 @@ catalog fails analysis. An inferred or label-derived miss uses the canonical
 full bundle and reports `full_bundle_no_match`. An empty catalog uses the full
 bundle and reports `full_bundle_disabled`.
 
+### Go target compatibility and wildcard commands
+
+`dd_topt_go_test` forwards the caller's `target_compatible_with` unchanged to
+the public wrapper, hidden raw test, payload selector, and Bazel metadata
+target. Lists and `select(...)` expressions are supported. Consumer wrappers
+that make `.topt` targets incompatible outside `--config=test-optimization`
+therefore apply the same restrictions to the selector and metadata helpers.
+The rule does not introduce another enable flag or read environment variables
+from the macro.
+
+The helpers are also tagged `manual`, so wildcard `build` and `test` commands
+do not select them independently. `manual` does not hide targets from `query`
+or `cquery`. Incompatible targets can still appear in `cquery` with
+`IncompatiblePlatformProvider`, without running the helper's disabled-repository
+validation. Explicitly building or testing an incompatible `.topt` target fails
+under Bazel's default behavior; it does not fall back to an ordinary test.
+Once the target is compatible, the existing repository identity and enablement
+checks still apply.
+
 ## Sync extension attributes
 
 Extension tag: `test_optimization_sync.test_optimization_sync(...)`

@@ -41,6 +41,10 @@ This product includes software developed at Datadog
   - `./bazelw test //tools/...`
 - Go companion tests:
   - `cd modules/go && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
+  - `bash tools/tests/integration/run_go_helper_compatibility.sh` checks real
+    wildcard `build`, `test`, `query`, and `cquery` commands, disabled-repository
+    compatibility, and explicit-target diagnostics. Extra Bazel options can be
+    passed as script arguments.
 - Python companion tests:
   - `cd modules/python && ../../bazelw test //... --override_module=datadog-rules-test-optimization=../..`
 - Java companion tests:
