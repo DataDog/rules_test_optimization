@@ -6,7 +6,7 @@
 
 # Unit tests for common_utils helpers (sanitization, deduping, validation).
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load("//tools/core:common_utils.bzl", "dedup_keys", "is_dict", "is_list", "is_string", "log_debug", "log_info", "missing_api_key_message_for_tests", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
+load("//tools/core:common_utils.bzl", "dedup_keys", "is_dict", "is_list", "is_string", "log_debug", "log_enabled", "log_info", "missing_api_key_message_for_tests", "resolve_log_level", "sanitize_label_fragment", "validate_api_key", "validate_runtime_name", "validate_runtime_version", "validate_service_name")
 
 def _sanitize_label_fragment_test(ctx):
     """Validate label sanitization rules and fallback behavior."""
@@ -83,6 +83,17 @@ def _missing_api_key_message_test(ctx):
 def _log_helpers_and_is_dict_test(ctx):
     """Validate lightweight logging helpers and type helpers."""
     env = unittest.begin(ctx)
+    asserts.equals(env, "INFO", resolve_log_level({}))
+    asserts.equals(env, "DEBUG", resolve_log_level({}, True))
+    asserts.equals(env, "DEBUG", resolve_log_level({"DD_TEST_OPTIMIZATION_DEBUG": "1"}))
+    levels = ["DEBUG", "INFO", "WARN", "ERROR"]
+    for index in range(len(levels)):
+        level = levels[index]
+        asserts.equals(env, level, resolve_log_level({"DD_TEST_OPTIMIZATION_LOG_LEVEL": " " + level.lower() + " ", "DD_TEST_OPTIMIZATION_DEBUG": "1"}, True))
+        for severity_index in range(len(levels)):
+            asserts.equals(env, severity_index >= index, log_enabled(level, levels[severity_index]))
+        log_info("hidden at WARN and ERROR", level)
+        log_info("warning: hidden at ERROR", level)
     asserts.equals(env, True, is_dict({}))
     asserts.equals(env, False, is_dict([]))
     asserts.equals(env, False, is_dict("x"))

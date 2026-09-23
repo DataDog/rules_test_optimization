@@ -81,6 +81,44 @@ def _bep_test_result(
 
 
 class ApplicationTests(unittest.TestCase):
+    def test_log_levels_preserve_payloads_selection_and_reports(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            paths = []
+            events = []
+            for name, cached in (("fresh", False), ("cached", True)):
+                output = root / "bazel-testlogs" / "pkg" / name / "test.outputs"
+                paths.append(_write_payload(output, "tests", "events.json", {"events": [{"content": {"meta": {"event.id": name}}}]}))
+                (output / "bazel_target_metadata.json").write_text(json.dumps({"bazel.target": "//pkg:" + name, "bazel.package": "pkg"}))
+                events.append(_bep_test_result("//pkg:" + name, output=output, cached_locally=cached))
+            original = [path.read_bytes() for path in paths]
+            bep = root / "bep.json"
+            bep.write_text("\n".join(json.dumps(event) for event in events))
+            report_path = root / "report.json"
+            reports = []
+            for level in ("ERROR", "WARN", "INFO", "DEBUG"):
+                config = self._config(root, allow_cached_payload_uploads=False,
+                    extra_environment={"DD_TEST_OPTIMIZATION_LOG_LEVEL": level},
+                    extra_arguments=("--freshness-source=bep", "--freshness-mode=required", f"--bep-json={bep}", f"--report-json={report_path}"))
+                diagnostics, summary = StringIO(), StringIO()
+                rc = run_uploader(config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, log_level=level, stream=diagnostics),
+                    stream=summary, clock=lambda: 0.0)
+                self.assertEqual(0, rc, diagnostics.getvalue())
+                report = json.loads(report_path.read_text())
+                self.assertEqual(1, report["files"]["succeeded"])
+                self.assertEqual(1, report["bep"]["cached_outputs"])
+                self.assertEqual(0, report["requests"]["attempted"])
+                reports.append(report)
+                self.assertEqual(original, [path.read_bytes() for path in paths])
+                if level in ("ERROR", "WARN"):
+                    self.assertEqual("", summary.getvalue())
+                    self.assertNotIn("INFO:", diagnostics.getvalue())
+                self.assertEqual(level == "DEBUG", "skipping cached or non-current test output:" in diagnostics.getvalue())
+            self.assertTrue(all(report == reports[0] for report in reports))
+
     def _config(
         self,
         root: Path,
@@ -518,9 +556,10 @@ class ApplicationTests(unittest.TestCase):
                 log_stream.getvalue(),
             )
             self.assertIn(
-                "skipping cached or non-current test output",
+                "freshness summary: skipped_cached_or_non_current_outputs=1",
                 log_stream.getvalue(),
             )
+            self.assertNotIn("skipping cached or non-current test output:", log_stream.getvalue())
             report = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual("ok", report["result"]["reason_code"])
             self.assertEqual(1, report["bep"]["cached_outputs"])

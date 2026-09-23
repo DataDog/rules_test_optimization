@@ -836,6 +836,49 @@ fi
 TOPT_HTTP_DIR="$(dirname "$SETTINGS_PATH")"
 TOPT_CACHE_DIR="$(dirname "$TOPT_HTTP_DIR")"
 TOPT_DIR="$(dirname "$TOPT_CACHE_DIR")"
+# Changing verbosity may refetch metadata, but must not change test inputs.
+# telemetry_facts.json contains request timings and is a post-test input.
+for level in ERROR WARN INFO DEBUG; do
+  LEVEL_LOG="$TMP_WS/sync-log-level-$level.log"
+  DD_TEST_OPTIMIZATION_LOG_LEVEL="$level" \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" build @test_optimization_data//:test_optimization_files \
+    "${REPO_ENVS[@]}" --repo_env=DD_TEST_OPTIMIZATION_LOG_LEVEL="$level" \
+    --repo_env=DD_TEST_OPTIMIZATION_DEBUG=1 >"$LEVEL_LOG" 2>&1
+  if [[ "$level" == ERROR || "$level" == WARN ]]; then
+    if grep -q 'test_optimization:' "$LEVEL_LOG" || grep -q 'test_optimization\[' "$LEVEL_LOG"; then
+      echo "error: sync emitted info/debug diagnostics at $level"
+      cat "$LEVEL_LOG"
+      exit 1
+    fi
+  elif [[ "$level" == DEBUG ]]; then
+    if ! grep -q 'test_optimization\[' "$LEVEL_LOG"; then
+      echo "error: DEBUG did not enable sync diagnostics"
+      exit 1
+    fi
+  fi
+  "$PYTHON" - "$TOPT_DIR" "$TMP_WS/log-level-inputs.json" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+data_root = Path(sys.argv[1])
+snapshot = Path(sys.argv[2])
+inputs = {}
+for path in sorted(data_root.rglob("*")):
+    if path.is_file() and path.name != "telemetry_facts.json":
+        inputs[str(path.relative_to(data_root))] = hashlib.sha256(path.read_bytes()).hexdigest()
+for name in ("BUILD", "export.bzl", "repository_state.bzl"):
+    path = data_root.parent / name
+    if path.is_file():
+        inputs["../" + name] = hashlib.sha256(path.read_bytes()).hexdigest()
+if snapshot.exists():
+    assert json.loads(snapshot.read_text()) == inputs, "log level changed generated metadata inputs"
+else:
+    snapshot.write_text(json.dumps(inputs, sort_keys=True))
+PY
+done
+
 for name in settings.json known_tests.json test_management.json; do
   if [[ ! -f "$TOPT_HTTP_DIR/$name" ]]; then
     echo "error: missing $name in $TOPT_HTTP_DIR"
@@ -1187,7 +1230,7 @@ if "Cached.ExecutionLog" in resources:
     print(resources)
     sys.exit(1)
 PY
-if ! grep -q "skipping cached or non-current test output" "$EXEC_LOG_UPLOADER_LOG"; then
+if ! grep -q "freshness summary: skipped_cached_or_non_current_outputs=" "$EXEC_LOG_UPLOADER_LOG"; then
   echo "error: execution-log freshness scenario did not log a cached-output skip"
   cat "$EXEC_LOG_UPLOADER_LOG" || true
   exit 1
@@ -1315,7 +1358,7 @@ if ! grep -q "dry-run validated 1 test payloads" "$BEP_DRY_RUN_LOG"; then
   cat "$BEP_DRY_RUN_LOG" || true
   exit 1
 fi
-if ! grep -q "skipping cached or non-current test output" "$BEP_DRY_RUN_LOG"; then
+if ! grep -q "freshness summary: skipped_cached_or_non_current_outputs=" "$BEP_DRY_RUN_LOG"; then
   echo "error: BEP dry-run did not log cached/non-current skips"
   cat "$BEP_DRY_RUN_LOG" || true
   exit 1
@@ -1649,7 +1692,7 @@ if ! grep -q "freshness filtering enabled: source=bep" "$BEP_OPTIONAL_FILTER_LOG
   cat "$BEP_OPTIONAL_FILTER_LOG" || true
   exit 1
 fi
-if ! grep -q "skipping cached or non-current test output" "$BEP_OPTIONAL_FILTER_LOG"; then
+if ! grep -q "freshness summary: skipped_cached_or_non_current_outputs=" "$BEP_OPTIONAL_FILTER_LOG"; then
   echo "error: optional BEP dry-run did not log cached/non-current skips"
   cat "$BEP_OPTIONAL_FILTER_LOG" || true
   exit 1
@@ -1772,7 +1815,7 @@ if [[ "$(tail -n "+$((BEP_CACHED_ONLY_UPLOAD_START + 1))" "$LOG_FILE" | wc -l | 
   cat "$BEP_CACHED_ONLY_UPLOAD_LOG" || true
   exit 1
 fi
-if ! grep -q "skipping cached or non-current test output" "$BEP_CACHED_ONLY_UPLOAD_LOG"; then
+if ! grep -q "freshness summary: skipped_cached_or_non_current_outputs=" "$BEP_CACHED_ONLY_UPLOAD_LOG"; then
   echo "error: cached-only BEP upload did not log cached/non-current skips"
   cat "$BEP_CACHED_ONLY_UPLOAD_LOG" || true
   exit 1
@@ -2155,7 +2198,7 @@ if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   cat "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || true
   exit 1
 fi
-if ! grep -q "freshness filtering enabled: source=bep" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "warning: BEP references remote-only test outputs" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "skipping cached or non-current test output" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q -- "--remote_download_minimal" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -Fq -- "--remote_download_regex=.*test[.]outputs.*" "$BEP_OPTIONAL_REMOTE_ONLY_LOG"; then
+if ! grep -q "freshness filtering enabled: source=bep" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "warning: BEP references remote-only test outputs" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q "freshness summary: skipped_cached_or_non_current_outputs=" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -q -- "--remote_download_minimal" "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || ! grep -Fq -- "--remote_download_regex=.*test[.]outputs.*" "$BEP_OPTIONAL_REMOTE_ONLY_LOG"; then
   echo "error: optional BEP remote-only scenario did not warn and skip"
   cat "$BEP_OPTIONAL_REMOTE_ONLY_LOG" || true
   exit 1
@@ -2179,7 +2222,7 @@ if ! env -u DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE \
   cat "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || true
   exit 1
 fi
-if ! grep -q "skipping cached or non-current test output" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || ! grep -q "warning: BEP optional freshness skipped" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || ! grep -q "did not contain a mappable test.outputs reference" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG"; then
+if ! grep -q "freshness summary: skipped_cached_or_non_current_outputs=" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || ! grep -q "warning: BEP optional freshness skipped" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || ! grep -q "did not contain a mappable test.outputs reference" "$BEP_OPTIONAL_MISSING_OUTPUT_LOG"; then
   echo "error: optional BEP missing-output scenario did not warn and skip local payloads"
   cat "$BEP_OPTIONAL_MISSING_OUTPUT_LOG" || true
   exit 1

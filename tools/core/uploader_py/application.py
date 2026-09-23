@@ -340,6 +340,7 @@ def _run_uploader_with_lock(
         stream=stream if stream is not None else sys.stdout,
         report_json=config.report_json,
         legacy_report_context=report_context,
+        log_level=config.log_level,
     )
     return report.exit_code
 
@@ -369,8 +370,10 @@ def _log_legacy_freshness_markers(
             output_key for _label, output_key in freshness_plan.cached_outputs
         )
     )
+    if skipped_or_cached_outputs:
+        logger.info("freshness summary: skipped_cached_or_non_current_outputs=%d", len(skipped_or_cached_outputs))
     for output_key in skipped_or_cached_outputs:
-        logger.info(
+        logger.debug(
             "skipping cached or non-current test output: %s (freshness selection)",
             output_key,
         )

@@ -63,13 +63,15 @@ load(
     "dedup_keys",
     "fail_with_prefix",
     "log_debug",
-    "log_info",
+    "log_enabled",
+    "resolve_log_level",
     "sanitize_label_fragment",
     "validate_api_key",
     "validate_runtime_name",
     "validate_runtime_version",
     "validate_service_name",
     _is_dict = "is_dict",
+    _log_info_at_level = "log_info",
 )
 load(
     "//tools/core:test_optimization_sync_env.bzl",
@@ -124,6 +126,8 @@ def _is_test_optimization_enabled(enabled, enabled_by_env, env_value):
     return (env_value or "").strip().lower() in _TEST_OPTIMIZATION_ENABLED_VALUES
 
 _TEST_OPTIMIZATION_REPOSITORY_BASE_ENVIRON = [
+    "DD_TEST_OPTIMIZATION_LOG_LEVEL",
+    "DD_TEST_OPTIMIZATION_DEBUG",
     "DD_API_KEY",
     "DD_SITE",
     "DD_TEST_OPTIMIZATION_AGENTLESS_URL",
@@ -154,6 +158,13 @@ _TEST_OPTIMIZATION_REPOSITORY_ENVIRON = _TEST_OPTIMIZATION_REPOSITORY_BASE_ENVIR
 # ##########################################################################
 # Tools functions
 # ##########################################################################
+
+def _log_info(ctx, message):
+    _log_info_at_level(message, resolve_log_level(ctx.os.environ))
+
+def _report_progress(ctx, message):
+    if log_enabled(resolve_log_level(ctx.os.environ), "INFO"):
+        ctx.report_progress(message)
 
 def _parse_int_from_env_or_fail(env_key, raw_value):
     """Parse a base-10 integer from an environment variable value."""
@@ -439,7 +450,7 @@ def _try_read_abs_file(ctx, abs_path):
             return {"ok": False, "missing": True, "value": "", "error": ""}
         if exists_res.return_code != 0:
             err = (exists_res.stderr or "").strip() or ("exists-check failed with exit code %d" % exists_res.return_code)
-            log_info("warning: unable to check file '%s': %s" % (abs_path, err))
+            _log_info(ctx, "warning: unable to check file '%s': %s" % (abs_path, err))
             return {"ok": False, "missing": False, "value": "", "error": err}
 
         ps_cmd = _build_windows_read_abs_file_command(abs_path)
@@ -454,7 +465,7 @@ def _try_read_abs_file(ctx, abs_path):
         if res.return_code == 0:
             return {"ok": True, "missing": False, "value": res.stdout or "", "error": ""}
         err = (res.stderr or "").strip() or ("file read failed with exit code %d" % res.return_code)
-        log_info("warning: unable to read file '%s': %s" % (abs_path, err))
+        _log_info(ctx, "warning: unable to read file '%s': %s" % (abs_path, err))
         return {"ok": False, "missing": False, "value": "", "error": err}
     else:
         exists_cmd = _build_unix_exists_abs_file_command(abs_path)
@@ -463,7 +474,7 @@ def _try_read_abs_file(ctx, abs_path):
             return {"ok": False, "missing": True, "value": "", "error": ""}
         if exists_res.return_code != 0:
             err = (exists_res.stderr or "").strip() or ("exists-check failed with exit code %d" % exists_res.return_code)
-            log_info("warning: unable to check file '%s': %s" % (abs_path, err))
+            _log_info(ctx, "warning: unable to check file '%s': %s" % (abs_path, err))
             return {"ok": False, "missing": False, "value": "", "error": err}
 
         sh_cmd = _build_unix_read_abs_file_command(abs_path)
@@ -471,7 +482,7 @@ def _try_read_abs_file(ctx, abs_path):
         if res.return_code == 0:
             return {"ok": True, "missing": False, "value": res.stdout or "", "error": ""}
         err = (res.stderr or "").strip() or ("file read failed with exit code %d" % res.return_code)
-        log_info("warning: unable to read file '%s': %s" % (abs_path, err))
+        _log_info(ctx, "warning: unable to read file '%s': %s" % (abs_path, err))
         return {"ok": False, "missing": False, "value": "", "error": err}
 
 def _build_windows_exists_abs_file_command(abs_path):
@@ -1763,7 +1774,7 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     redacted_url = _redact_url_userinfo(url)
 
     # Avoid logging secrets; only log method and URL
-    log_info("http %s %s" % (http_method, redacted_url))
+    _log_info(ctx, "http %s %s" % (http_method, redacted_url))
 
     if is_win:
         # Build a small PowerShell script to perform the request with basic retries.
@@ -1907,9 +1918,9 @@ def _http_request(ctx, method, url, headers, out_file, debug, data_file = None, 
     else:
         # Branch: success path; emit a concise size summary using captured metadata.
         if response_bytes > 0:
-            log_info("Downloaded %s (%s bytes) from %s" % (out_file, response_bytes, redacted_url))
+            _log_info(ctx, "Downloaded %s (%s bytes) from %s" % (out_file, response_bytes, redacted_url))
         else:
-            log_info("Downloaded %s from %s" % (out_file, redacted_url))
+            _log_info(ctx, "Downloaded %s from %s" % (out_file, redacted_url))
 
         # Emit full response body when debug is enabled, similar to request logging
         if debug:
@@ -2731,9 +2742,9 @@ def _impl(ctx):
     #   on the repository_rule to keep Bazel cache keys correct.
     # - When adding new generated files, preserve deterministic ordering and
     #   stable public labels to avoid downstream breakage.
-    debug = ctx.attr.debug
-    log_info("Starting repository rule implementation")
-    ctx.report_progress("test_optimization_sync: starting")
+    debug = resolve_log_level(ctx.os.environ, ctx.attr.debug) == "DEBUG"
+    _log_info(ctx, "Starting repository rule implementation")
+    _report_progress(ctx, "test_optimization_sync: starting")
 
     sync_enabled = _is_test_optimization_enabled(
         ctx.attr.enabled,
@@ -2753,8 +2764,8 @@ def _impl(ctx):
         _apply_dd_git_overrides(disabled_env_data, ctx.os.environ)
         _normalize_env_data(disabled_env_data)
         _write_disabled_repository(ctx, out_dir, disabled_env_data, debug)
-        log_info("Test Optimization disabled; wrote no-fetch repository stubs")
-        ctx.report_progress("test_optimization_sync: disabled")
+        _log_info(ctx, "Test Optimization disabled; wrote no-fetch repository stubs")
+        _report_progress(ctx, "test_optimization_sync: disabled")
         return
 
     _materialize_enabled_context(ctx, _sync_spec_from_attrs(ctx))
@@ -2767,7 +2778,8 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     same implementation for each context and emits one aggregate surface after
     every context has been materialized.
     """
-    debug = spec["debug"]
+    log_level = resolve_log_level(ctx.os.environ, spec["debug"])
+    debug = log_level == "DEBUG"
     runtime = spec["runtime"]
     request_dir = "" if emit_surface else _normalize_out_dir_or_fail(spec["out_dir"])
 
@@ -2781,11 +2793,11 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
 
     # Emit salt info if present to trace cache-busting input
     salt = ctx.os.environ.get("FETCH_SALT")
-    log_info("FETCH_SALT: %s" % (salt if salt else "<unset>"))
+    _log_info(ctx, "FETCH_SALT: %s" % (salt if salt else "<unset>"))
 
     # Git-related inputs (optional) to influence repository cache key
     git_dirty = ctx.os.environ.get("GIT_DIRTY")
-    log_info("GIT_DIRTY: %s" % (git_dirty if git_dirty else "<unset>"))
+    _log_info(ctx, "GIT_DIRTY: %s" % (git_dirty if git_dirty else "<unset>"))
 
     # Perform the settings request (compute and ensure directories exist for outputs)
     out_dir = _normalize_out_dir_or_fail(spec["out_dir"])
@@ -2804,13 +2816,13 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     _ensure_parent_directory(ctx, context_file, debug)
     _ensure_parent_directory(ctx, telemetry_facts_file, debug)
 
-    log_info("Settings file: %s" % settings_file)
-    ctx.report_progress("test_optimization_sync: downloading")
+    _log_info(ctx, "Settings file: %s" % settings_file)
+    _report_progress(ctx, "test_optimization_sync: downloading")
     env_data = _collect_env(ctx, service = spec["service"])
 
     # Validate and normalize service name
     raw_service = env_data.get("service")
-    validated_service = validate_service_name(raw_service, debug)
+    validated_service = validate_service_name(raw_service, debug, log_level)
     env_data["service"] = validated_service
     _validate_required_git_metadata_or_fail(env_data, spec["require_git_metadata"])
 
@@ -2835,7 +2847,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
         http_policy = http_policy,
         request_dir = request_dir,
     )
-    ctx.report_progress("test_optimization_sync: download complete")
+    _report_progress(ctx, "test_optimization_sync: download complete")
 
     # ------------------------------------------------------------------
     # Phase 2: Parse settings and determine feature enablement.
@@ -2962,7 +2974,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     module_specs_known = []
     module_specs_tm = []
     if known_tests_enabled:
-        ctx.report_progress("test_optimization_sync: downloading known tests")
+        _report_progress(ctx, "test_optimization_sync: downloading known tests")
         known_tests_result = _perform_dd_known_tests_request(
             ctx,
             api_key,
@@ -2974,7 +2986,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
             runtime = runtime,
             request_dir = request_dir,
         )
-        ctx.report_progress("test_optimization_sync: known tests complete")
+        _report_progress(ctx, "test_optimization_sync: known tests complete")
         known_tests_obj = _decode_json_object_or_fail(ctx.read(ctx.path(known_tests_file)), known_tests_file)
         _append_telemetry_count(telemetry_facts, "known_tests.request")
         _append_telemetry_distribution(telemetry_facts, "known_tests.request_ms", known_tests_result.get("duration_ms", 0))
@@ -2991,7 +3003,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     exports.append(known_tests_file)
 
     if test_management_enabled:
-        ctx.report_progress("test_optimization_sync: downloading test management tests")
+        _report_progress(ctx, "test_optimization_sync: downloading test management tests")
         test_management_result = _perform_dd_test_management_tests_request(
             ctx,
             api_key,
@@ -3001,7 +3013,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
             http_policy = http_policy,
             request_dir = request_dir,
         )
-        ctx.report_progress("test_optimization_sync: test management tests complete")
+        _report_progress(ctx, "test_optimization_sync: test management tests complete")
         test_management_obj = _decode_json_object_or_fail(ctx.read(ctx.path(test_management_file)), test_management_file)
         test_management_obj = _canonicalize_test_management_response(test_management_obj)
         ctx.file(test_management_file, json.encode(test_management_obj) + "\n")
@@ -3025,7 +3037,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
 
     module_specs_flaky = []
     if flaky_tests_enabled:
-        ctx.report_progress("test_optimization_sync: downloading flaky tests")
+        _report_progress(ctx, "test_optimization_sync: downloading flaky tests")
         flaky_tests_result = _perform_dd_flaky_tests_request(
             ctx,
             api_key,
@@ -3037,7 +3049,7 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
             runtime = runtime,
             request_dir = request_dir,
         )
-        ctx.report_progress("test_optimization_sync: flaky tests complete")
+        _report_progress(ctx, "test_optimization_sync: flaky tests complete")
         flaky_tests_raw = _decode_json_object_or_fail(ctx.read(ctx.path(flaky_tests_file)), flaky_tests_file)
         _append_telemetry_count(telemetry_facts, "flaky_tests.request")
         _append_telemetry_distribution(telemetry_facts, "flaky_tests.request_ms", flaky_tests_result.get("duration_ms", 0))
@@ -3378,11 +3390,11 @@ def _materialize_enabled_context(ctx, spec, emit_surface = True):
     )
     if emit_surface:
         log_debug(debug, "build", "Creating BUILD file with content: %s" % build_content)
-        ctx.report_progress("test_optimization_sync: writing BUILD")
+        _report_progress(ctx, "test_optimization_sync: writing BUILD")
         ctx.file("BUILD", build_content)
 
-    log_info("Repository rule completed successfully")
-    ctx.report_progress("test_optimization_sync: done")
+    _log_info(ctx, "Repository rule completed successfully")
+    _report_progress(ctx, "test_optimization_sync: done")
     return {
         "build_content": build_content,
         "context_files": [context_file, telemetry_facts_file],
@@ -3493,6 +3505,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
         if extension_debug:
             break
 
+    extension_debug = resolve_log_level(module_ctx.os.environ, extension_debug) == "DEBUG"
     log_debug(extension_debug, "extension", "Starting module extension implementation")
     log_debug(extension_debug, "extension", "Number of modules: %d" % len(module_ctx.modules))
 
@@ -3510,9 +3523,10 @@ def _test_optimization_sync_extension_impl(module_ctx):
             # Tag-level debug allows one noisy callsite without enabling verbose
             # logging for all extension users in the dependency graph.
             call_debug = hasattr(test_optimization_call, "debug") and test_optimization_call.debug
-            log_debug(call_debug, "extension", "Processing test_optimization_sync call: %s" % test_optimization_call.name)
+            call_log_debug = resolve_log_level(module_ctx.os.environ, call_debug) == "DEBUG"
+            log_debug(call_log_debug, "extension", "Processing test_optimization_sync call: %s" % test_optimization_call.name)
             log_debug(
-                call_debug,
+                call_log_debug,
                 "extension",
                 "Calling test_optimization_sync with name=%s, out_dir=%s, service=%s, debug=%s" %
                 (
@@ -3553,6 +3567,7 @@ def _test_optimization_sync_extension_impl(module_ctx):
 # Define the module extension with the test_optimization_sync tag
 test_optimization_sync_extension = module_extension(
     implementation = _test_optimization_sync_extension_impl,
+    environ = ["DD_TEST_OPTIMIZATION_LOG_LEVEL", "DD_TEST_OPTIMIZATION_DEBUG"],
     tag_classes = {
         "test_optimization_sync": tag_class(attrs = {
             "name": attr.string(mandatory = True),

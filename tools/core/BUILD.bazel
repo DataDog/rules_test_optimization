@@ -38,6 +38,15 @@ exports_files(
 )
 
 filegroup(
+    name = "diagnostic_runtime",
+    srcs = [
+        "topt_runtime/__init__.py",
+        "topt_runtime/log_levels.py",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+filegroup(
     name = "uploader_python_runtime",
     srcs = [
         "uploader_main.py",

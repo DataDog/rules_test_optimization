@@ -41,8 +41,6 @@ load(
     "RULES_VERSION",
     "UPLOADER_VERSION",
     "fail_with_prefix",
-    "log_debug",
-    "log_info",
 )
 load(
     "//tools/core:test_optimization_context_utils.bzl",
@@ -759,45 +757,8 @@ def _uploader_impl(ctx):
         }) + "\n",
     )
 
-    # High-level debug of rule inputs
-    log_info("Generating uploader scripts (Option 2: TEST_UNDECLARED_OUTPUTS_DIR)")
-    log_debug(
-        debug,
-        "config",
-        "Attributes → quiescent_sec=%s, max_wait_sec=%s, fail_on_error=%s, debug=%s, keep_payloads=%s, filter_prefix=%s, gzip_payloads=%s" %
-        (
-            quiescent_sec,
-            max_wait_sec,
-            fail_on_error,
-            debug,
-            keep_payloads,
-            filter_prefix_enabled,
-            gzip_payloads,
-        ),
-    )
-    if context_entries:
-        log_debug(debug, "inputs", "bundled context repos: %s" % ", ".join(sorted(context_entries.keys())))
-        if primary_repo_key == "__single_context_fallback__":
-            log_debug(debug, "inputs", "using legacy single-context fallback for bundled context.json")
-        log_debug(debug, "inputs", "primary context.json found at: %s" % context_json_rloc)
-        log_debug(debug, "inputs", "primary context.json artifact path: %s" % context_json_path)
-    else:
-        # Runtime script treats missing context as best-effort disablement.
-        log_debug(debug, "inputs", "context.json not found in data files; enrichment disabled")
-    if schema_json_rloc:
-        log_debug(debug, "inputs", "schema found at: %s" % schema_json_rloc)
-        log_debug(debug, "inputs", "schema artifact path: %s" % schema_json_path)
-    else:
-        log_debug(debug, "inputs", "schema not found in data files; validation disabled")
-    if schema_validator_rloc:
-        log_debug(debug, "inputs", "schema validator found at: %s" % schema_validator_rloc)
-        log_debug(debug, "inputs", "schema validator artifact path: %s" % schema_validator_path)
-    else:
-        log_debug(debug, "inputs", "schema validator not found in data files; validation disabled")
-    if ctx.files.data:
-        log_debug(debug, "inputs", "Data files count: %d" % len(ctx.files.data))
-        for f in ctx.files.data:
-            log_debug(debug, "inputs", "  data file: %s (%s)" % (f.basename, f.short_path))
+    # Diagnostics belong to the runtime, where LOG_LEVEL is available without
+    # introducing an environment-dependent analysis input.
 
     # ------------------------------------------------------------------
     # Phase 2: Materialize Bash runtime implementation from template file.
@@ -836,7 +797,6 @@ def _uploader_impl(ctx):
         substitutions = _tokenize_template_substitutions(bash_substitutions),
         is_executable = True,
     )
-    log_debug(debug, "render", "Bash script rendered from template: %s" % ctx.file._bash_runtime_template.short_path)
 
     # ------------------------------------------------------------------
     # Phase 3: Materialize PowerShell runtime implementation from template file.
@@ -875,7 +835,6 @@ def _uploader_impl(ctx):
         ),
         is_executable = False,
     )
-    log_debug(debug, "render", "PowerShell script rendered from template: %s" % ctx.file._powershell_runtime_template.short_path)
 
     # ------------------------------------------------------------------
     # Phase 4: Materialize executable/script artifacts.
@@ -888,7 +847,6 @@ def _uploader_impl(ctx):
         substitutions = _tokenize_template_substitutions({"ps_name": ps_file.basename}),
         is_executable = True,
     )
-    log_debug(debug, "outputs", "Declared outputs → bash='%s', ps='%s', bat='%s'" % (bash_file.basename, ps_file.basename, bat_file.basename))
 
     # The Python implementation is emitted in parallel during rollout.  Its
     # platform launchers only resolve Python, the bootstrap, and this target's
@@ -952,7 +910,6 @@ def _uploader_impl(ctx):
                 ([expected_targets_file] if expected_targets_file else []) +
                 extra_files,
     )
-    log_debug(debug, "outputs", "Runfiles include %d data file(s) plus PowerShell and batch scripts" % len(ctx.files.data))
 
     # Use target-platform constraints (ConstraintValueInfo) so executable
     # selection is analysis-time deterministic across host operating systems.

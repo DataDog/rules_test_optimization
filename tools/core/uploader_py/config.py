@@ -22,6 +22,7 @@ from typing import Mapping, Sequence
 
 from .json_utils import strict_json_loads
 from .models import DEFAULT_WORKERS
+from topt_runtime.log_levels import resolve_log_level
 
 
 CONFIG_SCHEMA_VERSION = 1
@@ -91,6 +92,7 @@ class UploaderConfig:
     dry_run: bool
     validate_enrichment: bool
     debug: bool
+    log_level: str
     quiescent_sec: int
     max_wait_sec: int
     max_depth: int
@@ -205,6 +207,11 @@ def parse_uploader_config(
         if args.debug is True
         else _environment_bool(env, "DD_TEST_OPTIMIZATION_DEBUG", rule.debug)
     )
+    try:
+        log_level = resolve_log_level(env, debug=debug)
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
+    debug = log_level == "DEBUG"
     keep_payloads = _environment_bool(
         env, "DD_TEST_OPTIMIZATION_KEEP_PAYLOADS", rule.keep_payloads
     )
@@ -311,6 +318,7 @@ def parse_uploader_config(
         dry_run=args.dry_run,
         validate_enrichment=args.validate_enrichment,
         debug=debug,
+        log_level=log_level,
         quiescent_sec=quiescent_sec,
         max_wait_sec=max_wait_sec,
         max_depth=max_depth,

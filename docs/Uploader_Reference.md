@@ -330,7 +330,8 @@ bazel run --config=test-optimization //:dd_upload_payloads
 |----------|---------|---------|
 | `DD_TEST_OPTIMIZATION_KEEP_PAYLOADS` | `0` | Set to `1` to retain payloads after successful upload (for debugging/re-upload) |
 | `DD_TEST_OPTIMIZATION_FILTER_PREFIX` | `0` | `0` uploads all payload files; set to `1` to only upload `span_events_*.json` or `coverage_*.json` |
-| `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Set to `1` to enable verbose attempt, success, startTime, and runfile/CODEOWNERS resolution logging. Terminal test-upload failures always report the HTTP status, a bounded response body, and payload sizes. |
+| `DD_TEST_OPTIMIZATION_LOG_LEVEL` | `INFO` | Choose `ERROR`, `WARN`, `INFO`, or `DEBUG`. Individual cached-output paths require `DEBUG`; `INFO` reports their count. JSON reports and exit codes are unaffected. See [log levels](Configuration_Reference.md#log-levels). |
+| `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Legacy verbose switch, used when `DD_TEST_OPTIMIZATION_LOG_LEVEL` is unset. Terminal test-upload failures always report the HTTP status, a bounded response body, and payload sizes. |
 | `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip test payloads before upload (adds `Content-Encoding: gzip`) |
 | `DD_TEST_OPTIMIZATION_WORKERS` | rule `workers` (`8`) | Override the maximum independent payload-file workers in Python mode; `--workers` has higher precedence |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |

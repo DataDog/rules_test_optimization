@@ -45,7 +45,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"[dd-uploader] error: {exc}", file=sys.stderr)
         return 2
 
-    logger = configure_logging(debug=config.debug, secrets=(config.api_key,))
+    logger = configure_logging(debug=config.debug, log_level=config.log_level, secrets=(config.api_key,))
     try:
         resolver = RunfilesResolver.from_environment(argv0=sys.argv[0])
     except RunfileResolutionError as exc:

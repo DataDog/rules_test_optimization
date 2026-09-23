@@ -15,6 +15,7 @@ import logging
 import sys
 from typing import Iterable, TextIO
 from urllib.parse import urlsplit, urlunsplit
+from topt_runtime.log_levels import LEVELS
 
 
 LOGGER_NAME = "dd-uploader"
@@ -48,6 +49,7 @@ class SecretRedactionFilter(logging.Filter):
 def configure_logging(
     *,
     debug: bool,
+    log_level: str | None = None,
     secrets: Iterable[str] = (),
     stream: TextIO | None = None,
 ) -> logging.Logger:
@@ -55,9 +57,10 @@ def configure_logging(
     logger = logging.getLogger(LOGGER_NAME)
     logger.handlers.clear()
     logger.propagate = False
-    logger.setLevel(logging.DEBUG if debug else logging.INFO)
+    level = LEVELS[log_level] if log_level else (logging.DEBUG if debug else logging.INFO)
+    logger.setLevel(level)
     handler = logging.StreamHandler(stream if stream is not None else sys.stderr)
-    handler.setLevel(logging.DEBUG if debug else logging.INFO)
+    handler.setLevel(level)
     handler.setFormatter(logging.Formatter("[dd-uploader] %(levelname)s: %(message)s"))
     handler.addFilter(SecretRedactionFilter(secrets))
     logger.addHandler(handler)
