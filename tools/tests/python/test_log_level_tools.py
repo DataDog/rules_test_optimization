@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -32,6 +33,20 @@ import validate_payload_schema as schema
 
 
 class LogLevelTests(unittest.TestCase):
+    def test_core_tools_load_through_isolated_runpy_coverage_entrypoint(self):
+        script = (
+            "import runpy, sys; "
+            "suite = runpy.run_path(sys.argv[1]); "
+            "suite['_load_module']('schema_probe', 'tools/core/validate_payload_schema.py'); "
+            "suite['_load_module']('doctor_probe', 'tools/core/test_optimization_doctor.py')"
+        )
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", script,
+             str(resolve_runfile("tools/tests/python/test_python_tools.py"))],
+            text=True, capture_output=True, timeout=20,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_defaults_legacy_debug_and_explicit_precedence(self):
         self.assertEqual("INFO", resolve_log_level({}))
         self.assertEqual("DEBUG", resolve_log_level({}, debug=True))
@@ -175,8 +190,14 @@ class LogLevelTests(unittest.TestCase):
         ps = resolve_runfile("tools/core/uploader_powershell_runtime.ps1.tpl").read_text()
         ps = ps[ps.index("# Logging functions"):ps.index("function Write-Utf8NoBomFile")]
         runtimes = []
-        if shutil.which("bash"):
-            runtimes.append((["bash", "-c"], bash + '\nlog "info-marker"; log "warning: warn-marker"; log "error: error-marker"; dbg "debug-marker"; printf "machine-result\\n"\n'))
+        bash_executable = shutil.which("bash")
+        if os.name == "nt":
+            # PATH may select Windows' WSL launcher, not the installed Git Bash.
+            git_bash = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "Git/bin/bash.exe"
+            if git_bash.is_file():
+                bash_executable = str(git_bash)
+        if bash_executable:
+            runtimes.append(([bash_executable, "-c"], bash + '\nlog "info-marker"; log "warning: warn-marker"; log "error: error-marker"; dbg "debug-marker"; printf "machine-result\\n"\n'))
         if shutil.which("pwsh"):
             runtimes.append((["pwsh", "-NoProfile", "-NonInteractive", "-Command"], ps + '\nLog "info-marker"; Log "warning: warn-marker"; Log "error: error-marker"; Dbg "debug-marker"; Write-Output "machine-result"'))
         self.assertTrue(runtimes, "at least one supported shell must be available")

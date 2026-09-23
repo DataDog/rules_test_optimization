@@ -6,6 +6,8 @@
 
 """Severity policy for host-side Test Optimization diagnostics, not test output."""
 
+from __future__ import annotations
+
 import os
 from typing import Mapping
 

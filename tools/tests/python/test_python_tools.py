@@ -99,8 +99,11 @@ def _load_module(name: str, rel_path: str) -> types.ModuleType:
     """Internal helper for load module behavior."""
     path = _runfile(rel_path)
     if rel_path.startswith("tools/core/"):
-        from uploader_test_support import add_uploader_runtime_to_path
-        add_uploader_runtime_to_path()
+        # Coverage loads this file with runpy, without the test directory on
+        # sys.path. Resolve the runtime through runfiles, not a sibling import.
+        runtime_root = str(_runfile("tools/core/topt_runtime/__init__.py").parent.parent)
+        if runtime_root not in sys.path:
+            sys.path.insert(0, runtime_root)
     spec = importlib.util.spec_from_file_location(name, str(path))
     if spec is None or spec.loader is None:
         raise RuntimeError(f"failed to load module spec for {path}")
