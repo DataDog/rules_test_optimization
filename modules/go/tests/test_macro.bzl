@@ -403,6 +403,76 @@ def go_macro_internal_helper_tags_loading_tests(
         native.existing_rule(disabled_target + "_topt_bazel_metadata"),
     )
 
+def go_macro_helper_compatibility_fixture(name):
+    """Exercise caller constraints on every independently selectable target."""
+    native.config_setting(
+        name = "enabled",
+        define_values = {"helper_compatibility": "enabled"},
+    )
+    gate = select({
+        ":enabled": [],
+        "//conditions:default": ["@platforms//:incompatible"],
+    })
+    env = loadingtest.make(name)
+    for mode, descriptor in [
+        ("dynamic", _single_service_topt_data()),
+        ("static", _local_static_topt_data()),
+    ]:
+        for case, attrs in [
+            ("default", {}),
+            ("empty", {"target_compatible_with": []}),
+            ("list", {"target_compatible_with": ["@platforms//:incompatible"]}),
+            ("select", {"target_compatible_with": gate}),
+            ("composed", {"target_compatible_with": ["@platforms//os:linux"] + gate}),
+        ]:
+            target_name = mode + "_" + case
+            dd_topt_go_test(
+                name = target_name,
+                topt_data = descriptor,
+                go_test_rule = _go_test_capture_rule,
+                orchestrion_pin_files = [":go.mod"],
+                tags = ["manual"],
+                **attrs
+            )
+            expected = native.existing_rule(target_name).get("target_compatible_with", ())
+            for suffix in ["__raw_go_test", "_topt_payloads", "_topt_bazel_metadata"]:
+                actual = native.existing_rule(target_name + suffix).get("target_compatible_with", ())
+                loadingtest.equals(env, target_name + suffix, str(expected), str(actual))
+
+    # Reproduce wildcard cquery reaching a disabled repository through helpers,
+    # even though the public target and raw test are already incompatible.
+    dd_topt_go_test(
+        name = "disabled_repository",
+        topt_data = _local_static_topt_data(
+            repo_name = "test_optimization_data_static_disabled",
+            service_name = "static-disabled-service",
+        ),
+        go_test_rule = _go_test_capture_rule,
+        orchestrion_pin_files = [":go.mod"],
+        tags = ["manual"],
+        target_compatible_with = select({
+            ":enabled": [],
+            "//conditions:default": ["@platforms//:incompatible"],
+        }),
+    )
+
+    # A disabled generated export must retain its original raw-test behavior.
+    dd_topt_go_test(
+        name = "disabled_export",
+        topt_data = _single_service_topt_data(enabled = False),
+        go_test_rule = _go_test_capture_rule,
+        target_compatible_with = gate,
+        tags = ["manual"],
+    )
+    loadingtest.equals(
+        env,
+        "disabled_export_constraints",
+        str(native.existing_rule("static_select")["target_compatible_with"]),
+        str(native.existing_rule("disabled_export")["target_compatible_with"]),
+    )
+    for suffix in ["__raw_go_test", "_topt_payloads", "_topt_bazel_metadata"]:
+        loadingtest.equals(env, "disabled_export_absent" + suffix, None, native.existing_rule("disabled_export" + suffix))
+
 def go_macro_disabled_raw_target(name, tags = None):
     """Target under test for the strict disabled raw go_test branch."""
     dd_topt_go_test(

@@ -274,6 +274,11 @@ jobs:
               --override_module=datadog-rules-test-optimization=../..
           )
 
+      - name: Check Go helper wildcard compatibility
+        timeout-minutes: 5
+        shell: bash
+        run: bash tools/tests/integration/run_go_helper_compatibility.sh
+
       - name: Run Bazel tests (python companion module)
         shell: bash
         run: |
