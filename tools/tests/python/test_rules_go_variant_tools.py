@@ -496,6 +496,10 @@ class RulesGoReleaseArchiveContentsTests(unittest.TestCase):
             "third_party/rules_go_orchestrion/profiles/workspace_runtime.json",
             required,
         )
+        self.assertIn(
+            "third_party/rules_go_orchestrion/profiles/bzlmod_runtime.json",
+            required,
+        )
         self.assertIn("third_party/rules_go_orchestrion/patches/v0_60_0/base.series", required)
         self.assertIn(
             "third_party/rules_go_orchestrion/patches/v0_60_0/base/0001-full-delta.patch",

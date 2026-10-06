@@ -66,6 +66,10 @@ This product includes software developed at Datadog
   - `python3 tools/dev/generate_rules_go_fork_maps.py --check`
   - `python3 tools/dev/materialize_rules_go_fork.py check --all`
   - `python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt`
+  - `python3 tools/dev/verify_rules_go_profiles.py --profile bzlmod_runtime --public-denylist tools/dev/private_leak_public_denylist.txt`
+    applies the generated patch to clean upstream rules_go and runs the same
+    instrumented CGO/reproducibility smoke with Bzlmod enabled and WORKSPACE
+    disabled. CI runs both profiles for every maintained upstream.
   - `python3 tools/dev/check_release_archive_contents.py`
   - `python3 tools/dev/diff_rules_go_fork.py --all --write-report`
 - Optional Python tooling dependencies (for local script execution):

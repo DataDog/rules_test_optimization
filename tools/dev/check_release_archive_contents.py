@@ -71,6 +71,7 @@ def required_archive_paths(registry: ForkRegistry) -> set[str]:
         "modules/go/tools/onboardingpins/rules_go_forks_gen.go",
         repo_relative_path(repo_root, registry_artifact_root / "BUILD.bazel"),
         repo_relative_path(repo_root, registry_artifact_root / "profiles" / "workspace_runtime.json"),
+        repo_relative_path(repo_root, registry_artifact_root / "profiles" / "bzlmod_runtime.json"),
         repo_relative_path(repo_root, registry_artifact_root / "registry.json"),
     }
 
