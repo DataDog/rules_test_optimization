@@ -482,7 +482,9 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                 self.assertEqual(root / "out/v0_60_0-bzlmod_runtime.patch", kwargs["output"])
                 self.assertEqual(root / "out/v0_60_0-bzlmod_runtime.MANIFEST.json", kwargs["manifest"])
                 self.assertEqual(root / "bzlmod_runtime.json", kwargs["profile_path"])
-                _write(kwargs["output"], "fixture patch\n")
+                # Match the generator's LF-only bytes on Windows as well.
+                kwargs["output"].parent.mkdir(parents=True, exist_ok=True)
+                kwargs["output"].write_bytes(b"fixture patch\n")
                 _write(kwargs["manifest"], json.dumps({
                     "profile": "bzlmod_runtime",
                     "patch_sha256": hashlib.sha256(b"fixture patch\n").hexdigest(),
