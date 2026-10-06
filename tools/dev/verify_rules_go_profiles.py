@@ -72,6 +72,7 @@ def verify_profiles(
 ) -> None:
     """Generate and validate one profile patch for selected upstreams."""
     registry = load_registry(registry_path)
+    resolved_profile = profile_path(profile_root, profile)
     output_dir.mkdir(parents=True, exist_ok=True)
     generated_paths: list[Path] = []
     private_safe_patterns = read_private_safe_patterns(public_denylist, private_blocklist_file)
@@ -86,13 +87,13 @@ def verify_profiles(
     with temporary_smoke_root() as smoke_root:
         for upstream_id in upstream_ids:
             selection = registry.resolve(upstream_id, "base")
-            patch = output_dir / ("%s-%s.patch" % (upstream_id, profile))
-            manifest = output_dir / ("%s-%s.MANIFEST.json" % (upstream_id, profile))
+            patch = output_dir / ("%s-%s.patch" % (upstream_id, resolved_profile.stem))
+            manifest = output_dir / ("%s-%s.MANIFEST.json" % (upstream_id, resolved_profile.stem))
             generate_consumer_patch(
                 registry_path=registry_path,
                 upstream=upstream_id,
                 variant="base",
-                profile_path=profile_path(profile_root, profile),
+                profile_path=resolved_profile,
                 output=patch,
                 manifest=manifest,
                 check_private_safe=public_denylist is not None or private_blocklist_file is not None,
