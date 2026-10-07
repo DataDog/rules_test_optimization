@@ -288,6 +288,10 @@ jobs:
           python3 tools/dev/verify_rules_go_profiles.py \
             --upstream "${{ matrix.upstream }}" \
             --public-denylist tools/dev/private_leak_public_denylist.txt
+          python3 tools/dev/verify_rules_go_profiles.py \
+            --profile bzlmod_runtime \
+            --upstream "${{ matrix.upstream }}" \
+            --public-denylist tools/dev/private_leak_public_denylist.txt
 
   rules-go-fork-drift:
     needs:

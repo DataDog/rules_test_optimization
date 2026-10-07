@@ -39,3 +39,9 @@ filegroup(
     srcs = ["profiles/workspace_runtime.json"],
     visibility = ["//visibility:public"],
 )
+
+filegroup(
+    name = "bzlmod_runtime_profile",
+    srcs = ["profiles/bzlmod_runtime.json"],
+    visibility = ["//visibility:public"],
+)

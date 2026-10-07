@@ -173,6 +173,73 @@ class RulesGoProfileToolTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "bare basename"):
                 self.mod.load_profile(path)
 
+    def test_bzlmod_profile_extends_workspace_runtime_without_lockfiles(self) -> None:
+        """Bzlmod adds module registration and its public extension alias only."""
+        workspace = self.workspace_profile()
+        bzlmod = self.mod.load_profile(
+            _runfile("third_party/rules_go_orchestrion/profiles/bzlmod_runtime.json")
+        )
+        self.assertEqual(
+            {"/MODULE.bazel", "go/extensions.bzl"},
+            set(bzlmod.include) - set(workspace.include),
+        )
+        self.assertFalse(set(workspace.include) - set(bzlmod.include))
+        classified = self.mod.classify_paths(
+            ["MODULE.bazel", "go/extensions.bzl", "MODULE.bazel.lock",
+             "go/private/orchestrion/extensions_test.go", "tests/core/BUILD.bazel"],
+            bzlmod,
+        )
+        self.assertEqual(["MODULE.bazel", "go/extensions.bzl"], classified.included)
+        self.assertEqual([], classified.unclassified)
+        self.assertEqual(3, len(classified.excluded))
+
+    def test_generated_bzlmod_patch_keeps_module_registration_and_alias(self) -> None:
+        """Regeneration cannot silently drop rules_go's own repository mapping."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            upstream = root / "upstream"
+            module = 'register_toolchains("@go_toolchains//:all")\n'
+            alias = 'go_sdk = _go_sdk\n'
+            _write(upstream / "MODULE.bazel", module)
+            _write(upstream / "go/extensions.bzl", alias)
+            _write(upstream / "MODULE.bazel.lock", "old lock\n")
+            fork = root / "fork"
+            _copy_tree(upstream, fork)
+            registration = (
+                'orchestrion = use_extension("//go:extensions.bzl", "orchestrion")\n'
+                'use_repo(orchestrion, "rules_go_orchestrion_tool")\n'
+            )
+            _write(fork / "MODULE.bazel", module + registration)
+            _write(fork / "go/extensions.bzl", alias + "orchestrion = _orchestrion_ext\n")
+            _write(fork / "MODULE.bazel.lock", "new lock\n")
+            _write(fork / "go/private/orchestrion/extensions_test.go", "package main\n")
+            profile = self.mod.load_profile(
+                _runfile("third_party/rules_go_orchestrion/profiles/bzlmod_runtime.json")
+            )
+            result = self.mod.generate_patch_from_trees(
+                upstream_root=upstream,
+                fork_root=fork,
+                profile=profile,
+                output=root / "bzlmod.patch",
+                manifest=root / "manifest.json",
+                manifest_context={
+                    "upstream_id": "fixture", "rules_go_version": "0.0.0",
+                    "upstream_repository": "https://github.com/bazel-contrib/rules_go.git",
+                    "upstream_commit": "abc123", "variant": "base",
+                },
+            )
+            patch = result.output.read_text(encoding="utf-8")
+            self.assertIn('use_repo(orchestrion, "rules_go_orchestrion_tool")', patch)
+            self.assertIn("orchestrion = _orchestrion_ext", patch)
+            self.assertNotIn("MODULE.bazel.lock", patch)
+            self.assertNotIn("extensions_test.go", patch)
+            subprocess.run(
+                ["git", "-C", str(upstream), "apply", "-p1", str(result.output)],
+                check=True,
+            )
+            self.assertEqual(module + registration, (upstream / "MODULE.bazel").read_text())
+            self.assertEqual("old lock\n", (upstream / "MODULE.bazel.lock").read_text())
+
     def test_generate_patch_from_trees_applies_and_is_deterministic(self) -> None:
         """Generated profile patches apply cleanly and exclude non-profile paths."""
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -406,6 +473,42 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
                     upstream="v9_99_9",
                 )
 
+    def test_smoke_module_system_comes_from_generated_profile(self) -> None:
+        """A profile supplied as a JSON path still receives the Bzlmod smoke."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+
+            def generate(**kwargs):
+                self.assertEqual(root / "out/v0_60_0-bzlmod_runtime.patch", kwargs["output"])
+                self.assertEqual(root / "out/v0_60_0-bzlmod_runtime.MANIFEST.json", kwargs["manifest"])
+                self.assertEqual(root / "bzlmod_runtime.json", kwargs["profile_path"])
+                # Match the generator's LF-only bytes on Windows as well.
+                kwargs["output"].parent.mkdir(parents=True, exist_ok=True)
+                kwargs["output"].write_bytes(b"fixture patch\n")
+                _write(kwargs["manifest"], json.dumps({
+                    "profile": "bzlmod_runtime",
+                    "patch_sha256": hashlib.sha256(b"fixture patch\n").hexdigest(),
+                    "included_paths": ["MODULE.bazel"],
+                    "excluded_paths": [],
+                }))
+
+            registry = types.SimpleNamespace(
+                upstream_ids=lambda: ["v0_60_0"],
+                resolve=lambda *_: None,
+            )
+            with mock.patch.object(self.mod, "load_registry", return_value=registry), \
+                 mock.patch.object(self.mod, "generate_consumer_patch", side_effect=generate), \
+                 mock.patch.object(self.mod, "verify_runtime_functional_smoke") as smoke:
+                self.mod.verify_profiles(
+                    registry_path=root / "registry.json",
+                    profile_root=root,
+                    profile=str(root / "bzlmod_runtime.json"),
+                    output_dir=root / "out",
+                    public_denylist=None,
+                    private_blocklist_file=None,
+                )
+            self.assertEqual("bzlmod", smoke.call_args.kwargs["module_system"])
+
     def test_smoke_workspace_wires_hermetic_go_sdk_into_orchestrion(self) -> None:
         """The generated WORKSPACE smoke must not bootstrap from host Go."""
         with tempfile.TemporaryDirectory() as raw_tmp:
@@ -427,6 +530,42 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
             self.assertIn('orchestrion_mode = "test_optimization"', build_text)
             self.assertIn("cgo = True", build_text)
             self.assertTrue((workspace / "app/hello_cgo.go").is_file())
+
+    def test_bzlmod_smoke_shares_public_extension_with_patched_rules_go(self) -> None:
+        """The smoke root must configure the same extension rules_go imports."""
+        with tempfile.TemporaryDirectory() as raw_tmp:
+            root = Path(raw_tmp)
+            workspace = root / "workspace"
+            workspace.joinpath("transition_rule").mkdir(parents=True)
+            self.mod.write_smoke_module(
+                workspace=workspace,
+                rules_go_root=root / "patched_rules_go",
+                rules_go_version="0.63.0",
+                go_version="1.25.0",
+                orchestrion_version="v1.12.0",
+                dd_trace_go_version="v2.9.1",
+            )
+            module = workspace.joinpath("MODULE.bazel").read_text()
+            self.assertIn('"@io_bazel_rules_go//go:extensions.bzl", "orchestrion"', module)
+            self.assertIn('use_repo(orchestrion, "rules_go_orchestrion_tool")', module)
+            self.assertIn('go_sdk_root = "@go_sdk//:ROOT"', module)
+            self.assertIn('version = "0.63.0"', module)
+            self.assertIn('path = "%s"' % (root / "patched_rules_go").as_posix(), module)
+            self.assertNotIn("go/private/orchestrion:extensions.bzl", module)
+            transition = workspace.joinpath("transition_rule/MODULE.bazel").read_text()
+            self.assertIn('bazel_dep(name = "rules_go", version = "0.63.0")', transition)
+            self.assertIn('bazel_dep(name = "platforms", version = "1.0.0")', transition)
+
+    def test_smoke_rejects_unknown_module_system_before_downloading(self) -> None:
+        with mock.patch.object(self.mod, "download_upstream") as download:
+            with self.assertRaisesRegex(ValueError, "unsupported module system"):
+                self.mod.verify_runtime_functional_smoke(
+                    selection=None, patch=Path("patch"), work_root=Path("root"),
+                    bazel=Path("bazel"), go_version="1.25.0",
+                    orchestrion_version="v1.12.0", dd_trace_go_version="v2.9.1",
+                    private_safe_patterns=[], module_system="unknown",
+                )
+            download.assert_not_called()
 
     def test_run_bazel_scans_captured_output_before_failure_details(self) -> None:
         """Verifier command wrappers must not leak denylisted command output."""

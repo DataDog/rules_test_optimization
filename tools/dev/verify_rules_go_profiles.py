@@ -72,6 +72,7 @@ def verify_profiles(
 ) -> None:
     """Generate and validate one profile patch for selected upstreams."""
     registry = load_registry(registry_path)
+    resolved_profile = profile_path(profile_root, profile)
     output_dir.mkdir(parents=True, exist_ok=True)
     generated_paths: list[Path] = []
     private_safe_patterns = read_private_safe_patterns(public_denylist, private_blocklist_file)
@@ -86,13 +87,13 @@ def verify_profiles(
     with temporary_smoke_root() as smoke_root:
         for upstream_id in upstream_ids:
             selection = registry.resolve(upstream_id, "base")
-            patch = output_dir / ("%s-%s.patch" % (upstream_id, profile))
-            manifest = output_dir / ("%s-%s.MANIFEST.json" % (upstream_id, profile))
+            patch = output_dir / ("%s-%s.patch" % (upstream_id, resolved_profile.stem))
+            manifest = output_dir / ("%s-%s.MANIFEST.json" % (upstream_id, resolved_profile.stem))
             generate_consumer_patch(
                 registry_path=registry_path,
                 upstream=upstream_id,
                 variant="base",
-                profile_path=profile_path(profile_root, profile),
+                profile_path=resolved_profile,
                 output=patch,
                 manifest=manifest,
                 check_private_safe=public_denylist is not None or private_blocklist_file is not None,
@@ -110,7 +111,7 @@ def verify_profiles(
                 raise ValueError("manifest excluded_paths are not sorted: %s" % manifest)
             if run_functional_smoke:
                 print("running functional smoke for %s/%s" % (upstream_id, profile))
-                verify_workspace_runtime_functional_smoke(
+                verify_runtime_functional_smoke(
                     selection=selection,
                     patch=patch,
                     work_root=smoke_root / upstream_id,
@@ -119,6 +120,7 @@ def verify_profiles(
                     orchestrion_version=orchestrion_version,
                     dd_trace_go_version=dd_trace_go_version,
                     private_safe_patterns=private_safe_patterns,
+                    module_system="bzlmod" if data.get("profile") == "bzlmod_runtime" else "workspace",
                 )
             generated_paths.extend([patch, manifest])
             print("verified %s" % patch)
@@ -136,7 +138,7 @@ def verify_profiles(
         )
 
 
-def verify_workspace_runtime_functional_smoke(
+def verify_runtime_functional_smoke(
     *,
     selection: ForkSelection,
     patch: Path,
@@ -146,13 +148,22 @@ def verify_workspace_runtime_functional_smoke(
     orchestrion_version: str,
     dd_trace_go_version: str,
     private_safe_patterns: list[str],
+    module_system: str = "workspace",
 ) -> None:
-    """Verify a generated patch in two independent consumer-style builds."""
+    """Verify a runtime patch in two independent consumer-style builds."""
+    if module_system not in ("workspace", "bzlmod"):
+        raise ValueError("unsupported module system: %s" % module_system)
     upstream_source = download_upstream(selection, work_root / "download")
-    common_flags = [
-        "--noenable_bzlmod",
-        "--enable_workspace",
-    ]
+    common_flags = (
+        [
+            "--enable_bzlmod",
+            "--noenable_workspace",
+            "--lockfile_mode=off",
+            "--repo_env=DD_TEST_OPTIMIZATION_ENABLED=1",
+        ]
+        if module_system == "bzlmod"
+        else ["--noenable_bzlmod", "--enable_workspace"]
+    )
     consumer_flags = cgo_reproducibility_flags()
     plain_snapshots = []
     optimized_snapshots = []
@@ -184,6 +195,15 @@ def verify_workspace_runtime_functional_smoke(
             orchestrion_version=orchestrion_version,
             dd_trace_go_version=dd_trace_go_version,
         )
+        if module_system == "bzlmod":
+            write_smoke_module(
+                workspace=workspace,
+                rules_go_root=rules_go_root,
+                rules_go_version=selection.rules_go_version,
+                go_version=go_version,
+                orchestrion_version=orchestrion_version,
+                dd_trace_go_version=dd_trace_go_version,
+            )
         isolated_cache_flags = [
             "--disk_cache=%s" % (run_root / "disk_cache").as_posix(),
             "--remote_cache=",
@@ -511,6 +531,57 @@ func CgoGreeting() string {
         encoding="utf-8",
     )
     app.joinpath("metadata.json").write_text("{}\n", encoding="utf-8")
+
+
+def write_smoke_module(
+    *,
+    workspace: Path,
+    rules_go_root: Path,
+    rules_go_version: str,
+    go_version: str,
+    orchestrion_version: str,
+    dd_trace_go_version: str,
+) -> None:
+    """Use only the generated patch for the Bzlmod smoke's rules_go wiring."""
+    transition_repo = workspace / "transition_rule"
+    transition_repo.joinpath("MODULE.bazel").write_text(
+        'module(name = "datadog_go_transition")\n'
+        'bazel_dep(name = "rules_go", version = "%s")\n'
+        'bazel_dep(name = "platforms", version = "1.0.0")\n' % rules_go_version,
+        encoding="utf-8",
+    )
+    workspace.joinpath("MODULE.bazel").write_text(
+        '''module(name = "profile_smoke")
+
+bazel_dep(name = "rules_go", version = "%s", repo_name = "io_bazel_rules_go")
+local_path_override(module_name = "rules_go", path = "%s")
+bazel_dep(name = "datadog_go_transition", version = "")
+local_path_override(module_name = "datadog_go_transition", path = "%s")
+
+go_sdk = use_extension("@io_bazel_rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(name = "go_sdk", version = "%s")
+use_repo(go_sdk, "go_sdk")
+
+orchestrion = use_extension("@io_bazel_rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "%s",
+    dd_trace_go_version = "%s",
+    go_sdk_root = "@go_sdk//:ROOT",
+    go_sdk_version = "%s",
+)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+'''
+        % (
+            rules_go_version,
+            rules_go_root.as_posix(),
+            transition_repo.as_posix(),
+            go_version,
+            orchestrion_version,
+            dd_trace_go_version,
+            go_version,
+        ),
+        encoding="utf-8",
+    )
 
 
 def run_bazel(

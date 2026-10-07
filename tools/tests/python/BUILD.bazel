@@ -45,6 +45,7 @@ sh_test(
         "test_uploader_worker_pool_tools.py",
         "uploader_test_support.py",
         "//modules/go/tools/onboardingpins:rules_go_forks_gen.go",
+        "//third_party/rules_go_orchestrion:bzlmod_runtime_profile",
         "//third_party/rules_go_orchestrion:registry.json",
         "//third_party/rules_go_orchestrion:workspace_runtime_profile",
         "//tools/core:bep_artifact_stage_helper.py",

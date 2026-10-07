@@ -182,6 +182,14 @@ and `tools/dev/verify_rules_go_profiles.py` so consumers that already own a
 `rules_go` patch stack can generate a sparse, profile-specific input and rebase
 or merge it locally instead of vendoring a second complete `rules_go` tree.
 
+Select `--profile workspace_runtime` for WORKSPACE consumers or
+`--profile bzlmod_runtime` for Bzlmod consumers. The Bzlmod profile includes
+`MODULE.bazel` and the public `go/extensions.bzl` alias. Both the consumer and
+patched rules_go must use `go:extensions.bzl`'s `orchestrion` extension so they
+share the same tool repository. A root-only `use_repo` does not make that
+repository visible inside rules_go. Neither profile includes upstream lockfile
+changes or repository tests.
+
 ## First-run checklist (all scenarios)
 
 Use this checklist before your first CI rollout:

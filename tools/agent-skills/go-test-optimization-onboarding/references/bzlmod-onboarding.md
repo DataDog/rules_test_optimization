@@ -99,7 +99,12 @@ the bootstrap or onboarding pins summary, for example
 `third_party/rgo/v0_63_0/base`. Repositories that
 already own a private `rules_go` patch stack should generate a public consumer
 patch profile and rebase or merge it locally inside that repository instead of
-using a second complete tree. `dd_trace_go_pin_files`,
+using a second complete tree. Use `--profile bzlmod_runtime`: the WORKSPACE
+profile deliberately omits rules_go's `MODULE.bazel` extension registration.
+Keep that registration and configure the same public
+`go:extensions.bzl` / `orchestrion` extension in the consumer root. Do not mix
+it with the private `orchestrion_ext` entrypoint; Bzlmod treats those as separate
+extension usages. `dd_trace_go_pin_files`,
 `dd_trace_go_version`, and `dd_trace_go_versions` are mutually exclusive.
 Use an explicit shared or per-module version only when the checked-in module
 graph cannot be resolved by normal pin-file mode.
