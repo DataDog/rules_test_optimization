@@ -140,8 +140,8 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "8Z0dqG8n5A2E4sAbWxvij+vncAodaOVqDuvzF/sm6wE=",
-        "usagesDigest": "wLZKZW3et9AZB9PdsRyNX8IC9uzvvBMQbjMnvx8yB2s=",
+        "bzlTransitiveDigest": "GIqAr+5EfQkTO5/vjYtwMMpSGyCYWjAwm2EqAQafjsM=",
+        "usagesDigest": "165AL6sLYeu2jA06JYDGx/9ZGf0HLkAIbVYIVQ2KjzE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -149,10 +149,12 @@
           "test_optimization_data": {
             "repoRuleId": "@@datadog-rules-test-optimization+//tools/tests:example_stub_repo.bzl%example_stub_repo",
             "attributes": {
+              "enabled": true,
               "go_module_included": false,
               "go_module_path": "example.com/stub",
               "go_sanitized_module_path": "example_com_stub",
               "labels": [],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data",
               "service_name": "stub-service",

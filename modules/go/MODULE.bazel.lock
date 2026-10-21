@@ -149,7 +149,7 @@
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "qE9S3HNMfKVJtD4XMT5WNvc3sgOOqqdVoBns0egnuPE=",
-        "usagesDigest": "bCrmCvUzjwmaer0KO0w5vG+clLl4rBuIE4SB8EGEmtM=",
+        "usagesDigest": "EwqrPGsmtIZ7KuUznjUsx7S3GwN0By6XN+zwPZ9aiMQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -352,7 +352,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "N942zJo74p6EuM32D0LK75ZZ+l/Ib5MF2HcKQ7hgetY=",
+        "bzlTransitiveDigest": "iSQX1y6l1kkeVbC4bztr4kWQcMMjARgsbgSXVVpG/pQ=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

@@ -198,7 +198,7 @@
     "//tools/dev:dotnet_bootstrap.bzl%dotnet_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "UPeW5Tc9bGVY170mvXNHX3/Hod9plUSKN+ZWFasuDF8=",
-        "usagesDigest": "vO5UfI40VHHuKwJ+vGH7ESDqviTvEkat2u/1Ti//u/8=",
+        "usagesDigest": "6XkQmtWoRSq45eriNj0RrOoU5lR56D6J9yWZ4zCY6rA=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -222,7 +222,7 @@
     "//tools/dev:go_bootstrap.bzl%go_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "hKApWFDD6wQhS26gyQpQNBE1Cc+J7WtqTgCDLAx6oRM=",
-        "usagesDigest": "Ip/gkk31wN2jNREeLsqoYozzI3b88ap9xnbKkMsDeVE=",
+        "usagesDigest": "g0B5hsO8fHJ3xF1BlfPdIf+mIq/yVoRfqDwEnbZkxYA=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -246,7 +246,7 @@
     "//tools/dev:java_bootstrap.bzl%java_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "y9kgju33Pes77Wm7i6LxtqHJeQgUNhyTlZTlLVpyqnw=",
-        "usagesDigest": "4Qvilq7qpc85yMSZSc36emsQCH5m4RP8rKLSFksFCEA=",
+        "usagesDigest": "Wrd1HOHgAsWXRyDaqa9LAuDmO1auXTZxWoocYatozsQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -270,7 +270,7 @@
     "//tools/dev:nodejs_bootstrap.bzl%nodejs_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "YelvV8D1FHQwD5h5oBWQpKIK+vrFBUPEZeH6vSQXac0=",
-        "usagesDigest": "U+ldeaKaVm3OwMsBxCFr2NQ7uhUnrdFQfCq7LOBKv90=",
+        "usagesDigest": "jIOcR0sXCrNoct3oeR1ztrKw/we8EgVY85ex0oNoxTY=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -294,7 +294,7 @@
     "//tools/dev:python_bootstrap.bzl%python_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "1HA/1MUgyYx5SYrKhSpQl/qH3hv/G4odAsLv4LXMQ5E=",
-        "usagesDigest": "nJGgtuXE/IoVQITeVVph6loEw+UA7fuRPl2B2NE7KIc=",
+        "usagesDigest": "c71Cd1X7lyXBYjgwdlYt8R6OdCKqAMeLeRTYeTcj3Ug=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -318,7 +318,7 @@
     "//tools/dev:ruby_bootstrap.bzl%ruby_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "ig/oJWWSi66NeqxG+UD065TtHW9MD06FkUwE+BZkFcE=",
-        "usagesDigest": "OsX44I5k7I4QGejw4Fm8JFGHlYvTWVpKppAqsOfqTZY=",
+        "usagesDigest": "dfo3+uxu/KovmiW95gyPzOBDxUo0mcW/XKAZG3HIB7Y=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -342,7 +342,7 @@
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "rzTQJIRz9Kp9iW7tjdt2NIf5A0cF3TWHKRxR+nwEaXE=",
-        "usagesDigest": "Y7pj/+6VGiGQWxcchDXIRj0wRk/Zf1rM4EDatzpumys=",
+        "usagesDigest": "2/zRxNH3uLMa+UUhYnrBQ3wVnNXOet9BkuroltezE6o=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -634,7 +634,7 @@
     "@@rules_dotnet+//dotnet:extensions.bzl%dotnet": {
       "general": {
         "bzlTransitiveDigest": "3NFH9+PfsEdlRhZtq3iPX8FRGmmgowYZvWUuTyxUYdw=",
-        "usagesDigest": "X0fiOUZTeJTqbKuIG9MtW7creUN0Dn2o9PJrVETxkdA=",
+        "usagesDigest": "ryXYUkWEz/SGjxpUY2AMlcdkrnbGdjcQfwqp8IVRfYg=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -824,7 +824,7 @@
     },
     "@@rules_go+//go:extensions.bzl%orchestrion": {
       "general": {
-        "bzlTransitiveDigest": "JvsaUpYtVsZsJiibPRVwlBavIZqP+f7cAFeoBGLVSnc=",
+        "bzlTransitiveDigest": "fGPrMcJPKFcxbKdIUNREcJhspfWnqmjJPMwz8K1bjGU=",
         "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -931,7 +931,7 @@
     "@@rules_nodejs+//nodejs:extensions.bzl%node": {
       "general": {
         "bzlTransitiveDigest": "4pUxCNc22K4I+6+4Nxu52Hur12tFRfa1JMsN5mdDv60=",
-        "usagesDigest": "7z7Uu5W+jhm3dLkS9zo0j761cBL84vSgAhBLoZBmY6Q=",
+        "usagesDigest": "sGNRCbzNq0vP19AjXzgEEpts4bg4STtWvdbAvyTd7Fo=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},

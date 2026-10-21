@@ -16,10 +16,15 @@ and multi-service onboarding, use [`docs/Language_Onboarding.md`](Language_Onboa
 
 ### Option A: install from Git commit (recommended until BCR publication)
 
+The snippets below use the `1.3.0` candidate metadata. Pin a commit containing
+that version for both core and companions. The historical `v1.2.0` archive
+tuple further below belongs to the previous release and must not be relabeled
+as `1.3.0`.
+
 In your `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -27,7 +32,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_go_test)
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -39,7 +44,7 @@ git_override(
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 # Optional companion module (only needed if you use dd_topt_py_test)
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-python",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -48,7 +53,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_java_test)
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-java",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -57,7 +62,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_nodejs_test)
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-nodejs",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -66,7 +71,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_dotnet_test)
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-dotnet",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -75,7 +80,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_ruby_test)
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-ruby",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -114,7 +119,7 @@ The command prints the full tuple used by WORKSPACE archive mode:
 `ORCHESTRION_VERSION`. Published GitHub codeload pins are `tar.gz`; use a
 separate repository-owned mirror process for any other archive format.
 
-#### Current `v1.2.0` published tuple
+#### Historical `v1.2.0` published tuple
 
 ```bash
 RTO_COMMIT="69953536d4ef1252c8181c267d16c61263f0aa4c"
@@ -621,7 +626,7 @@ If your repository needs sync + uploader only (including non-Go languages),
 depend on core only:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",

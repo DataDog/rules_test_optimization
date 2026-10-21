@@ -15,6 +15,8 @@ versioning.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-21
+
 ### Added
 
 - Added `test_optimization_manifest_sync` and
@@ -34,9 +36,19 @@ versioning.
   Orchestrion integration and public consumer patch profile.
 - Added a non-default `rules_go` v0.63.0 support line with the maintained
   Orchestrion integration and public consumer patch profile.
+- Added `DD_TEST_OPTIMIZATION_LOG_LEVEL` with `ERROR`, `WARN`, `INFO`, and
+  `DEBUG` levels for sync, doctor, and uploader diagnostics. The default is
+  `INFO`; per-output cached-payload skip messages are available at `DEBUG`.
 
 ### Changed
 
+- The uploader now defaults to the shared Python implementation on Linux,
+  macOS, and Windows. When upgrading from `1.2.0`, install Python `3.10` or
+  newer on the machine running `dd_upload_payloads`. Set
+  `DD_TEST_OPTIMIZATION_PYTHON` or `PYTHON` if the interpreter is not available
+  as `python3` or `python` on `PATH`. For a temporary rollback, set
+  `use_python_uploader = False` on the workspace's `dd_payload_uploader`
+  target to use the former Bash/curl or PowerShell uploader.
 - Orchestrion repository bootstrap now reuses Go's configured or default build
   and module caches for ordinary Go work when they are writable, with a
   repository-local fallback for read-only environments. The Datadog cache is
@@ -76,6 +88,11 @@ versioning.
   the Orchestrion build setting enabled.
 
 ### Fixed
+- Release validation now rejects tags that do not match the core module
+  version, while retaining the existing core/companion alignment checks.
+- Generated Go payload and metadata helpers are manual and config-compatible,
+  so wildcard `build`, `test`, and `cquery` commands work with Test Optimization
+  disabled. Unconfigured `query` can still list the targets without analysis.
 - Static Go descriptors now select payloads by the test package's effective
   `importpath`, using the synchronized repository's module catalog. This
   restores per-package cache invalidation without loading generated exports or

@@ -6208,6 +6208,68 @@ class CheckModuleVersionsTests(unittest.TestCase):
             "tools/dev/check_module_versions.py",
         )
 
+    def setUp(self) -> None:
+        # Synthetic module versions must not depend on the runner's release tag.
+        github_ref = mock.patch.dict(os.environ, {"GITHUB_REF": ""})
+        github_ref.start()
+        self.addCleanup(github_ref.stop)
+
+    def test_main_checks_release_tag_against_aligned_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "MODULE.bazel").write_text(
+                'module(name = "datadog-rules-test-optimization", version = "1.2.3")\n',
+                encoding="utf-8",
+            )
+            for language in ("go", "python", "java", "nodejs", "dotnet", "ruby"):
+                module_dir = root / "modules" / language
+                module_dir.mkdir(parents=True)
+                (module_dir / "MODULE.bazel").write_text(
+                    f'module(name = "datadog-rules-test-optimization-{language}", version = "1.2.3")\n'
+                    'bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.3")\n',
+                    encoding="utf-8",
+                )
+            common_dir = root / "tools" / "core"
+            common_dir.mkdir(parents=True)
+            (common_dir / "common_utils.bzl").write_text(
+                'RULES_VERSION = "1.2.3"\nUPLOADER_VERSION = "1.2.3"\n',
+                encoding="utf-8",
+            )
+            for example in ("single_service", "multi_service"):
+                example_dir = root / "examples" / example
+                example_dir.mkdir(parents=True)
+                (example_dir / "MODULE.bazel").write_text(
+                    'bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.3")\n',
+                    encoding="utf-8",
+                )
+
+            cases = (
+                ("", 0),
+                ("refs/heads/main", 0),
+                ("refs/heads/v1.2.4", 0),
+                ("refs/pull/123/merge", 0),
+                ("refs/tags/v1.2.3", 0),
+                ("refs/tags/v1.2.4", 1),
+                ("refs/tags/v2.0.0", 1),
+                ("refs/tags/1.2.3", 1),
+                ("refs/tags/v1.2", 1),
+                ("refs/tags/v1.2.3-rc.1", 1),
+                ("refs/tags/", 1),
+            )
+            for ref, expected_status in cases:
+                with (
+                    self.subTest(ref=ref),
+                    mock.patch.object(self.mod, "_repo_root", return_value=root),
+                    mock.patch.dict(os.environ, {"GITHUB_REF": ref}),
+                    contextlib.redirect_stdout(io.StringIO()),
+                    contextlib.redirect_stderr(io.StringIO()) as stderr,
+                ):
+                    self.assertEqual(expected_status, self.mod.main())
+                    if expected_status:
+                        self.assertIn("release tag mismatch", stderr.getvalue())
+                        self.assertIn(ref, stderr.getvalue())
+                        self.assertIn("refs/tags/v1.2.3", stderr.getvalue())
+
     def test_extract_module_version(self) -> None:
         """Validate extract module version behavior."""
         with tempfile.TemporaryDirectory() as tmp:

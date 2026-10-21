@@ -10,7 +10,7 @@ This product includes software developed at Datadog
 
 This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.
 
-> Release status: module metadata currently uses `1.2.0`, but Bazel Central Registry publication is still pending. Until BCR entries are published, install with `git_override` (Bzlmod) or commit-pinned `git_repository` / `http_archive` (WORKSPACE).
+> Release status: this branch prepares `1.3.0`; it is not published yet. Bazel Central Registry publication is also pending. Use `git_override` (Bzlmod) or commit-pinned `git_repository` / `http_archive` (WORKSPACE), with the same commit for core and companions. The historical `v1.2.0` pins below still refer to that release, not this candidate.
 
 ## Onboarding paths
 
@@ -286,7 +286,7 @@ the default `dd-trace-go` version, and the default Orchestrion version.
 Published GitHub pins use `tar.gz`; other archive types must be mirrored and
 documented outside this helper.
 
-Current `v1.2.0` GitHub pins:
+Historical `v1.2.0` GitHub pins (not the `1.3.0` candidate):
 
 ```bash
 RTO_COMMIT="69953536d4ef1252c8181c267d16c61263f0aa4c"
@@ -333,7 +333,7 @@ Use this when you do not need `dd_topt_go_test`:
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -424,14 +424,14 @@ prerequisite block below, then let the guided bootstrap finish the Go-specific
 setup.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -606,14 +606,14 @@ named config. Python does not declare `rules_go` and must not copy the Go-only
 Orchestrion build flag.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-python",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -755,7 +755,7 @@ absent.
 ### Bzlmod + Java companion (`dd_topt_java_test`)
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-java",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -817,7 +817,7 @@ not include `srcs` by default and the extra files cost runfiles size.
 ```bzl
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-nodejs",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -850,7 +850,7 @@ dd_topt_nodejs_test(
 
 ```bzl
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-dotnet",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -905,7 +905,7 @@ def dotnet_csharp_test_adapter(name, data = None, env = None, **kwargs):
 
 ```bzl
 bazel_dep(name = "rules_ruby", version = "0.21.1")
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-ruby",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -1360,7 +1360,7 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 | Bazel | `8.5.1` | Repository baseline (`.bazelversion`) and primary CI lanes |
 | rules_go (Go users) | `0.60.0` / `rules_go_upstream = "v0_60_0"` | README examples use the default support line; importpath inference requires `0.51.0+` |
 | Go toolchain (example) | `1.25.0` | Consumer repositories may use another supported version |
-| Module versions | `1.2.0` metadata | BCR publication is pending; use commit pin/override install paths |
+| Module versions | `1.3.0` candidate | Not published yet; use commit pin/override install paths |
 
 - **Bazel 8.5.1 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
 - **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.4.1` during migration away from WORKSPACE mode in Bazel 9+
@@ -1848,7 +1848,7 @@ Use the raw macro directly only when you need the lower-level API.
 Before using it directly, configure the Go companion extension in `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 go_topt = use_extension(

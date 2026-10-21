@@ -148,8 +148,8 @@
   "moduleExtensions": {
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
-        "bzlTransitiveDigest": "NHlcGDHChvBcvl50+UhxkmlFTJUEj9A2ARhtKx4kY+0=",
-        "usagesDigest": "UDiAhPtQ9KsYnDQ8zl34syCpr+iVmZjdd5stUk67Umk=",
+        "bzlTransitiveDigest": "GIqAr+5EfQkTO5/vjYtwMMpSGyCYWjAwm2EqAQafjsM=",
+        "usagesDigest": "GY9AZ1ZTynpeW8Jenz86nbyayaRSSojwQlM6QM1wBjY=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -167,6 +167,7 @@
                 "example_python_stub_tests",
                 "example_python_tests"
               ],
+              "module_group_by_identifier": {},
               "out_dir": ".testoptimization",
               "repo_alias": "test_optimization_data",
               "service_name": "stub-service",
