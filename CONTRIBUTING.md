@@ -315,6 +315,11 @@ This product includes software developed at Datadog
   - Keep `UPLOADER_VERSION` in semantic-version format (`X.Y.Z`) and update it
     intentionally when uploader runtime behavior changes.
   - Run `python3 tools/dev/check_module_versions.py` before every release cut.
+    In tag workflows, it also requires `GITHUB_REF` to equal
+    `refs/tags/v<root-module-version>`. Branch and pull-request workflows keep
+    the alignment-only check. To check a planned tag locally without creating
+    it, run `GITHUB_REF=refs/tags/vX.Y.Z python3 tools/dev/check_module_versions.py`
+    with the intended version in place of `X.Y.Z`.
 - Publication order:
   1. Publish core module metadata/artifacts.
   2. Publish companion metadata/artifacts (depends on core).

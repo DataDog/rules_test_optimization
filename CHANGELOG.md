@@ -37,6 +37,13 @@ versioning.
 
 ### Changed
 
+- The uploader now defaults to the shared Python implementation on Linux,
+  macOS, and Windows. When upgrading from `1.2.0`, install Python `3.10` or
+  newer on the machine running `dd_upload_payloads`. Set
+  `DD_TEST_OPTIMIZATION_PYTHON` or `PYTHON` if the interpreter is not available
+  as `python3` or `python` on `PATH`. For a temporary rollback, set
+  `use_python_uploader = False` on the workspace's `dd_payload_uploader`
+  target to use the former Bash/curl or PowerShell uploader.
 - Orchestrion repository bootstrap now reuses Go's configured or default build
   and module caches for ordinary Go work when they are writable, with a
   repository-local fallback for read-only environments. The Datadog cache is

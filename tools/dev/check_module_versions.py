@@ -5,7 +5,7 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Verify module version alignment for core + companion modules.
+"""Verify core/companion version alignment and the GitHub release tag.
 
 This guard is intentionally lightweight so it can run in CI and local pre-release
 checks without extra dependencies.
@@ -13,6 +13,7 @@ checks without extra dependencies.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import re
 import sys
@@ -233,6 +234,15 @@ def main() -> int:
     ]
 
     errors = []
+    github_ref = os.environ.get("GITHUB_REF", "")
+    expected_release_ref = f"refs/tags/v{core_module_version}"
+    if github_ref.startswith("refs/tags/") and github_ref != expected_release_ref:
+        errors.append(
+            "release tag mismatch: "
+            f'GITHUB_REF is "{github_ref}" but root MODULE.bazel declares '
+            f'"{core_module_version}"; expected "{expected_release_ref}". '
+            "Update module versions before creating the release tag."
+        )
     for language, exists in companion_exists.items():
         if not exists:
             continue
