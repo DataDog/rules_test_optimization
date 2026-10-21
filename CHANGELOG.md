@@ -15,6 +15,8 @@ versioning.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-21
+
 ### Added
 
 - Added `test_optimization_manifest_sync` and
@@ -34,6 +36,9 @@ versioning.
   Orchestrion integration and public consumer patch profile.
 - Added a non-default `rules_go` v0.63.0 support line with the maintained
   Orchestrion integration and public consumer patch profile.
+- Added `DD_TEST_OPTIMIZATION_LOG_LEVEL` with `ERROR`, `WARN`, `INFO`, and
+  `DEBUG` levels for sync, doctor, and uploader diagnostics. The default is
+  `INFO`; per-output cached-payload skip messages are available at `DEBUG`.
 
 ### Changed
 
@@ -83,6 +88,11 @@ versioning.
   the Orchestrion build setting enabled.
 
 ### Fixed
+- Release validation now rejects tags that do not match the core module
+  version, while retaining the existing core/companion alignment checks.
+- Generated Go payload and metadata helpers are manual and config-compatible,
+  so wildcard `build`, `test`, and `cquery` commands work with Test Optimization
+  disabled. Unconfigured `query` can still list the targets without analysis.
 - Static Go descriptors now select payloads by the test package's effective
   `importpath`, using the synchronized repository's module catalog. This
   restores per-package cache invalidation without loading generated exports or

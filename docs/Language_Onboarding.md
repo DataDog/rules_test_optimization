@@ -204,14 +204,14 @@ workspaces.
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -541,14 +541,14 @@ service with `runtime_name = "go"`.
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -617,14 +617,14 @@ dd_test_optimization_targets(
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-python",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -885,14 +885,14 @@ runtime metadata.
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-python",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -960,14 +960,14 @@ dd_test_optimization_targets(
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-java",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -1038,14 +1038,14 @@ dd_topt_java_test(
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-java",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -1126,14 +1126,14 @@ dd_payload_uploader(
 # MODULE.bazel
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-nodejs",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -1199,14 +1199,14 @@ dd_topt_nodejs_test(
 # MODULE.bazel
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-nodejs",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -1305,14 +1305,14 @@ def dotnet_csharp_test_adapter(name, data = None, env = None, **kwargs):
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-dotnet",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -1380,14 +1380,14 @@ dd_topt_dotnet_test(
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-dotnet",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -1469,14 +1469,14 @@ dd_payload_uploader(
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "rules_ruby", version = "0.21.1")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-ruby",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -1544,14 +1544,14 @@ dd_topt_ruby_test(
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "rules_ruby", version = "0.21.1")
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
     commit = "<commit-sha>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.2.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.3.0")
 git_override(
     module_name = "datadog-rules-test-optimization-ruby",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
