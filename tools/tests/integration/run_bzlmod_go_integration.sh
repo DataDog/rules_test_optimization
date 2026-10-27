@@ -649,6 +649,7 @@ write_fixture_bazelrc() {
   cat > "$ws_dir/.bazelrc" <<EOF
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 common --incompatible_allow_tags_propagation
+common --incompatible_disallow_empty_glob=false
 build:test-optimization --@${rules_go_repo}//go/private/orchestrion:enabled=true
 EOF
 }
@@ -1485,7 +1486,7 @@ run_windows_enabled_smoke() {
   local test_name="${test_target_path#*:}"
   local -a bazel_test_flags=()
 
-  if [[ "$(uname -s)" == "Darwin" && "$BAZEL_VERSION" == "8.5.1" ]]; then
+  if [[ "$(uname -s)" == "Darwin" && "$BAZEL_VERSION" == "8.8.2" ]]; then
     bazel_test_flags+=(--noexperimental_split_xml_generation)
   fi
 

@@ -33,7 +33,7 @@ This product includes software developed at Datadog
 
 - Canonical full-repo command:
   - `./bazelw test //...`
-  - On macOS with Bazel 8.5.1, append
+  - On macOS with Bazel 8.8.2, append
     `--noexperimental_split_xml_generation`. The split XML helper can terminate
     with `SIGSEGV` independently of the test target.
 
@@ -120,21 +120,21 @@ This product includes software developed at Datadog
   - WORKSPACE default smoke:
     `tools/tests/integration/run_workspace_go_integration.sh`
   - WORKSPACE base, rules_go v0_60_0:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base, rules_go v0_60_0:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
   - WORKSPACE base, rules_go v0_61_1:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base, rules_go v0_61_1:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
   - WORKSPACE base, rules_go v0_62_0:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base, rules_go v0_62_0:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
   - WORKSPACE base, rules_go v0_63_0:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_63_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_63_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Bzlmod base, rules_go v0_63_0:
-    `USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=v0_63_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_63_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
   - Disabled alias gate for a fresh output root:
     `WINDOWS_DISABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
   - Enabled alias and payload gate with valid Orchestrion pins:

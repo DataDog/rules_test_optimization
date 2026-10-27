@@ -12,3 +12,6 @@ common:ci --sandbox_debug
 common:ci --spawn_strategy=standalone
 common:ci --genrule_strategy=standalone
 common:ci --test_strategy=standalone
+
+# Preserve Bazel 7 behavior for optional file globs under Bazel 8.
+common --incompatible_disallow_empty_glob=false

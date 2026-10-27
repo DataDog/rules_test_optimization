@@ -1,3 +1,21 @@
+diff --git a/.bazelrc b/.bazelrc
+index b53bb41..b16182b 100644
+--- a/.bazelrc
++++ b/.bazelrc
+@@ -63,3 +63,6 @@ build:incompatible --nolegacy_external_runfiles
+ # covers proto toolchain resolution in the meantime.
+ # Also enable all incompatible flags in go_bazel_test by default.
+ test:incompatible --test_env=GO_BAZEL_TEST_BAZELFLAGS='--incompatible_disallow_empty_glob --incompatible_load_proto_rules_from_bzl --incompatible_enable_cc_toolchain_resolution --incompatible_config_setting_private_default_visibility --incompatible_enforce_config_setting_visibility --incompatible_disable_starlark_host_transitions --nolegacy_external_runfiles'
++
++# Preserve Bazel 7 behavior for optional file globs under Bazel 8.
++common --incompatible_disallow_empty_glob=false
+diff --git a/.bazelversion b/.bazelversion
+index deeb3d6..3b74042 100644
+--- a/.bazelversion
++++ b/.bazelversion
+@@ -1 +1 @@
+-9.2.0
++9.3.1
 diff --git a/BUILD.bazel b/BUILD.bazel
 index 360e100..b8a5ebb 100644
 --- a/BUILD.bazel
@@ -71,6 +89,31 @@ index 058827a..53ab9eb 100644
  
  def stardoc_with_diff_test(
          bzl_library_target,
+diff --git a/examples/.bazelrc b/examples/.bazelrc
+index e967a14..b6abd1f 100644
+--- a/examples/.bazelrc
++++ b/examples/.bazelrc
+@@ -12,3 +12,6 @@ common:ci --sandbox_debug
+ common:ci --spawn_strategy=standalone
+ common:ci --genrule_strategy=standalone
+ common:ci --test_strategy=standalone
++
++# Preserve Bazel 7 behavior for optional file globs under Bazel 8.
++common --incompatible_disallow_empty_glob=false
+diff --git a/examples/basic_gazelle/.bazelversion b/examples/basic_gazelle/.bazelversion
+index e7fdef7..11f1d47 100644
+--- a/examples/basic_gazelle/.bazelversion
++++ b/examples/basic_gazelle/.bazelversion
+@@ -1 +1 @@
+-8.4.2
++8.8.2
+diff --git a/examples/hello/.bazelversion b/examples/hello/.bazelversion
+index e7fdef7..11f1d47 100644
+--- a/examples/hello/.bazelversion
++++ b/examples/hello/.bazelversion
+@@ -1 +1 @@
+-8.4.2
++8.8.2
 diff --git a/go/extensions.bzl b/go/extensions.bzl
 index a02bda6..3d2f91a 100644
 --- a/go/extensions.bzl
@@ -17690,6 +17733,23 @@ index 0000000..a7f57f3
 +	}
 +	return nil
 +}
+diff --git a/tests/bcr/.bazelrc b/tests/bcr/.bazelrc
+index 7b3bdde..3848d6d 100644
+--- a/tests/bcr/.bazelrc
++++ b/tests/bcr/.bazelrc
+@@ -1,2 +1,5 @@
+ common --enable_bzlmod
+ build --@my_rules_go//go/toolchain:sdk_version=1.23.1
++
++# Preserve Bazel 7 behavior for optional file globs under Bazel 8.
++common --incompatible_disallow_empty_glob=false
+diff --git a/tests/bcr/.bazelversion b/tests/bcr/.bazelversion
+index bf3cc5e..3b74042 100644
+--- a/tests/bcr/.bazelversion
++++ b/tests/bcr/.bazelversion
+@@ -1 +1 @@
+-9.0.0rc5
++9.3.1
 diff --git a/tests/core/starlark/BUILD.bazel b/tests/core/starlark/BUILD.bazel
 index 245aebf..dc3f760 100644
 --- a/tests/core/starlark/BUILD.bazel

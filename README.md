@@ -1357,13 +1357,13 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 
 | Component | Recommended baseline | Notes |
 |-----------|----------------------|-------|
-| Bazel | `8.5.1` | Repository baseline (`.bazelversion`) and primary CI lanes |
+| Bazel | `8.8.2` | Repository baseline (`.bazelversion`) and primary CI lanes |
 | rules_go (Go users) | `0.60.0` / `rules_go_upstream = "v0_60_0"` | README examples use the default support line; importpath inference requires `0.51.0+` |
 | Go toolchain (example) | `1.25.0` | Consumer repositories may use another supported version |
 | Module versions | `1.3.0` candidate | Not published yet; use commit pin/override install paths |
 
-- **Bazel 8.5.1 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
-- **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.4.1` during migration away from WORKSPACE mode in Bazel 9+
+- **Bazel 8.8.2 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
+- **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.8.2` during migration away from WORKSPACE mode in Bazel 9+
 - **Bazel 5.0+ minimum capability** - Earliest Bazel line with required `TEST_UNDECLARED_OUTPUTS_DIR` payload support
 - **Tracer/runtime with DD Test Optimization file-mode support** - Must honor `DD_TEST_OPTIMIZATION_MANIFEST_FILE` and `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
 - **rules_go v0.51.0+** (for Go importpath inference) - This repository reads `GoInfo`/`GoArchive` providers when selecting per-module payloads

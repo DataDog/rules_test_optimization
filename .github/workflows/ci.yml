@@ -512,7 +512,7 @@ jobs:
           ORCHESTRION_MODE: general
           RULES_GO_UPSTREAM: ${{ matrix.upstream }}
           RULES_GO_VARIANT: base
-          USE_BAZEL_VERSION: "8.4.1"
+          USE_BAZEL_VERSION: "8.8.2"
         run: |
           case "${MODULE_SYSTEM}" in
             workspace)
@@ -534,7 +534,7 @@ jobs:
           ORCHESTRION_MODE: test_optimization
           RULES_GO_UPSTREAM: ${{ matrix.upstream }}
           RULES_GO_VARIANT: base
-          USE_BAZEL_VERSION: "8.4.1"
+          USE_BAZEL_VERSION: "8.8.2"
         run: |
           case "${MODULE_SYSTEM}" in
             workspace)
@@ -625,7 +625,7 @@ jobs:
           ORCHESTRION_MODE: test_optimization
           RULES_GO_UPSTREAM: ${{ matrix.upstream }}
           RULES_GO_VARIANT: base
-          USE_BAZEL_VERSION: "8.4.1"
+          USE_BAZEL_VERSION: "8.8.2"
           XDG_CACHE_HOME: ${{ runner.temp }}/rto-no-host-go-cache/${{ matrix.upstream }}/${{ matrix.module_system }}
         run: |
           set -euo pipefail
@@ -657,7 +657,7 @@ jobs:
           ORCHESTRION_MODE: test_optimization
           RULES_GO_UPSTREAM: ${{ matrix.upstream }}
           RULES_GO_VARIANT: base
-          USE_BAZEL_VERSION: "8.4.1"
+          USE_BAZEL_VERSION: "8.8.2"
           XDG_CACHE_HOME: ${{ runner.temp }}/rto-no-host-go-cache/${{ matrix.upstream }}/${{ matrix.module_system }}
         run: |
           set -euo pipefail
@@ -735,7 +735,6 @@ jobs:
       - name: Validate disabled-to-enabled bootstrap transition
         shell: bash
         env:
-          BAZEL_VERSION: "8.4.1"
           MODULE_SYSTEM: ${{ matrix.module_system }}
           ORCHESTRION_MODE: test_optimization
           RULES_GO_UPSTREAM: ${{ matrix.upstream }}
