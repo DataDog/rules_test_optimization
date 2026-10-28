@@ -24,6 +24,15 @@ import unittest
 from unittest import mock
 
 
+DEVELOPMENT_BAZEL_CONFIGS = (
+    ".bazelrc",
+    ".bazelversion",
+    "examples/.bazelrc",
+    "examples/basic_gazelle/.bazelversion",
+    "examples/hello/.bazelversion",
+)
+
+
 def _runfile(rel_path: str) -> Path:
     """Resolve a Bazel runfile, with a direct-checkout fallback."""
     test_srcdir = os.environ.get("TEST_SRCDIR", "")
@@ -172,6 +181,56 @@ class RulesGoProfileToolTests(unittest.TestCase):
 
             with self.assertRaisesRegex(ValueError, "bare basename"):
                 self.mod.load_profile(path)
+
+    def test_profiles_exclude_only_known_development_bazel_configuration(self) -> None:
+        """Consumer patches omit dev config without hiding new runtime changes."""
+        runtime = ["go/private/BUILD.bazel", "go/tools/builders/module_proxy.go"]
+        unknown = ["examples/new/.bazelversion", "go/private/.bazelrc"]
+        for name in ("workspace_runtime", "bzlmod_runtime"):
+            with self.subTest(profile=name):
+                profile = self.mod.load_profile(
+                    _runfile(f"third_party/rules_go_orchestrion/profiles/{name}.json")
+                )
+                classified = self.mod.classify_paths(
+                    [*DEVELOPMENT_BAZEL_CONFIGS, *runtime, *unknown], profile
+                )
+                self.assertEqual(sorted(DEVELOPMENT_BAZEL_CONFIGS), classified.excluded)
+                self.assertEqual(runtime, classified.included)
+                self.assertEqual(unknown, classified.unclassified)
+
+    def test_generated_profiles_leave_consumer_bazel_configuration_unchanged(self) -> None:
+        """Excluded security config is audited in manifests, not consumer patches."""
+        for name in ("workspace_runtime", "bzlmod_runtime"):
+            with self.subTest(profile=name), tempfile.TemporaryDirectory() as raw_tmp:
+                root = Path(raw_tmp)
+                upstream, fork = root / "upstream", root / "fork"
+                runtime = "go/tools/builders/builder.go"
+                _write(upstream / runtime, "package main\n")
+                for path in DEVELOPMENT_BAZEL_CONFIGS:
+                    _write(upstream / path, "consumer configuration\n")
+                _copy_tree(upstream, fork)
+                _write(fork / runtime, "package main\nvar Instrumented = true\n")
+                for path in DEVELOPMENT_BAZEL_CONFIGS:
+                    _write(fork / path, "updated secure development configuration\n")
+                profile = self.mod.load_profile(
+                    _runfile(f"third_party/rules_go_orchestrion/profiles/{name}.json")
+                )
+                result = self.mod.generate_patch_from_trees(
+                    upstream_root=upstream, fork_root=fork, profile=profile,
+                    output=root / "runtime.patch", manifest=root / "manifest.json",
+                    manifest_context={
+                        "upstream_id": "fixture", "rules_go_version": "0.0.0",
+                        "upstream_repository": "https://github.com/bazel-contrib/rules_go.git",
+                        "upstream_commit": "abc123", "variant": "base",
+                    },
+                )
+                manifest = json.loads(result.manifest.read_text(encoding="utf-8"))
+                self.assertEqual(sorted(DEVELOPMENT_BAZEL_CONFIGS), manifest["excluded_paths"])
+                self.assertEqual([runtime], manifest["included_paths"])
+                subprocess.run(["git", "-C", str(upstream), "apply", "-p1", str(result.output)], check=True)
+                self.assertEqual((fork / runtime).read_bytes(), (upstream / runtime).read_bytes())
+                for path in DEVELOPMENT_BAZEL_CONFIGS:
+                    self.assertEqual("consumer configuration\n", (upstream / path).read_text(encoding="utf-8"))
 
     def test_bzlmod_profile_extends_workspace_runtime_without_lockfiles(self) -> None:
         """Bzlmod adds module registration and its public extension alias only."""
