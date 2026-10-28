@@ -160,7 +160,7 @@ func findModuleArchive(content, module string) (*moduleArchive, error) {
 			}
 		}
 		archive := &moduleArchive{sha256: literalAttribute(block.text, "sha256"), prefix: literalAttribute(block.text, "strip_prefix"), archiveType: literalAttribute(block.text, "type")}
-		match := regexp.MustCompile(`(?s)\burls\s*=\s*\[([^\]]*)\]`).FindStringSubmatch(block.text)
+		match := regexp.MustCompile(`(?s)\burls\s*=\s*\[([^\]]*)\]\s*[,)]`).FindStringSubmatch(block.text)
 		if len(match) == 2 {
 			remaining := match[1]
 			for _, literal := range regexp.MustCompile(`"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'`).FindAllString(remaining, -1) {

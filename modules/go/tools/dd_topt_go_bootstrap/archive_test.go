@@ -68,6 +68,8 @@ func TestArchiveBootstrapRejectsInvalidInputsWithoutWriting(t *testing.T) {
 		"missing checksum":   strings.Replace(valid, strings.Repeat("a", 64), "", 1),
 		"malformed checksum": strings.Replace(valid, strings.Repeat("a", 64), "not-a-sha", 1),
 		"computed URLs":      strings.Replace(valid, `"https://mirror.example/source.tar.gz"`, "MIRROR_URL", 1),
+		"conditional URLs":   strings.Replace(valid, "],\n", "] if USE_MIRROR else [\"https://fallback.example/source.tar.gz\"],\n", 1),
+		"concatenated URLs":  strings.Replace(valid, "],\n", "] + [\"https://fallback.example/source.tar.gz\"],\n", 1),
 		"computed prefix":    strings.Replace(valid, `strip_prefix = "release"`, `strip_prefix = PREFIX`, 1),
 		"parent traversal":   strings.Replace(valid, `strip_prefix = "release"`, `strip_prefix = "../release"`, 1),
 		"fork patches":       strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), "archive_override(", "archive_override(\n patches = [\"//:custom.patch\"],", 1),
@@ -85,6 +87,49 @@ func TestArchiveBootstrapRejectsInvalidInputsWithoutWriting(t *testing.T) {
 				t.Fatal("invalid input changed MODULE.bazel")
 			}
 		})
+	}
+}
+
+func TestArchiveBootstrapPreservesDeclarationsAroundCommentedOverrides(t *testing.T) {
+	for _, comment := range []string{"# example: foo(", "# example: foo)", "# Unicode: héllo( and an unmatched quote \""} {
+		t.Run(comment, func(t *testing.T) {
+			prefix := "# Existing header: é\nmodule(name = \"consumer\")\n"
+			suffix := "\nbazel_dep(name = \"keep_me\", version = \"1.0.0\")\n"
+			override := strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), "archive_override(\n", "archive_override(\n    "+comment+"\n", 1)
+			input := prefix + override + suffix
+			file := filepath.Join(t.TempDir(), "MODULE.bazel")
+			if err := os.WriteFile(file, []byte(input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config{moduleFile: file}
+			if err := patchModuleFile(cfg); err != nil {
+				t.Fatal(err)
+			}
+			first, _ := os.ReadFile(file)
+			if !strings.HasPrefix(string(first), prefix) || !strings.Contains(string(first), suffix) || strings.Count(string(first), "archive_override(") != 1 {
+				t.Fatalf("moving an override changed surrounding declarations:\n%s", first)
+			}
+			if err := patchModuleFile(cfg); err != nil {
+				t.Fatal(err)
+			}
+			second, _ := os.ReadFile(file)
+			if string(first) != string(second) {
+				t.Fatal("commented override is not idempotent")
+			}
+		})
+	}
+}
+
+func TestTopLevelCallSpansIgnoreQuotedAndCommentedDelimiters(t *testing.T) {
+	for _, value := range []string{`"https://mirror.example/file)#asset"`, "\"\"\"first )\nsecond (\nend\"\"\"", `'escaped \' ) # text'`} {
+		input := "# λ before a call(\n" + "archive_override(\n    urls = [" + value + "], # ) ( \"\n)\n" + "bazel_dep(name = \"keep\", version = \"1\")\n"
+		blocks := topLevelCallBlocks(input)
+		if len(blocks) != 2 || blocks[0].function != "archive_override" || blocks[1].function != "bazel_dep" {
+			t.Fatalf("incorrect call spans for %q: %#v", value, blocks)
+		}
+		if input[blocks[0].start:blocks[0].end] != "archive_override(\n    urls = ["+value+"], # ) ( \"\n)\n" {
+			t.Fatalf("scanner did not preserve original byte offsets for %q", value)
+		}
 	}
 }
 

@@ -2872,26 +2872,27 @@ type callBlock struct {
 
 func topLevelCallBlocks(content string) []callBlock {
 	lines := splitLinesPreserveNewline(content)
+	syntaxLines := splitLinesPreserveNewline(maskStarlarkStringsAndComments(content))
 	startPattern := regexp.MustCompile(`^\s*(?:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\(`)
 	offset := 0
 	blocks := []callBlock{}
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
-		match := startPattern.FindStringSubmatch(line)
+		match := startPattern.FindStringSubmatch(syntaxLines[i])
 		if match == nil {
 			offset += len(line)
 			continue
 		}
 		start := offset
-		depth := strings.Count(line, "(") - strings.Count(line, ")")
+		depth := strings.Count(syntaxLines[i], "(") - strings.Count(syntaxLines[i], ")")
 		offset += len(line)
 		j := i
 		for depth > 0 && j+1 < len(lines) {
 			j++
 			line = lines[j]
-			depth += strings.Count(line, "(")
-			depth -= strings.Count(line, ")")
+			depth += strings.Count(syntaxLines[j], "(")
+			depth -= strings.Count(syntaxLines[j], ")")
 			offset += len(line)
 		}
 		blocks = append(blocks, callBlock{
@@ -2910,6 +2911,50 @@ func topLevelCallBlocks(content string) []callBlock {
 		i = j
 	}
 	return blocks
+}
+
+// Mask non-syntax bytes when finding call boundaries, without moving offsets in
+// the original source. A parenthesis in a comment, URL, or docstring is data.
+func maskStarlarkStringsAndComments(content string) string {
+	masked := []byte(content)
+	blank := func(start, end int) {
+		for i := start; i < end; i++ {
+			if masked[i] != '\n' {
+				masked[i] = ' '
+			}
+		}
+	}
+	for i := 0; i < len(content); {
+		start := i
+		if content[i] == '#' {
+			for i < len(content) && content[i] != '\n' {
+				i++
+			}
+			blank(start, i)
+			continue
+		}
+		if content[i] != '\'' && content[i] != '"' {
+			i++
+			continue
+		}
+		delimiter := content[i : i+1]
+		if triple := strings.Repeat(delimiter, 3); strings.HasPrefix(content[i:], triple) {
+			delimiter = triple
+		}
+		i += len(delimiter)
+		for i < len(content) {
+			if content[i] == '\\' && i+1 < len(content) {
+				i += 2
+			} else if strings.HasPrefix(content[i:], delimiter) {
+				i += len(delimiter)
+				break
+			} else {
+				i++
+			}
+		}
+		blank(start, i)
+	}
+	return string(masked)
 }
 
 type tracerConfig struct {
