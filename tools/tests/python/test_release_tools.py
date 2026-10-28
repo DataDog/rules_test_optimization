@@ -109,7 +109,7 @@ class ReleaseBundleTests(unittest.TestCase):
     def write(self, path, content):
         target = self.repo / path
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        target.write_text(content, encoding="utf-8", newline="\n")
 
     def commit(self):
         self.git("add", ".")
