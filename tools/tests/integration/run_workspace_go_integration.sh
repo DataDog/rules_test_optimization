@@ -1099,6 +1099,14 @@ dd_topt_go_orchestrion_tool_repo(
 )
 
 go_rules_dependencies()
+
+# Bazel's collect_coverage helper needs a shell toolchain even for a plain
+# go_test. Bzlmod registers it automatically; WORKSPACE consumers must do so.
+load("@rules_shell//shell:repositories.bzl", "rules_shell_dependencies", "rules_shell_toolchains")
+
+rules_shell_dependencies()
+rules_shell_toolchains()
+
 go_register_toolchains(version = "${GO_VERSION}")
 gazelle_dependencies()
 

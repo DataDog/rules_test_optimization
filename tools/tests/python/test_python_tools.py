@@ -9068,6 +9068,72 @@ echo blocked
         self.assertIn("Log-Stderr \"warning: skipping context enrichment", powershell_text)
 
 
+class GoWorkspaceIntegrationTests(unittest.TestCase):
+    def test_generated_consumers_register_shell_toolchains(self) -> None:
+        """Both fetch paths initialize the shell rules used by collect_coverage."""
+        bash = _require_functional_bash(self)
+        source = _runfile("tools/tests/integration/run_workspace_go_integration.sh").read_text(
+            encoding="utf-8"
+        )
+        quote = source[source.index("bzl_quote() {"):source.index("\nsha256_file() {")]
+        writer = source[
+            source.index("write_positive_workspace() {"):
+            source.index("\nwrite_invalid_workspace() {")
+        ]
+        env = {
+            **os.environ,
+            "PYTHON": sys.executable,
+            "REPO_ROOT": "/fixture/rules with spaces",
+            "rules_go_fork_abs": "/fixture/rules with spaces/third_party/rgo/v0_60_0/base",
+            "ARCHIVE_URL": "file:///fixture/rules.tar.gz",
+            "ARCHIVE_SHA256": "a" * 64,
+            "ARCHIVE_NAME": "rules-fixture",
+            "RULES_GO_UPSTREAM": "v0_60_0",
+            "RULES_GO_VARIANT": "base",
+            "ORCHESTRION_VERSION": "v1.12.0",
+            "GO_VERSION": "1.25.0",
+            "SERVICE_NAME": "fixture-service",
+            "MODULE_IMPORTPATH": "example.com/fixture",
+            "OUT_DIR": "custom_topt",
+        }
+        for fetch_mode in ("local", "archive"):
+            with self.subTest(fetch_mode=fetch_mode), tempfile.TemporaryDirectory() as tmp:
+                subprocess.run(
+                    [
+                        bash, "-eu", "-c",
+                        quote + writer + '\nwrite_positive_workspace "$1" "$2"',
+                        "fixture", tmp, fetch_mode,
+                    ],
+                    env=env,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                )
+                workspace = ast.parse(Path(tmp, "WORKSPACE").read_text(encoding="utf-8"))
+                calls = [
+                    node.value for node in workspace.body
+                    if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                ]
+                shell_load = next(
+                    (
+                        index for index, call in enumerate(calls)
+                        if call.func.id == "load"
+                        and call.args[0].value == "@rules_shell//shell:repositories.bzl"
+                    ),
+                    None,
+                )
+                self.assertIsNotNone(shell_load, "WORKSPACE must load rules_shell initialization")
+                self.assertEqual(
+                    ["rules_shell_dependencies", "rules_shell_toolchains"],
+                    [arg.value for arg in calls[shell_load].args[1:]],
+                )
+                names = [call.func.id for call in calls]
+                self.assertLess(names.index("go_rules_dependencies"), shell_load)
+                self.assertLess(shell_load, names.index("rules_shell_dependencies"))
+                self.assertLess(names.index("rules_shell_dependencies"), names.index("rules_shell_toolchains"))
+                self.assertEqual(1, names.count("rules_shell_toolchains"))
+
+
 class MockDdServerTests(unittest.TestCase):
     """Test case group covering MockDdServerTests behaviors."""
     @classmethod
