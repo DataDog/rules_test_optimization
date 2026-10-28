@@ -634,7 +634,6 @@ write_fixture_bazelrc() {
   local rules_go_repo="$2"
 
   cat > "$ws_dir/.bazelrc" <<EOF
-common --incompatible_disallow_empty_glob=false
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 common --incompatible_allow_tags_propagation
 common --incompatible_disallow_empty_glob=false
