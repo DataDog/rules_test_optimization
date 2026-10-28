@@ -15,6 +15,19 @@ versioning.
 
 ## [Unreleased]
 
+### Added
+
+- Release bundles with SHA256 checksums, archive-based installation snippets
+  for core/companions/Go forks, and notes generated from this changelog. Tag
+  workflows prepare a draft only after all release validations pass; manual
+  branch runs produce a downloadable preview without publishing.
+
+### Changed
+
+- Recommend release archives for installation. Go Bzlmod bootstrap now infers
+  and preserves checksum-pinned archive overrides and mirrors without requiring
+  a Git override for the Orchestrion-enabled fork.
+
 ## [1.3.0] - 2026-10-21
 
 ### Added

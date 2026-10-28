@@ -601,6 +601,17 @@ run_bep_freshness_scenario() {
 }
 
 create_fixture_archive() {
+  if [[ -n "${RTO_RELEASE_ARCHIVE:-}" ]]; then
+    if [[ ! -f "$RTO_RELEASE_ARCHIVE" || ! "${RTO_RELEASE_PREFIX:-}" =~ ^rules_test_optimization-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "error: release archive mode requires an existing RTO_RELEASE_ARCHIVE and versioned RTO_RELEASE_PREFIX" >&2
+      exit 1
+    fi
+    ARCHIVE_PATH="$RTO_RELEASE_ARCHIVE"
+    ARCHIVE_NAME="$RTO_RELEASE_PREFIX"
+    ARCHIVE_SHA256="$(sha256_file "$ARCHIVE_PATH")"
+    ARCHIVE_URL="$(file_uri "$ARCHIVE_PATH")"
+    return
+  fi
   local root_dir="$ARCHIVE_ROOT/$ARCHIVE_NAME"
 
   rm -rf "$ARCHIVE_ROOT"
@@ -1820,6 +1831,12 @@ if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     echo "error: MEASURE_OUTPUT_PATH is required when INTEGRATION_SCENARIO_MODE=measure" >&2
     exit 1
   fi
+  run_positive_fixture "archive"
+  assert_go_integration_metadata_requests
+  exit 0
+fi
+
+if [[ "$INTEGRATION_SCENARIO_MODE" == "release" ]]; then
   run_positive_fixture "archive"
   assert_go_integration_metadata_requests
   exit 0

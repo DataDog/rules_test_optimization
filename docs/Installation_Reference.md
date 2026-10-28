@@ -14,12 +14,54 @@ and multi-service onboarding, use [`docs/Language_Onboarding.md`](Language_Onboa
 
 ## Bzlmod installation
 
-### Option A: install from Git commit (recommended until BCR publication)
+### Option A: install from a release archive (recommended)
 
-The snippets below use the `1.3.0` candidate metadata. Pin a commit containing
-that version for both core and companions. The historical `v1.2.0` archive
-tuple further below belongs to the previous release and must not be relabeled
-as `1.3.0`.
+Download `INSTALL.md`, `release.json`, and `SHA256SUMS` from the chosen
+[GitHub release](https://github.com/DataDog/rules_test_optimization/releases).
+`INSTALL.md` contains complete dependency blocks with the release version,
+archive URL, SHA256, and each module's `strip_prefix`. Copy the core block and
+only the companion blocks you need. These overrides do not depend on BCR
+publication.
+
+In `MODULE.bazel`, use `archive_override`, which uses Bazel's HTTP downloader
+and repository cache. In WORKSPACE, use `http_archive`. Reuse the same archive
+and SHA256 for core, companions, and the selected Go fork. Each companion uses
+`<archive-prefix>/modules/<language>`; a Go fork uses
+`<archive-prefix>/third_party/rgo/<upstream>/base`.
+
+The following is the shape of a core Bzlmod install. Replace every placeholder
+with the tuple from one release; do not copy a checksum from another version.
+
+```bzl
+bazel_dep(name = "datadog-rules-test-optimization", version = "<release-version>")
+archive_override(
+    module_name = "datadog-rules-test-optimization",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>",
+)
+```
+
+For Go, the bootstrap can infer the archive from a literal core/Go companion
+override or preserve an existing supported `rules_go` archive override. It
+keeps URL mirrors, SHA256, and the selected fork. A compatible manual fork
+override moves into the managed block, so there is only one override per
+module. Custom fork patches or computed Starlark values are not silently
+rewritten. For computed dependency values, supply
+`--rules-go-fetch=archive --rto-archive-url=... --rto-archive-sha256=... --rto-archive-prefix=...`.
+`--rules-go-fetch=git` retains explicit Git-mode bootstrapping.
+
+Release bundles are prepared by the [release workflow](../CONTRIBUTING.md#release-runbook-core--companion-modules).
+GitHub's automatic source downloads are distinct from the uploaded, checksum-pinned
+release asset. `v1.3.0` predates bundle automation and has no `INSTALL.md` asset;
+use the Git recipe below for that version. The historical `v1.2.0` archive
+tuple further below still belongs to `v1.2.0`.
+
+### Option B: install from a Git commit
+
+Use this for an unreleased change, an older release without bundle assets, or
+a private repository that requires Git authentication. Pin the same published
+commit for core and companions. The example module version is `1.3.0`.
 
 In your `MODULE.bazel`:
 
@@ -161,7 +203,7 @@ the `rules_test_optimization` Git history, add `--verify-main-reachable` for
 the same `origin/main` reachability check as the dev helper. Existing unmanaged
 files are preserved unless `--force` is passed.
 
-### Option B: local development overrides
+### Option C: local development overrides
 
 ```bzl
 local_path_override(

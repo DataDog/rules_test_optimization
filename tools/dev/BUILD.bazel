@@ -9,6 +9,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 exports_files(
     [
         "benchmark_go_orchestrion_perf.py",
+        "build_release.py",
         "check_bazelversion_sync.py",
         "check_module_versions.py",
         "check_release_archive_contents.py",

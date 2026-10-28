@@ -13,22 +13,26 @@ Go companion module through Bzlmod.
 
 ## Module Wiring
 
-Add core and Go companion dependencies:
+Copy core and Go companion dependencies from the release's `INSTALL.md`.
+Replace the archive placeholders below with that tuple and match the Datadog
+module versions to the release. For releases without bundle assets or for
+development commits, use the Git alternative in `docs/Installation_Reference.md`.
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<published-main-commit>",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>",
 )
 
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization-go",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<published-main-commit>",
-    strip_prefix = "modules/go",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/go",
 )
 
 bazel_dep(name = "rules_go", version = "0.60.0")
@@ -43,8 +47,9 @@ common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 The optimized target transition enables Orchestrion. The config remains the
 only user-facing metadata switch; no global Orchestrion flag is required.
 
-Use a commit that is reachable from `origin/main`. Do not publish branch-only
-commits in consumer snippets because squash merges can make them disappear.
+When using the Git alternative, use a commit reachable from `origin/main`.
+Do not publish branch-only commits in consumer snippets because squash merges
+can make them disappear.
 The `rules_go` version must match the selected Datadog-managed fork support
 line. The current default support line is `rules_go_upstream = "v0_60_0"`,
 which uses `rules_go` `0.60.0`.
@@ -58,11 +63,11 @@ Orchestrion extension wiring that bootstrap normally writes. Plain upstream
 Manual Bzlmod wiring must include this block:
 
 ```bzl
-git_override(
+archive_override(
     module_name = "rules_go",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<published-main-commit>",
-    strip_prefix = "third_party/rgo/v0_60_0/base",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/third_party/rgo/v0_60_0/base",
 )
 
 test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")

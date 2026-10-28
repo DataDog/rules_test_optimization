@@ -12,23 +12,26 @@ Use this path when the consumer repository uses `MODULE.bazel`.
 
 ## Dependency Wiring
 
-Add the core module and Python companion module. Until Bazel Central Registry
-publication exists, pin both with `git_override` to the same published commit:
+Add core and Python companion blocks from the release's `INSTALL.md`, with
+the same archive URL and SHA256. Replace the placeholders below and match the
+module versions to the release. For older releases without bundle assets or
+development commits, use the Git alternative in `docs/Installation_Reference.md`.
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>",
 )
 
 bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization-python",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
-    strip_prefix = "modules/python",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/python",
 )
 ```
 
