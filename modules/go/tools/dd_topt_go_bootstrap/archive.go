@@ -151,8 +151,26 @@ func moduleArchiveCompatible(content string, cfg config) (bool, error) {
 }
 
 func validateRulesGoArchiveAttributes(block string) error {
-	// Attribute-looking text inside strings and comments is not an argument.
-	for _, attr := range regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*=`).FindAllStringSubmatch(maskStarlarkStringsAndComments(block), -1) {
+	// Only outer call arguments belong to archive_override. Explicit pins may
+	// replace computed values containing their own calls and keyword arguments.
+	syntax := []byte(maskStarlarkStringsAndComments(block))
+	depth := 0
+	for i, char := range syntax {
+		switch char {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		default:
+			if depth > 1 {
+				syntax[i] = ' '
+			}
+		}
+	}
+	if regexp.MustCompile(`(?:\(|,)\s*\*\*`).Match(syntax) {
+		return errors.New("cannot manage rules_go archive attribute expansion; keep custom patches/authentication wiring outside bootstrap")
+	}
+	for _, attr := range regexp.MustCompile(`(?:\(|,)\s*([A-Za-z_][A-Za-z0-9_]*)\s*=`).FindAllStringSubmatch(string(syntax), -1) {
 		switch attr[1] {
 		case "module_name", "urls", "sha256", "strip_prefix", "type":
 		default:

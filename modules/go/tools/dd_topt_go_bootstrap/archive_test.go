@@ -114,7 +114,7 @@ func TestArchiveBootstrapRejectsComputedTypesWithoutWriting(t *testing.T) {
 		} else if module == "rules_go" {
 			prefix += "/third_party/rgo/v0_60_0/base"
 		}
-		for _, value := range []string{`ARCHIVE_TYPE`, `"tar." + EXTENSION`, `"tar.gz" if USE_GZIP else "zip"`} {
+		for _, value := range []string{`ARCHIVE_TYPE`, `"tar." + EXTENSION`, `"tar.gz" if USE_GZIP else "zip"`, `archive_type(format = "tar.gz")`} {
 			t.Run(module+"/"+value, func(t *testing.T) {
 				input := strings.Replace(archiveTestOverride(module, prefix), "archive_override(\n", "archive_override(\n    type = "+value+",\n", 1)
 				if archive, err := findModuleArchive(input, module); err == nil || archive != nil {
@@ -138,7 +138,7 @@ func TestArchiveBootstrapRejectsComputedTypesWithoutWriting(t *testing.T) {
 }
 
 func TestExplicitArchiveFlagsRejectManagedForkPatchesWithoutWriting(t *testing.T) {
-	for _, attr := range []string{`patches = ["//:custom.patch"]`, `patch_cmds = ["echo patch"]`, `patch_args = ["-p1"]`} {
+	for _, attr := range []string{`patches = ["//:custom.patch"]`, `patch_cmds = ["echo patch"]`, `patch_args = ["-p1"]`, `**{"patches": ["//:custom.patch"]}`} {
 		t.Run(attr, func(t *testing.T) {
 			override := strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), "archive_override(\n", "archive_override(\n    "+attr+",\n", 1)
 			input := "module(name = \"consumer\")\n" + managedBlockStart + "\n" + override + managedBlockEnd + "\n"
@@ -159,7 +159,7 @@ func TestExplicitArchiveFlagsRejectManagedForkPatchesWithoutWriting(t *testing.T
 }
 
 func TestArchiveBootstrapPreservesLiteralTypesAndExplicitComputedEscapeHatch(t *testing.T) {
-	for _, value := range []string{`"tar.gz"`, `'tar.gz'`, `ARCHIVE_TYPE`} {
+	for _, value := range []string{`"tar.gz"`, `'tar.gz'`, `ARCHIVE_TYPE`, `archive_type(format = "tar.gz")`, `archive_type(options = ["tar.gz"])`, `archive_type(options = {"format": "tar.gz"})`, `"tar.gz" if FORMAT == "gzip" else "zip"`} {
 		t.Run(value, func(t *testing.T) {
 			override := strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), "archive_override(\n", "archive_override(\n    type = "+value+",\n", 1)
 			override = strings.ReplaceAll(override, "source.tar.gz", "source?type=asset")
@@ -169,7 +169,7 @@ func TestArchiveBootstrapPreservesLiteralTypesAndExplicitComputedEscapeHatch(t *
 				t.Fatal(err)
 			}
 			cfg := config{moduleFile: file}
-			if value == "ARCHIVE_TYPE" {
+			if value != `"tar.gz"` && value != `'tar.gz'` {
 				cfg.rulesGoFetch, cfg.rtoArchiveURL, cfg.rtoArchiveSHA256, cfg.rtoArchivePrefix, cfg.rtoArchiveType = "archive", "https://mirror.example/source", strings.Repeat("b", 64), "release", "tar.gz"
 			}
 			if err := patchModuleFile(cfg); err != nil {
