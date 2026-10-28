@@ -90,6 +90,22 @@ func TestArchiveBootstrapRejectsInvalidInputsWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestArchiveInferenceRejectsComputedURLLists(t *testing.T) {
+	const module = "datadog-rules-test-optimization"
+	valid := archiveTestOverride(module, "release")
+	if archive, err := findModuleArchive(valid, module); err != nil || archive == nil || len(archive.urls) != 2 {
+		t.Fatalf("expected literal URL-list inference to succeed: archive=%+v err=%v", archive, err)
+	}
+	for _, suffix := range []string{` if USE_MIRROR else ["https://fallback.example/source.tar.gz"]`, ` + ["https://fallback.example/source.tar.gz"]`} {
+		t.Run(suffix, func(t *testing.T) {
+			input := strings.Replace(valid, "],\n", "]"+suffix+",\n", 1)
+			if archive, err := findModuleArchive(input, module); err == nil || archive != nil {
+				t.Fatalf("computed URL list was accepted: archive=%+v err=%v", archive, err)
+			}
+		})
+	}
+}
+
 func TestArchiveBootstrapPreservesDeclarationsAroundCommentedOverrides(t *testing.T) {
 	for _, comment := range []string{"# example: foo(", "# example: foo)", "# Unicode: héllo( and an unmatched quote \""} {
 		t.Run(comment, func(t *testing.T) {
