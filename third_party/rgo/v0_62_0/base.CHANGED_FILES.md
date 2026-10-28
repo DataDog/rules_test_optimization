@@ -12,17 +12,22 @@ This file is generated. Do not edit by hand.
 
 ## Summary
 
-- Total changed paths: `58`
-- Modified files: `32`
+- Total changed paths: `65`
+- Modified files: `39`
 - Added files: `26`
 - Removed files: `0`
 
 ## Modified files
 
+- `.bazelrc`
+- `.bazelversion`
 - `BUILD.bazel`
 - `MODULE.bazel`
 - `MODULE.bazel.lock`
 - `docs/doc_helpers.bzl`
+- `examples/.bazelrc`
+- `examples/basic_gazelle/.bazelversion`
+- `examples/hello/.bazelversion`
 - `go/extensions.bzl`
 - `go/private/BUILD.bazel`
 - `go/private/actions/archive.bzl`
@@ -49,6 +54,8 @@ This file is generated. Do not edit by hand.
 - `go/tools/builders/nogo.go`
 - `go/tools/builders/stdlib.go`
 - `go/tools/builders/stdliblist.go`
+- `tests/bcr/.bazelrc`
+- `tests/bcr/.bazelversion`
 - `tests/core/starlark/BUILD.bazel`
 - `tests/core/starlark/context_tests.bzl`
 

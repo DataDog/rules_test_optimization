@@ -32,7 +32,7 @@ body:
     id: bazel-version
     attributes:
       label: Bazel version
-      placeholder: "8.5.1"
+      placeholder: "8.8.2"
     validations:
       required: true
   - type: input

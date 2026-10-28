@@ -530,7 +530,7 @@ BAZEL="$REPO_ROOT/bazelw"
 OUT_BASE="$TMP_WS/.bazel_out"
 BAZEL_FLAGS=(--output_base="$OUT_BASE")
 BAZEL_TEST_FLAGS=()
-if [[ "$(uname -s)" == "Darwin" && "${USE_BAZEL_VERSION:-}" == "8.5.1" ]]; then
+if [[ "$(uname -s)" == "Darwin" && "${USE_BAZEL_VERSION:-}" == "8.8.2" ]]; then
   BAZEL_TEST_FLAGS+=(--noexperimental_split_xml_generation)
 fi
 

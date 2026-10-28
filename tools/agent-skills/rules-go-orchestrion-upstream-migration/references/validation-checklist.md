@@ -69,9 +69,9 @@ Orchestrion wiring, module proxy handling, stdlib behavior, transitions, or
 builder actions:
 
 ```bash
-USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base \
+USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base \
   tools/tests/integration/run_workspace_go_integration.sh
-USE_BAZEL_VERSION=8.4.1 RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base \
+USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=<upstream> RULES_GO_VARIANT=base \
   tools/tests/integration/run_bzlmod_go_integration.sh
 ```
 

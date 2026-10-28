@@ -272,8 +272,8 @@ Notes:
   module roots (`modules/go/`, `modules/python/`, `modules/java/`,
   `modules/nodejs/`, `modules/dotnet/`, `modules/ruby/`) so either workspace
   entrypoint resolves the same Bazel line.
-- CI also keeps a dedicated WORKSPACE-compat probe on Bazel `8.4.1` (separate
-  from the `8.5.1` baseline lanes) so legacy `--enable_workspace` behavior is
+- CI also keeps a dedicated WORKSPACE-compat probe on Bazel `8.8.2` (separate
+  from the `8.8.2` baseline lanes) so legacy `--enable_workspace` behavior is
   continuously exercised during Bazel 9 migration.
 - The generated `rules_go` profile verifier rebuilds each maintained upstream
   in two isolated output roots and compares action keys and bytes for
