@@ -62,6 +62,98 @@ func TestArchiveBootstrapSourcesAndIdempotence(t *testing.T) {
 	}
 }
 
+func TestArchiveBootstrapPreservesQuotedURLBrackets(t *testing.T) {
+	for _, quote := range []string{`"`, `'`} {
+		for _, url := range []string{
+			"https://[2001:db8::1]/source.tar.gz",
+			"https://mirror.example/source.tar.gz?part=[first,second]",
+		} {
+			t.Run(quote+url, func(t *testing.T) {
+				input := "module(name = \"consumer\")\n" + strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), `"https://mirror.example/source.tar.gz"`, quote+url+quote, 1)
+				archive, err := findModuleArchive(input, "rules_go")
+				if err != nil || archive == nil || len(archive.urls) != 2 || archive.urls[0] != url {
+					t.Fatalf("literal URL brackets changed archive inference: archive=%+v err=%v", archive, err)
+				}
+				file := filepath.Join(t.TempDir(), "MODULE.bazel")
+				if err := os.WriteFile(file, []byte(input), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				cfg := config{moduleFile: file}
+				if err := patchModuleFile(cfg); err != nil {
+					t.Fatal(err)
+				}
+				first, err := os.ReadFile(file)
+				if err != nil || !strings.Contains(string(first), url) {
+					t.Fatalf("URL lost during migration: %v\n%s", err, first)
+				}
+				if err := patchModuleFile(cfg); err != nil {
+					t.Fatal(err)
+				}
+				second, err := os.ReadFile(file)
+				if err != nil || string(first) != string(second) {
+					t.Fatalf("URL bracket migration is not idempotent: %v", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRunArchiveExplicitPinsReplaceComputedValues(t *testing.T) {
+	t.Setenv("GOPROXY", "off")
+	t.Setenv("GOSUMDB", "off")
+	for _, managed := range []bool{false, true} {
+		for name, edit := range map[string][2]string{
+			"computed prefix": {`strip_prefix = "release/third_party/rgo/v0_60_0/base"`, `strip_prefix = "release/" + "third_party/rgo/v0_60_0/base"`},
+			"computed type":   {"archive_override(\n", "archive_override(\n    type = ARCHIVE_TYPE,\n"},
+		} {
+			t.Run(fmt.Sprintf("managed=%t/%s", managed, name), func(t *testing.T) {
+				dir := t.TempDir()
+				override := strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), edit[0], edit[1], 1)
+				if managed {
+					override = managedBlockStart + "\n" + override + managedBlockEnd + "\n"
+				}
+				const preserved = "bazel_dep(name = \"keep_me\", version = \"1.0.0\")\n"
+				input := "module(name = \"consumer\")\n" + override + preserved
+				moduleFile := filepath.Join(dir, "MODULE.bazel")
+				if err := os.WriteFile(moduleFile, []byte(input), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/consumer\n\ngo 1.25.0\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				cfg := config{
+					workspaceDir: dir, goModSync: "off", datadogFetch: defaultDatadogFetch,
+					rulesGoFetch: "archive", rulesGoVariant: defaultRulesGoVariant,
+					orchestrionVersion: defaultOrchestrionVersion, ddTraceGoVersion: defaultDDTraceGoVersion,
+					rtoArchiveURL: "https://mirror.example/replacement", rtoArchiveSHA256: strings.Repeat("b", 64),
+					rtoArchivePrefix: "replacement", rtoArchiveType: "tar.gz",
+				}
+				if err := run(cfg); err != nil {
+					t.Fatalf("explicit archive pins could not replace computed values: %v", err)
+				}
+				first, err := os.ReadFile(moduleFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				archive, err := findModuleArchive(string(first), "rules_go")
+				if err != nil || archive == nil || len(archive.urls) != 1 || archive.urls[0] != cfg.rtoArchiveURL || archive.sha256 != cfg.rtoArchiveSHA256 || archive.prefix != "replacement/third_party/rgo/v0_60_0/base" || archive.archiveType != "tar.gz" {
+					t.Fatalf("explicit pins were not preserved: archive=%+v err=%v\n%s", archive, err, first)
+				}
+				if strings.Count(string(first), `module_name = "rules_go"`) != 1 || !strings.Contains(string(first), preserved) || strings.Contains(string(first), "ARCHIVE_TYPE") {
+					t.Fatalf("migration damaged surrounding declarations or duplicated the override:\n%s", first)
+				}
+				if err := run(cfg); err != nil {
+					t.Fatalf("rerun failed: %v", err)
+				}
+				second, err := os.ReadFile(moduleFile)
+				if err != nil || string(first) != string(second) {
+					t.Fatalf("explicit-pin migration is not idempotent: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestArchiveBootstrapRejectsInvalidInputsWithoutWriting(t *testing.T) {
 	valid := archiveTestOverride("datadog-rules-test-optimization", "release")
 	for name, input := range map[string]string{
@@ -103,6 +195,57 @@ func TestArchiveInferenceRejectsComputedURLLists(t *testing.T) {
 				t.Fatalf("computed URL list was accepted: archive=%+v err=%v", archive, err)
 			}
 		})
+	}
+}
+
+func TestArchiveInferenceRejectsNestedComputedURLs(t *testing.T) {
+	for _, value := range []string{
+		`mirror_urls(urls = ["https://mirror.example/source.tar.gz"])`,
+		`dict(urls = ["https://mirror.example/source.tar.gz"])["urls"]`,
+	} {
+		t.Run(value, func(t *testing.T) {
+			input := archiveTestOverride("datadog-rules-test-optimization", "release")
+			input = strings.Replace(input, `urls = ["https://mirror.example/source.tar.gz", "https://github.com/DataDog/rules_test_optimization/releases/download/v1.3.0/source.tar.gz"]`, "urls = "+value, 1)
+			if archive, err := findModuleArchive(input, "datadog-rules-test-optimization"); err == nil || archive != nil {
+				t.Fatalf("nested computed URL list was accepted: archive=%+v err=%v", archive, err)
+			}
+		})
+	}
+}
+
+func TestExplicitArchivePinsRejectUnmanagedForkAttributesWithoutWriting(t *testing.T) {
+	for _, attr := range []string{`patches = ["//:custom.patch"]`, `auth_patterns = {"mirror.example": "Bearer <password>"}`, `**{"patches": ["//:custom.patch"]}`} {
+		t.Run(attr, func(t *testing.T) {
+			input := "module(name = \"consumer\")\n" + strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), "archive_override(\n", "archive_override(\n    type = ARCHIVE_TYPE,\n    "+attr+",\n", 1)
+			file := filepath.Join(t.TempDir(), "MODULE.bazel")
+			if err := os.WriteFile(file, []byte(input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config{moduleFile: file, rulesGoFetch: "archive", rtoArchiveURL: "https://mirror.example/source", rtoArchiveSHA256: strings.Repeat("b", 64), rtoArchivePrefix: "release", rtoArchiveType: "tar.gz"}
+			if err := patchModuleFile(cfg); err == nil || !strings.Contains(err.Error(), "cannot manage rules_go archive attribute") {
+				t.Errorf("explicit pins accepted unsupported fork attributes: %v", err)
+			}
+			after, err := os.ReadFile(file)
+			if err != nil || string(after) != input {
+				t.Fatalf("unsupported fork attributes changed MODULE.bazel: %v", err)
+			}
+		})
+	}
+}
+
+func TestExplicitArchivePinsDoNotReplaceDifferentLiteralFork(t *testing.T) {
+	input := "module(name = \"consumer\")\n" + archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base")
+	file := filepath.Join(t.TempDir(), "MODULE.bazel")
+	if err := os.WriteFile(file, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config{moduleFile: file, rulesGoFetch: "archive", rtoArchiveURL: "https://mirror.example/replacement.tar.gz", rtoArchiveSHA256: strings.Repeat("b", 64), rtoArchivePrefix: "replacement"}
+	if err := patchModuleFile(cfg); err == nil || !strings.Contains(err.Error(), "incompatible rules_go override") {
+		t.Fatalf("different literal fork was accepted: %v", err)
+	}
+	after, err := os.ReadFile(file)
+	if err != nil || string(after) != input {
+		t.Fatalf("different literal fork changed MODULE.bazel: %v", err)
 	}
 }
 

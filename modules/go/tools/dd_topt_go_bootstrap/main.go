@@ -3054,12 +3054,12 @@ func hydrateManagedRulesGoVariant(cfg *config, content string) error {
 	if start < 0 || end < 0 || end <= start {
 		return nil
 	}
-	stripPrefixPattern := regexp.MustCompile(`strip_prefix\s*=\s*"([^"]+)"`)
-	match := stripPrefixPattern.FindStringSubmatch(content[start:end])
-	if len(match) != 2 {
+	prefix := literalAttribute(content[start:end], "strip_prefix")
+	if prefix == "" {
+		// Computed archive values are validated or replaced by explicit pins
+		// in configureModuleArchive. Do not infer a fork from part of a value.
 		return nil
 	}
-	prefix := match[1]
 	if strings.Contains(content[start:end], "archive_override(") {
 		if index := strings.Index(prefix, "third_party/rgo/"); index > 0 {
 			prefix = prefix[index:]

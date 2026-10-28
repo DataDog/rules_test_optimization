@@ -139,6 +139,18 @@ func moduleOverridePresent(content, module string) bool {
 
 func moduleArchiveCompatible(content string, cfg config) (bool, error) {
 	existing, err := findModuleArchive(content, "rules_go")
+	if err != nil && (cfg.rtoArchiveURL != "" || cfg.rulesGoFetch == "archive") {
+		// Complete explicit pins can replace computed values, but never discard
+		// fork patches, authentication, or other unsupported archive attributes.
+		for _, block := range topLevelCallBlocks(stripStarlarkLineComments(content)) {
+			if block.function == "archive_override" && literalAttribute(block.text, "module_name") == "rules_go" {
+				if err := validateRulesGoArchiveAttributes(block.text); err != nil {
+					return false, err
+				}
+				return true, nil
+			}
+		}
+	}
 	if err != nil || existing == nil {
 		return false, err
 	}
@@ -193,26 +205,35 @@ func findModuleArchive(content, module string) (*moduleArchive, error) {
 			}
 		}
 		archive := &moduleArchive{sha256: literalAttribute(block.text, "sha256"), prefix: literalAttribute(block.text, "strip_prefix"), archiveType: literalAttribute(block.text, "type")}
-		if loc := regexp.MustCompile(`\btype\s*=`).FindStringIndex(maskStarlarkStringsAndComments(block.text)); loc != nil {
-			value := strings.TrimSpace(block.text[loc[1]:])
-			if !regexp.MustCompile(`^("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]`).MatchString(value) {
+		if value, present := callAttributeValue(block.text, "type"); present {
+			if !regexp.MustCompile(`^("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')$`).MatchString(value) {
 				return nil, errors.New("archive type must be a literal string; pass explicit --rto-archive-* flags for computed values")
 			}
 		}
-		match := regexp.MustCompile(`(?s)\burls\s*=\s*\[([^\]]*)\]\s*[,)]`).FindStringSubmatch(block.text)
-		if len(match) == 2 {
-			remaining := match[1]
-			for _, literal := range regexp.MustCompile(`"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'`).FindAllString(remaining, -1) {
-				value, err := unquoteStarlarkLiteral(literal)
-				if err != nil {
-					return nil, err
-				}
-				archive.urls = append(archive.urls, value)
-				remaining = strings.Replace(remaining, literal, "", 1)
-			}
-			if strings.Trim(strings.TrimSpace(remaining), ", \t\r\n") != "" {
+		value, present := callAttributeValue(block.text, "urls")
+		if !present || !strings.HasPrefix(value, "[") || !strings.HasSuffix(value, "]") {
+			return nil, errors.New("archive urls must be a literal list; pass explicit --rto-archive-* flags for computed values")
+		}
+		remaining := strings.TrimSpace(value[1 : len(value)-1])
+		literalPattern := regexp.MustCompile(`^("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')`)
+		for remaining != "" {
+			literal := literalPattern.FindString(remaining)
+			if literal == "" {
 				return nil, errors.New("archive urls must be a literal list; pass explicit --rto-archive-* flags for computed values")
 			}
+			url, err := unquoteStarlarkLiteral(literal)
+			if err != nil {
+				return nil, err
+			}
+			archive.urls = append(archive.urls, url)
+			remaining = strings.TrimSpace(remaining[len(literal):])
+			if remaining == "" {
+				break
+			}
+			if remaining[0] != ',' {
+				return nil, errors.New("archive urls must be a literal list; pass explicit --rto-archive-* flags for computed values")
+			}
+			remaining = strings.TrimSpace(remaining[1:])
 		}
 		if err := archive.validate(); err != nil {
 			return nil, fmt.Errorf("%s: %w", module, err)
@@ -223,13 +244,42 @@ func findModuleArchive(content, module string) (*moduleArchive, error) {
 }
 
 func literalAttribute(block, name string) string {
-	pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\s*=\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]`)
-	match := pattern.FindStringSubmatch(block)
-	if len(match) != 2 {
+	value, present := callAttributeValue(block, name)
+	if !present || !regexp.MustCompile(`^("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')$`).MatchString(value) {
 		return ""
 	}
-	value, _ := unquoteStarlarkLiteral(match[1])
-	return value
+	literal, _ := unquoteStarlarkLiteral(value)
+	return literal
+}
+
+// Read one complete outer call argument, never a nested keyword or a fragment
+// of a computed expression. The masked view preserves original byte offsets.
+func callAttributeValue(block, name string) (string, bool) {
+	syntax := maskStarlarkStringsAndComments(block)
+	opening := strings.IndexByte(syntax, '(')
+	if opening < 0 {
+		return "", false
+	}
+	attribute := regexp.MustCompile(`^\s*` + regexp.QuoteMeta(name) + `\s*=`)
+	depth, start := 1, opening+1
+	for i := start; i < len(syntax); i++ {
+		switch syntax[i] {
+		case '(', '[', '{':
+			depth++
+		case ')', ']', '}':
+			depth--
+		}
+		if (depth == 1 && syntax[i] == ',') || depth == 0 {
+			if match := attribute.FindStringIndex(syntax[start:i]); match != nil {
+				return strings.TrimSpace(stripStarlarkLineComments(block[start+match[1] : i])), true
+			}
+			start = i + 1
+			if depth == 0 {
+				break
+			}
+		}
+	}
+	return "", false
 }
 
 func unquoteStarlarkLiteral(value string) (string, error) {
