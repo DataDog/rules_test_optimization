@@ -748,6 +748,16 @@ func TestPrepareModuleExportRootUsesWrappedSyntheticCache(t *testing.T) {
 // direct package metadata must still load even when a transitive dependency is
 // intentionally unresolved.
 func TestLoadModulePackageMetadataBatchSkipsBrokenTransitiveDeps(t *testing.T) {
+	// The missing dependency is intentional. Keep its lookup offline and
+	// independent from host module settings or toolchain downloads.
+	t.Setenv("GOPROXY", "off")
+	t.Setenv("GOSUMDB", "off")
+	t.Setenv("GOPRIVATE", "")
+	t.Setenv("GONOPROXY", "")
+	t.Setenv("GONOSUMDB", "")
+	t.Setenv("GOFLAGS", "")
+	t.Setenv("GOTOOLCHAIN", "local")
+
 	goExe, err := exec.LookPath("go")
 	if err != nil {
 		t.Skipf("go binary not on PATH: %v", err)
