@@ -144,6 +144,18 @@ class ReleaseBundleTests(unittest.TestCase):
             for fork in metadata["rules_go"].values():
                 archive.getmember(f'{fork["strip_prefix"]}/MODULE.bazel')
 
+    def test_archive_ignores_host_line_ending_preferences(self):
+        original = self.build("original")
+        self.git("config", "core.autocrlf", "true")
+        self.git("config", "core.eol", "crlf")
+        metadata = self.build()
+        self.assertEqual(original, metadata)
+        for path in (self.root / "original").iterdir():
+            self.assertEqual(path.read_bytes(), (self.root / "dist" / path.name).read_bytes())
+        with tarfile.open(self.root / "dist" / metadata["archive"]) as archive:
+            launcher = archive.extractfile(f'{metadata["strip_prefix"]}/bazelw')
+            self.assertEqual(launcher.read(), b"#!/bin/sh\nexit 0\n")
+
     def test_checksum_manifest_covers_every_other_asset(self):
         self.build()
         output = self.root / "dist"
@@ -153,6 +165,8 @@ class ReleaseBundleTests(unittest.TestCase):
             self.assertEqual(hashlib.sha256((output / name).read_bytes()).hexdigest(), digest)
             checked.add(name)
         self.assertEqual(checked, {path.name for path in output.iterdir()} - {"SHA256SUMS"})
+        for name in ("INSTALL.md", "RELEASE_NOTES.md", "release.json", "SHA256SUMS"):
+            self.assertNotIn(b"\r\n", (output / name).read_bytes(), name)
 
     def test_notes_use_only_current_changelog_and_exact_install_pins(self):
         metadata = self.build()

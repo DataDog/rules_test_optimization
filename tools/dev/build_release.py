@@ -154,22 +154,23 @@ def build(repo: Path, ref: str, output: Path, tag: str | None = None) -> dict:
     archive = output / f"{prefix}.tar.gz"
     with tempfile.TemporaryDirectory(prefix="rto-release-source-") as temporary:
         tar = Path(temporary) / "source.tar"
-        git(repo, "archive", "--format=tar", f"--prefix={prefix}/", f"--output={tar}", commit)
+        # Host checkout preferences must not turn executable scripts into CRLF.
+        git(repo, "-c", "core.autocrlf=false", "-c", "core.eol=lf", "archive", "--format=tar", f"--prefix={prefix}/", f"--output={tar}", commit)
         with tar.open("rb") as source, archive.open("wb") as target:
             with gzip.GzipFile(filename="", mode="wb", fileobj=target, mtime=0) as compressed:
                 shutil.copyfileobj(source, compressed)
     metadata = archive_metadata(archive, prefix, version, commit)
-    (output / "release.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8")
+    (output / "release.json").write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8", newline="\n")
     installation = installation_notes(metadata)
-    (output / "INSTALL.md").write_text(installation, encoding="utf-8")
+    (output / "INSTALL.md").write_text(installation, encoding="utf-8", newline="\n")
     (output / "RELEASE_NOTES.md").write_text(
-        f"# v{version}\n\n{changelog}\n\n{installation}", encoding="utf-8"
+        f"# v{version}\n\n{changelog}\n\n{installation}", encoding="utf-8", newline="\n"
     )
     checksums = []
     for path in sorted(output.iterdir()):
         with path.open("rb") as handle:
             checksums.append(f"{hashlib.file_digest(handle, 'sha256').hexdigest()}  {path.name}\n")
-    (output / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8")
+    (output / "SHA256SUMS").write_text("".join(checksums), encoding="utf-8", newline="\n")
     return metadata
 
 
