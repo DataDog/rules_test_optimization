@@ -63,6 +63,15 @@ func configureModuleArchive(cfg *config, content string) error {
 		return errors.New("--rules-go-fetch=git conflicts with explicit --rto-archive-* flags for Bzlmod")
 	}
 	if cfg.rtoArchiveURL != "" || cfg.rulesGoFetch == "archive" {
+		// Explicit pins can replace computed values, but must not erase patches
+		// from a previously managed fork when its block is rewritten.
+		for _, block := range topLevelCallBlocks(stripStarlarkLineComments(content)) {
+			if block.function == "archive_override" && literalAttribute(block.text, "module_name") == "rules_go" {
+				if err := validateRulesGoArchiveAttributes(block.text); err != nil {
+					return err
+				}
+			}
+		}
 		archive := &moduleArchive{urls: []string{cfg.rtoArchiveURL}, sha256: cfg.rtoArchiveSHA256, prefix: cfg.rtoArchivePrefix, archiveType: cfg.rtoArchiveType}
 		if err := archive.validate(); err != nil {
 			return err
@@ -141,6 +150,18 @@ func moduleArchiveCompatible(content string, cfg config) (bool, error) {
 	return reflect.DeepEqual(existing.urls, wanted.urls) && strings.EqualFold(existing.sha256, wanted.sha256) && existing.prefix == wanted.prefix+"/"+fork && existing.archiveType == wanted.archiveType, nil
 }
 
+func validateRulesGoArchiveAttributes(block string) error {
+	// Attribute-looking text inside strings and comments is not an argument.
+	for _, attr := range regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*=`).FindAllStringSubmatch(maskStarlarkStringsAndComments(block), -1) {
+		switch attr[1] {
+		case "module_name", "urls", "sha256", "strip_prefix", "type":
+		default:
+			return fmt.Errorf("cannot manage rules_go archive attribute %q; keep custom patches/authentication wiring outside bootstrap", attr[1])
+		}
+	}
+	return nil
+}
+
 // These are literal-only readers, like the existing bootstrap's Git readers.
 // Never guess the result of a Starlark expression or silently drop a fork patch.
 func findModuleArchive(content, module string) (*moduleArchive, error) {
@@ -149,17 +170,17 @@ func findModuleArchive(content, module string) (*moduleArchive, error) {
 			continue
 		}
 		if module == "rules_go" {
-			// Attribute-looking text in URLs is data, not a keyword argument.
-			withoutStrings := regexp.MustCompile(`"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'`).ReplaceAllString(block.text, `""`)
-			for _, attr := range regexp.MustCompile(`\b([A-Za-z_][A-Za-z0-9_]*)\s*=`).FindAllStringSubmatch(withoutStrings, -1) {
-				switch attr[1] {
-				case "module_name", "urls", "sha256", "strip_prefix", "type":
-				default:
-					return nil, fmt.Errorf("cannot manage rules_go archive attribute %q; keep custom patches/authentication wiring outside bootstrap", attr[1])
-				}
+			if err := validateRulesGoArchiveAttributes(block.text); err != nil {
+				return nil, err
 			}
 		}
 		archive := &moduleArchive{sha256: literalAttribute(block.text, "sha256"), prefix: literalAttribute(block.text, "strip_prefix"), archiveType: literalAttribute(block.text, "type")}
+		if loc := regexp.MustCompile(`\btype\s*=`).FindStringIndex(maskStarlarkStringsAndComments(block.text)); loc != nil {
+			value := strings.TrimSpace(block.text[loc[1]:])
+			if !regexp.MustCompile(`^("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')\s*[,)]`).MatchString(value) {
+				return nil, errors.New("archive type must be a literal string; pass explicit --rto-archive-* flags for computed values")
+			}
+		}
 		match := regexp.MustCompile(`(?s)\burls\s*=\s*\[([^\]]*)\]\s*[,)]`).FindStringSubmatch(block.text)
 		if len(match) == 2 {
 			remaining := match[1]

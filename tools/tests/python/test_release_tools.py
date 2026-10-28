@@ -6,6 +6,7 @@
 
 """Offline regression tests for the exact bytes and snippets shipped in releases."""
 
+import ast
 import hashlib
 import json
 import os
@@ -182,6 +183,19 @@ class ReleaseBundleTests(unittest.TestCase):
         self.assertIn(metadata["sha256"], notes)
         self.assertIn(metadata["commit"], notes)
         self.assertNotIn("<commit", notes)
+
+    def test_generated_archive_blocks_map_go_only_in_workspace(self):
+        metadata = self.build()
+        for bzlmod in (False, True):
+            for name, prefix in metadata["modules"].items():
+                with self.subTest(bzlmod=bzlmod, name=name):
+                    block = RELEASE.archive_call(metadata, name, prefix, bzlmod=bzlmod)
+                    call = ast.parse(block).body[0].value
+                    attrs = {keyword.arg: ast.literal_eval(keyword.value) for keyword in call.keywords}
+                    if not bzlmod and name == "datadog-rules-test-optimization-go":
+                        self.assertEqual(attrs.get("repo_mapping"), {"@rules_go": "@io_bazel_rules_go"})
+                    else:
+                        self.assertNotIn("repo_mapping", attrs)
 
     def test_tag_mismatch_stops_before_creating_output(self):
         with self.assertRaisesRegex(ValueError, "release tag mismatch"):

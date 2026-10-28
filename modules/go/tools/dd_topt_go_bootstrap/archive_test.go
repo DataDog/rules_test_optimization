@@ -106,6 +106,83 @@ func TestArchiveInferenceRejectsComputedURLLists(t *testing.T) {
 	}
 }
 
+func TestArchiveBootstrapRejectsComputedTypesWithoutWriting(t *testing.T) {
+	for _, module := range []string{"datadog-rules-test-optimization", "datadog-rules-test-optimization-go", "rules_go"} {
+		prefix := "release"
+		if module == "datadog-rules-test-optimization-go" {
+			prefix += "/modules/go"
+		} else if module == "rules_go" {
+			prefix += "/third_party/rgo/v0_60_0/base"
+		}
+		for _, value := range []string{`ARCHIVE_TYPE`, `"tar." + EXTENSION`, `"tar.gz" if USE_GZIP else "zip"`} {
+			t.Run(module+"/"+value, func(t *testing.T) {
+				input := strings.Replace(archiveTestOverride(module, prefix), "archive_override(\n", "archive_override(\n    type = "+value+",\n", 1)
+				if archive, err := findModuleArchive(input, module); err == nil || archive != nil {
+					t.Errorf("computed archive type was accepted: archive=%+v err=%v", archive, err)
+				}
+				file := filepath.Join(t.TempDir(), "MODULE.bazel")
+				if err := os.WriteFile(file, []byte("module(name = \"consumer\")\n"+input), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				before, _ := os.ReadFile(file)
+				if err := patchModuleFile(config{moduleFile: file}); err == nil || !strings.Contains(err.Error(), "archive type must be a literal string") {
+					t.Errorf("expected actionable computed-type error, got %v", err)
+				}
+				after, _ := os.ReadFile(file)
+				if string(after) != string(before) {
+					t.Fatal("computed archive type changed MODULE.bazel")
+				}
+			})
+		}
+	}
+}
+
+func TestExplicitArchiveFlagsRejectManagedForkPatchesWithoutWriting(t *testing.T) {
+	for _, attr := range []string{`patches = ["//:custom.patch"]`, `patch_cmds = ["echo patch"]`, `patch_args = ["-p1"]`} {
+		t.Run(attr, func(t *testing.T) {
+			override := strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), "archive_override(\n", "archive_override(\n    "+attr+",\n", 1)
+			input := "module(name = \"consumer\")\n" + managedBlockStart + "\n" + override + managedBlockEnd + "\n"
+			file := filepath.Join(t.TempDir(), "MODULE.bazel")
+			if err := os.WriteFile(file, []byte(input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config{moduleFile: file, rulesGoFetch: "archive", rtoArchiveURL: "https://mirror.example/source", rtoArchiveSHA256: strings.Repeat("b", 64), rtoArchivePrefix: "release", rtoArchiveType: "tar.gz"}
+			if err := patchModuleFile(cfg); err == nil || !strings.Contains(err.Error(), "cannot manage rules_go archive attribute") {
+				t.Errorf("explicit archive flags accepted fork patch attributes: %v", err)
+			}
+			after, _ := os.ReadFile(file)
+			if string(after) != input {
+				t.Fatal("explicit archive flags deleted custom fork patches")
+			}
+		})
+	}
+}
+
+func TestArchiveBootstrapPreservesLiteralTypesAndExplicitComputedEscapeHatch(t *testing.T) {
+	for _, value := range []string{`"tar.gz"`, `'tar.gz'`, `ARCHIVE_TYPE`} {
+		t.Run(value, func(t *testing.T) {
+			override := strings.Replace(archiveTestOverride("rules_go", "release/third_party/rgo/v0_60_0/base"), "archive_override(\n", "archive_override(\n    type = "+value+",\n", 1)
+			override = strings.ReplaceAll(override, "source.tar.gz", "source?type=asset")
+			input := "module(name = \"consumer\")\n" + managedBlockStart + "\n" + override + managedBlockEnd + "\nbazel_dep(name = \"keep_me\", version = \"1.0.0\")\n"
+			file := filepath.Join(t.TempDir(), "MODULE.bazel")
+			if err := os.WriteFile(file, []byte(input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg := config{moduleFile: file}
+			if value == "ARCHIVE_TYPE" {
+				cfg.rulesGoFetch, cfg.rtoArchiveURL, cfg.rtoArchiveSHA256, cfg.rtoArchivePrefix, cfg.rtoArchiveType = "archive", "https://mirror.example/source", strings.Repeat("b", 64), "release", "tar.gz"
+			}
+			if err := patchModuleFile(cfg); err != nil {
+				t.Fatal(err)
+			}
+			result, _ := os.ReadFile(file)
+			if !strings.Contains(string(result), `type = "tar.gz"`) || !strings.Contains(string(result), `bazel_dep(name = "keep_me", version = "1.0.0")`) {
+				t.Fatalf("archive type or unrelated declaration lost:\n%s", result)
+			}
+		})
+	}
+}
+
 func TestArchiveBootstrapPreservesDeclarationsAroundCommentedOverrides(t *testing.T) {
 	for _, comment := range []string{"# example: foo(", "# example: foo)", "# Unicode: héllo( and an unmatched quote \""} {
 		t.Run(comment, func(t *testing.T) {
