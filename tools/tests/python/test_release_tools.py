@@ -10,7 +10,9 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -22,6 +24,50 @@ except ModuleNotFoundError:
     from tools.tests.python.test_rules_go_variant_tools import _load_module, _runfile
 
 RELEASE = _load_module("build_release", "tools/dev/build_release.py")
+
+
+@unittest.skipIf(sys.platform == "win32" or not shutil.which("bash"), "requires POSIX symlinks and Bash")
+class ReleaseConsumerHarnessTests(unittest.TestCase):
+    def test_bep_simulation_copies_outputs_without_mutating_bazel_testlogs(self):
+        for mode in ("bzlmod", "workspace"):
+            harness = _runfile(f"tools/tests/integration/run_{mode}_go_integration.sh").read_text(encoding="utf-8")
+            function = harness.split("simulate_bep_artifact_only_outputs() {", 1)[1].split("\n}\n", 1)[0]
+            for use_symlink in (False, True):
+                with self.subTest(mode=mode, use_symlink=use_symlink), tempfile.TemporaryDirectory(prefix="rto-bep-copy-") as temporary:
+                    root = Path(temporary)
+                    workspace = root / "workspace"
+                    workspace.mkdir()
+                    (workspace / ".topt").mkdir()
+                    testlogs = root / "testlogs" if use_symlink else workspace / "bazel-testlogs"
+                    output = testlogs / "app/hello_test/test.outputs"
+                    output.mkdir(parents=True)
+                    payload = output / "payload.json"
+                    payload.write_text("{}", encoding="utf-8")
+                    payload.chmod(0o444)
+                    output.chmod(0o555)
+                    if use_symlink:
+                        (workspace / "bazel-testlogs").symlink_to(testlogs, target_is_directory=True)
+                    bep = root / "fresh.bep.json"
+                    bep.write_text(json.dumps({"testResult": {"testActionOutput": [{"name": "test.outputs", "uri": output.as_uri()}]}}) + "\n", encoding="utf-8")
+                    try:
+                        result = subprocess.run(
+                            ["bash", "-c", "set -euo pipefail\nsimulate_bep_artifact_only_outputs() {" + function + '\n}\nsimulate_bep_artifact_only_outputs "$1" "$2"', "bep-copy", str(workspace), str(bep)],
+                            env={**os.environ, "PYTHON": sys.executable}, text=True, capture_output=True, check=False,
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        simulated = workspace / ".topt/simulated-local-testlogs"
+                        self.assertFalse(simulated.is_symlink())
+                        self.assertFalse((simulated / "app/hello_test/test.outputs").exists())
+                        self.assertEqual(payload.read_text(encoding="utf-8"), "{}")
+                        self.assertEqual(output.stat().st_mode & 0o777, 0o555)
+                        self.assertEqual(payload.stat().st_mode & 0o777, 0o444)
+                        staged = workspace / ".topt/simulated-remote-artifacts/app/hello_test/test.outputs"
+                        self.assertEqual((staged / "payload.json").read_text(encoding="utf-8"), "{}")
+                        event = json.loads(bep.read_text(encoding="utf-8"))
+                        self.assertEqual(event["testResult"]["testActionOutput"][0]["uri"], staged.resolve().as_uri())
+                    finally:
+                        output.chmod(0o755)
+                        payload.chmod(0o644)
 
 
 class ReleaseBundleTests(unittest.TestCase):

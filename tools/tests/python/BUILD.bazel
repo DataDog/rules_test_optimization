@@ -82,6 +82,7 @@ sh_test(
         "//tools/test_optimization:create_support_bundle.py",
         "//tools/test_optimization:render_report_summary.py",
         "//tools/tests:integration/mock_dd_server.py",
+        "//tools/tests:integration/run_bzlmod_go_integration.sh",
         "//tools/tests:integration/run_workspace_go_integration.sh",
         "//tools/tests/python/fixtures/generated_uploader",
     ],

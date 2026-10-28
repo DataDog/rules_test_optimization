@@ -423,7 +423,9 @@ simulate_bep_artifact_only_outputs() {
     exit 1
   fi
   rm -rf "$artifact_root" "$simulated_testlogs"
-  cp -R "$ws_dir/bazel-testlogs" "$simulated_testlogs"
+  # bazel-testlogs is a symlink. Copy its contents so staging cannot mutate
+  # Bazel's read-only outputs through that symlink.
+  cp -RL "$ws_dir/bazel-testlogs" "$simulated_testlogs"
   mkdir -p "$(dirname "$staged_source")"
   cp -R "$original_source" "$staged_source"
   chmod -R u+w "$simulated_testlogs" "$artifact_root" 2>/dev/null || true
