@@ -286,7 +286,7 @@ the default `dd-trace-go` version, and the default Orchestrion version.
 Published GitHub pins use `tar.gz`; other archive types must be mirrored and
 documented outside this helper.
 
-Historical `v1.2.0` GitHub pins (not the `1.3.0` candidate):
+Historical `v1.2.0` GitHub pins (not `v1.3.0`):
 
 ```bash
 RTO_COMMIT="69953536d4ef1252c8181c267d16c61263f0aa4c"
@@ -1369,7 +1369,7 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 | Bazel | `8.8.2` | Repository baseline (`.bazelversion`) and primary CI lanes |
 | rules_go (Go users) | `0.60.0` / `rules_go_upstream = "v0_60_0"` | README examples use the default support line; importpath inference requires `0.51.0+` |
 | Go toolchain (example) | `1.25.0` | Consumer repositories may use another supported version |
-| Module versions | `1.3.0` candidate | Not published yet; use commit pin/override install paths |
+| Module versions | `1.3.0` | Published; use release archives when available, or the Git alternative |
 
 - **Bazel 8.8.2 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
 - **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.8.2` during migration away from WORKSPACE mode in Bazel 9+
