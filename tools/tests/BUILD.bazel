@@ -19,6 +19,7 @@ exports_files(
     [
         "example_stub_repo.bzl",
         "integration/mock_dd_server.py",
+        "integration/run_workspace_go_integration.sh",
     ],
     visibility = ["//visibility:public"],
 )

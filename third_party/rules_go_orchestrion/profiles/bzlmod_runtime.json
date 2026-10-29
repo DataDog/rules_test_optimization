@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "bzlmod_runtime",
-  "description": "Runtime Orchestrion/Test Optimization patch for Bzlmod consumers, including rules_go's Orchestrion extension registration. Excludes lockfiles and repository tests.",
+  "description": "Runtime Orchestrion/Test Optimization patch for Bzlmod consumers, including rules_go's Orchestrion extension registration. Excludes lockfiles, development Bazel configuration, and repository tests.",
   "variant": "base",
   "include": [
     "/BUILD.bazel",
@@ -45,8 +45,13 @@
     "go/tools/builders/tool_version.go"
   ],
   "exclude": [
+    "/.bazelrc",
+    "/.bazelversion",
     "/MODULE.bazel.lock",
     "docs/**",
+    "examples/.bazelrc",
+    "examples/basic_gazelle/.bazelversion",
+    "examples/hello/.bazelversion",
     "tests/**",
     "**/*_test.go"
   ],

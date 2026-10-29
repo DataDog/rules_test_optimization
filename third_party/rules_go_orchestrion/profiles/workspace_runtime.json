@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "name": "workspace_runtime",
-  "description": "Generic WORKSPACE-mode runtime Orchestrion/Test Optimization patch profile. This excludes Bzlmod extension wiring and public repository tests.",
+  "description": "Generic WORKSPACE-mode runtime Orchestrion/Test Optimization patch profile. This excludes Bzlmod extension wiring, development Bazel configuration, and public repository tests.",
   "variant": "base",
   "include": [
     "/BUILD.bazel",
@@ -43,9 +43,14 @@
     "go/tools/builders/tool_version.go"
   ],
   "exclude": [
+    "/.bazelrc",
+    "/.bazelversion",
     "/MODULE.bazel",
     "/MODULE.bazel.lock",
     "docs/**",
+    "examples/.bazelrc",
+    "examples/basic_gazelle/.bazelversion",
+    "examples/hello/.bazelversion",
     "go/extensions.bzl",
     "tests/**",
     "**/*_test.go"
