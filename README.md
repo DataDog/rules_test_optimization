@@ -10,7 +10,7 @@ This product includes software developed at Datadog
 
 This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.
 
-> `v1.3.0` is published. For releases with an `INSTALL.md` asset, copy its checksum-pinned `archive_override` (Bzlmod) or `http_archive` (WORKSPACE) blocks. Keep core, companions, and the Go fork on the same archive. `v1.3.0` predates those assets; its commit-based installation remains supported. See [release installation](docs/Installation_Reference.md#option-a-install-from-a-release-archive-recommended).
+> `v1.4.0` is in preparation; `v1.3.0` remains the latest published release. For releases with an `INSTALL.md` asset, copy its checksum-pinned `archive_override` (Bzlmod) or `http_archive` (WORKSPACE) blocks. Keep core, companions, and the Go fork on the same archive. `v1.3.0` predates those assets; its commit-based installation remains supported. See [release installation](docs/Installation_Reference.md#option-a-install-from-a-release-archive-recommended).
 
 ## Onboarding paths
 
@@ -329,8 +329,9 @@ check as the dev helper.
 
 Replace `<release-archive-url>`, `<release-archive-sha256>`, and
 `<archive-prefix>` with the values from the release's `INSTALL.md`. Match the
-Datadog `bazel_dep` versions to that release; the snippets below use `1.3.0`
-API examples. For `v1.3.0` or an unreleased commit without these assets, use
+Datadog `bazel_dep` versions to that release; the snippets below use the `1.4.0`
+API. Until `v1.4.0` is published, use an explicit commit override for development
+or `v1.3.0` for a published version. For versions without bundle assets, use
 the [Git alternative](docs/Installation_Reference.md#option-b-install-from-a-git-commit).
 
 ### Bzlmod + core only (any language)
@@ -339,7 +340,7 @@ Use this when you do not need `dd_topt_go_test`:
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization",
     urls = ["<release-archive-url>"],
@@ -431,7 +432,7 @@ prerequisite block below, then let the guided bootstrap finish the Go-specific
 setup.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization",
     urls = ["<release-archive-url>"],
@@ -439,7 +440,7 @@ archive_override(
     strip_prefix = "<archive-prefix>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-go",
     urls = ["<release-archive-url>"],
@@ -614,7 +615,7 @@ named config. Python does not declare `rules_go` and must not copy the Go-only
 Orchestrion build flag.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization",
     urls = ["<release-archive-url>"],
@@ -622,7 +623,7 @@ archive_override(
     strip_prefix = "<archive-prefix>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-python",
     urls = ["<release-archive-url>"],
@@ -764,7 +765,7 @@ absent.
 ### Bzlmod + Java companion (`dd_topt_java_test`)
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-java",
     urls = ["<release-archive-url>"],
@@ -826,7 +827,7 @@ not include `srcs` by default and the extra files cost runfiles size.
 ```bzl
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-nodejs",
     urls = ["<release-archive-url>"],
@@ -859,7 +860,7 @@ dd_topt_nodejs_test(
 
 ```bzl
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-dotnet",
     urls = ["<release-archive-url>"],
@@ -914,7 +915,7 @@ def dotnet_csharp_test_adapter(name, data = None, env = None, **kwargs):
 
 ```bzl
 bazel_dep(name = "rules_ruby", version = "0.21.1")
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-ruby",
     urls = ["<release-archive-url>"],
@@ -1369,7 +1370,7 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 | Bazel | `8.8.2` | Repository baseline (`.bazelversion`) and primary CI lanes |
 | rules_go (Go users) | `0.60.0` / `rules_go_upstream = "v0_60_0"` | README examples use the default support line; importpath inference requires `0.51.0+` |
 | Go toolchain (example) | `1.25.0` | Consumer repositories may use another supported version |
-| Module versions | `1.3.0` | Published; use release archives when available, or the Git alternative |
+| Module versions | `1.4.0` (in preparation) | Latest published release: `1.3.0`; use its Git installation recipe |
 
 - **Bazel 8.8.2 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
 - **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.8.2` during migration away from WORKSPACE mode in Bazel 9+
@@ -1857,7 +1858,7 @@ Use the raw macro directly only when you need the lower-level API.
 Before using it directly, configure the Go companion extension in `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 go_topt = use_extension(

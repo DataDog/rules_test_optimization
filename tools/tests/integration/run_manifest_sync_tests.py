@@ -171,7 +171,7 @@ def _workspace_module(repo_root: Path) -> str:
     path = repo_root.resolve().as_posix()
     return f"""module(name = "manifest-sync-integration", version = "0.0.0")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 
 local_path_override(

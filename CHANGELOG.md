@@ -15,6 +15,8 @@ versioning.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-29
+
 ### Added
 
 - Release bundles with SHA256 checksums, archive-based installation snippets
@@ -27,6 +29,12 @@ versioning.
 - Recommend release archives for installation. Go Bzlmod bootstrap now infers
   and preserves checksum-pinned archive overrides and mirrors without requiring
   a Git override for the Orchestrion-enabled fork.
+- Use Bazel `8.8.2` for repository and example validation.
+
+### Fixed
+
+- Exclude development-only Bazel configuration from the generated
+  `workspace_runtime` and `bzlmod_runtime` Go patch profiles.
 
 ## [1.3.0] - 2026-10-21
 
