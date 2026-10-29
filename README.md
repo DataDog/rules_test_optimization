@@ -10,7 +10,7 @@ This product includes software developed at Datadog
 
 This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.
 
-> Release status: this branch prepares `1.3.0`; it is not published yet. Bazel Central Registry publication is also pending. Use `git_override` (Bzlmod) or commit-pinned `git_repository` / `http_archive` (WORKSPACE), with the same commit for core and companions. The historical `v1.2.0` pins below still refer to that release, not this candidate.
+> `v1.3.0` is published. For releases with an `INSTALL.md` asset, copy its checksum-pinned `archive_override` (Bzlmod) or `http_archive` (WORKSPACE) blocks. Keep core, companions, and the Go fork on the same archive. `v1.3.0` predates those assets; its commit-based installation remains supported. See [release installation](docs/Installation_Reference.md#option-a-install-from-a-release-archive-recommended).
 
 ## Onboarding paths
 
@@ -286,7 +286,7 @@ the default `dd-trace-go` version, and the default Orchestrion version.
 Published GitHub pins use `tar.gz`; other archive types must be mirrored and
 documented outside this helper.
 
-Historical `v1.2.0` GitHub pins (not the `1.3.0` candidate):
+Historical `v1.2.0` GitHub pins (not `v1.3.0`):
 
 ```bash
 RTO_COMMIT="69953536d4ef1252c8181c267d16c61263f0aa4c"
@@ -327,6 +327,12 @@ check as the dev helper.
 
 ## Quickstart by scenario
 
+Replace `<release-archive-url>`, `<release-archive-sha256>`, and
+`<archive-prefix>` with the values from the release's `INSTALL.md`. Match the
+Datadog `bazel_dep` versions to that release; the snippets below use `1.3.0`
+API examples. For `v1.3.0` or an unreleased commit without these assets, use
+the [Git alternative](docs/Installation_Reference.md#option-b-install-from-a-git-commit).
+
 ### Bzlmod + core only (any language)
 
 Use this when you do not need `dd_topt_go_test`:
@@ -334,10 +340,11 @@ Use this when you do not need `dd_topt_go_test`:
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>",
 )
 
 test_optimization_sync = use_extension(
@@ -425,18 +432,19 @@ setup.
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>",
 )
 
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization-go",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
-    strip_prefix = "modules/go",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/go",
 )
 bazel_dep(name = "rules_go", version = "0.60.0")
 ```
@@ -607,18 +615,19 @@ Orchestrion build flag.
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>",
 )
 
 bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization-python",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
-    strip_prefix = "modules/python",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/python",
 )
 
 python_topt = use_extension(
@@ -756,11 +765,11 @@ absent.
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization-java",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
-    strip_prefix = "modules/java",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/java",
 )
 ```
 
@@ -818,11 +827,11 @@ not include `srcs` by default and the extra files cost runfiles size.
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
 bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization-nodejs",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
-    strip_prefix = "modules/nodejs",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/nodejs",
 )
 
 node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node")
@@ -851,11 +860,11 @@ dd_topt_nodejs_test(
 ```bzl
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
 bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization-dotnet",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
-    strip_prefix = "modules/dotnet",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/dotnet",
 )
 
 dotnet = use_extension("@rules_dotnet//dotnet:extensions.bzl", "dotnet")
@@ -906,11 +915,11 @@ def dotnet_csharp_test_adapter(name, data = None, env = None, **kwargs):
 ```bzl
 bazel_dep(name = "rules_ruby", version = "0.21.1")
 bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.3.0")
-git_override(
+archive_override(
     module_name = "datadog-rules-test-optimization-ruby",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<commit-sha>",
-    strip_prefix = "modules/ruby",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/ruby",
 )
 
 ruby = use_extension("@rules_ruby//ruby:extensions.bzl", "ruby")
@@ -1360,7 +1369,7 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 | Bazel | `8.8.2` | Repository baseline (`.bazelversion`) and primary CI lanes |
 | rules_go (Go users) | `0.60.0` / `rules_go_upstream = "v0_60_0"` | README examples use the default support line; importpath inference requires `0.51.0+` |
 | Go toolchain (example) | `1.25.0` | Consumer repositories may use another supported version |
-| Module versions | `1.3.0` candidate | Not published yet; use commit pin/override install paths |
+| Module versions | `1.3.0` | Published; use release archives when available, or the Git alternative |
 
 - **Bazel 8.8.2 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
 - **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.8.2` during migration away from WORKSPACE mode in Bazel 9+

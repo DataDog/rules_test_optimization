@@ -234,6 +234,8 @@ type config struct {
 	rulesGoCommit                string
 	datadogFetch                 string
 	rulesGoFetch                 string
+	rulesGoFetchSet              bool
+	rulesGoArchive               *moduleArchive
 	rulesGoRepoName              string
 	rtoCommit                    string
 	rtoArchiveURL                string
@@ -332,13 +334,13 @@ func parseFlags() config {
 	flag.StringVar(&cfg.rulesGoUpstream, "rules-go-upstream", "default", "Datadog-managed rules_go upstream support id, for example v0_60_0")
 	flag.StringVar(&cfg.rulesGoVariant, "rules-go-variant", defaultRulesGoVariant, "rules_go Orchestrion variant to use: base")
 	flag.StringVar(&cfg.datadogFetch, "datadog-fetch", defaultDatadogFetch, "WORKSPACE snippet fetch mode for Datadog companion repositories: git or archive")
-	flag.StringVar(&cfg.rulesGoFetch, "rules-go-fetch", defaultRulesGoFetch, "WORKSPACE snippet fetch mode for rules_go: git or archive")
+	flag.StringVar(&cfg.rulesGoFetch, "rules-go-fetch", defaultRulesGoFetch, "rules_go fetch mode: git or archive; Bzlmod preserves existing archive overrides by default")
 	flag.StringVar(&cfg.rulesGoRepoName, "rules-go-repo-name", defaultRulesGoRepoName, "WORKSPACE snippet repository name for the rules_go fork")
 	flag.StringVar(&cfg.rtoCommit, "rto-commit", "", "WORKSPACE snippet commit for Datadog repositories; falls back to --rules-go-commit when omitted")
-	flag.StringVar(&cfg.rtoArchiveURL, "rto-archive-url", "", "WORKSPACE snippet archive URL for archive fetch mode")
-	flag.StringVar(&cfg.rtoArchiveSHA256, "rto-archive-sha256", "", "WORKSPACE snippet archive SHA256 for archive fetch mode")
-	flag.StringVar(&cfg.rtoArchivePrefix, "rto-archive-prefix", "", "WORKSPACE snippet archive root prefix for archive fetch mode")
-	flag.StringVar(&cfg.rtoArchiveType, "rto-archive-type", "tar.gz", "WORKSPACE snippet archive type for archive fetch mode")
+	flag.StringVar(&cfg.rtoArchiveURL, "rto-archive-url", "", "Datadog source archive URL for Bzlmod or WORKSPACE archive mode")
+	flag.StringVar(&cfg.rtoArchiveSHA256, "rto-archive-sha256", "", "Datadog source archive SHA256 for archive mode")
+	flag.StringVar(&cfg.rtoArchivePrefix, "rto-archive-prefix", "", "Datadog source archive root prefix for archive mode")
+	flag.StringVar(&cfg.rtoArchiveType, "rto-archive-type", "tar.gz", "Datadog source archive type for archive mode")
 	flag.Parse()
 	flag.Visit(func(f *flag.Flag) {
 		if f.Name == "dd-trace-go-version" {
@@ -349,6 +351,9 @@ func parseFlags() config {
 		}
 		if f.Name == "rules-go-commit" {
 			cfg.rulesGoCommitSet = true
+		}
+		if f.Name == "rules-go-fetch" {
+			cfg.rulesGoFetchSet = true
 		}
 		if f.Name == "rules-go-upstream" {
 			cfg.rulesGoUpstreamSet = true
@@ -815,6 +820,9 @@ func patchModuleFile(cfg config) error {
 		return fmt.Errorf("read MODULE.bazel: %w", err)
 	}
 	text := string(content)
+	if err := configureModuleArchive(&cfg, text); err != nil {
+		return err
+	}
 
 	if cfg.guided {
 		if err := validateGuidedPrerequisites(text); err != nil {
@@ -830,7 +838,7 @@ func patchModuleFile(cfg config) error {
 		}
 	}
 
-	if !cfg.rulesGoCommitSet {
+	if cfg.rulesGoArchive == nil && !cfg.rulesGoCommitSet {
 		if remote, commit := inferManagedRulesGoOverride(text); remote != "" && commit != "" {
 			if !cfg.rulesGoRemoteSet {
 				cfg.rulesGoRemote = remote
@@ -839,24 +847,34 @@ func patchModuleFile(cfg config) error {
 		}
 	}
 
-	if !cfg.rulesGoRemoteSet && !cfg.rulesGoCommitSet && cfg.rulesGoCommit == "" {
+	if cfg.rulesGoArchive == nil && !cfg.rulesGoRemoteSet && !cfg.rulesGoCommitSet && cfg.rulesGoCommit == "" {
 		if remote, commit := inferDatadogRepoOverride(text); remote != "" && commit != "" {
 			cfg.rulesGoRemote = remote
 			cfg.rulesGoCommit = commit
 		}
 	}
 
-	if strings.TrimSpace(cfg.rulesGoCommit) == "" {
+	if cfg.rulesGoArchive == nil && strings.TrimSpace(cfg.rulesGoCommit) == "" {
 		return errors.New("rules_go fork commit is required; add a git_override for datadog-rules-test-optimization-go/datadog-rules-test-optimization or pass --rules-go-commit explicitly")
 	}
 
-	if !strings.Contains(text, managedBlockStart) && strings.Contains(text, `module_name = "rules_go"`) {
+	if !strings.Contains(text, managedBlockStart) && moduleOverridePresent(text, "rules_go") {
 		compatible, err := rulesGoOverrideCompatible(text, cfg)
 		if err != nil {
 			return err
 		}
 		if !compatible {
-			return errors.New("MODULE.bazel already contains an incompatible rules_go git_override; update it manually before running the Datadog bootstrap")
+			return errors.New("MODULE.bazel already contains an incompatible rules_go override; update it manually before running the Datadog bootstrap")
+		}
+		if cfg.rulesGoArchive != nil {
+			// Move the compatible fork override into the managed block rather
+			// than emitting a second override for the same module.
+			for _, block := range topLevelCallBlocks(text) {
+				if block.function == "archive_override" && literalAttribute(stripStarlarkLineComments(block.text), "module_name") == "rules_go" {
+					text = text[:block.start] + text[block.end:]
+					break
+				}
+			}
 		}
 	}
 
@@ -899,14 +917,18 @@ func managedModuleBlockWithError(cfg config) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf(`%s
-git_override(
+	override := fmt.Sprintf(`git_override(
     module_name = "rules_go",
     remote = "%s",
     commit = "%s",
     strip_prefix = "%s",
 )
-
+`, cfg.rulesGoRemote, cfg.rulesGoCommit, stripPrefix)
+	if cfg.rulesGoArchive != nil {
+		override = cfg.rulesGoArchive.render(stripPrefix)
+	}
+	return fmt.Sprintf(`%s
+%s
 %s
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
@@ -916,7 +938,7 @@ orchestrion.from_source(
 )
 use_repo(orchestrion, "rules_go_orchestrion_tool")
 %s
-`, managedBlockStart, cfg.rulesGoRemote, cfg.rulesGoCommit, stripPrefix, managedGoSDKBlock(cfg), cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedOrchestrionGoSDKAttrs(cfg), managedBlockEnd), nil
+`, managedBlockStart, override, managedGoSDKBlock(cfg), cfg.orchestrionVersion, managedTracerConfigBlock(cfg), managedOrchestrionGoSDKAttrs(cfg), managedBlockEnd), nil
 }
 
 func managedGoSDKBlock(cfg config) string {
@@ -2140,6 +2162,9 @@ func replaceManagedSection(content, startMarker, endMarker, block string) (strin
 	switch {
 	case start >= 0 && end >= 0 && end > start:
 		end += len(endMarker)
+		if strings.HasSuffix(block, "\n") && strings.HasPrefix(content[end:], "\n") {
+			end++
+		}
 		return content[:start] + block + content[end:], nil
 	case start >= 0 || end >= 0:
 		return "", fmt.Errorf("existing Datadog managed block is malformed: %s / %s", startMarker, endMarker)
@@ -2347,6 +2372,9 @@ func moduleUsesRepo(content, repoName string) bool {
 }
 
 func rulesGoOverrideCompatible(content string, cfg config) (bool, error) {
+	if cfg.rulesGoArchive != nil {
+		return moduleArchiveCompatible(content, cfg)
+	}
 	overridePattern := regexp.MustCompile(`(?s)git_override\(\s*module_name\s*=\s*"rules_go"(.*?)\n\)`)
 	remotePattern := regexp.MustCompile(`remote\s*=\s*"([^"]+)"`)
 	commitPattern := regexp.MustCompile(`commit\s*=\s*"([^"]+)"`)
@@ -2844,26 +2872,27 @@ type callBlock struct {
 
 func topLevelCallBlocks(content string) []callBlock {
 	lines := splitLinesPreserveNewline(content)
+	syntaxLines := splitLinesPreserveNewline(maskStarlarkStringsAndComments(content))
 	startPattern := regexp.MustCompile(`^\s*(?:([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)?([A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?)\(`)
 	offset := 0
 	blocks := []callBlock{}
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
-		match := startPattern.FindStringSubmatch(line)
+		match := startPattern.FindStringSubmatch(syntaxLines[i])
 		if match == nil {
 			offset += len(line)
 			continue
 		}
 		start := offset
-		depth := strings.Count(line, "(") - strings.Count(line, ")")
+		depth := strings.Count(syntaxLines[i], "(") - strings.Count(syntaxLines[i], ")")
 		offset += len(line)
 		j := i
 		for depth > 0 && j+1 < len(lines) {
 			j++
 			line = lines[j]
-			depth += strings.Count(line, "(")
-			depth -= strings.Count(line, ")")
+			depth += strings.Count(syntaxLines[j], "(")
+			depth -= strings.Count(syntaxLines[j], ")")
 			offset += len(line)
 		}
 		blocks = append(blocks, callBlock{
@@ -2882,6 +2911,50 @@ func topLevelCallBlocks(content string) []callBlock {
 		i = j
 	}
 	return blocks
+}
+
+// Mask non-syntax bytes when finding call boundaries, without moving offsets in
+// the original source. A parenthesis in a comment, URL, or docstring is data.
+func maskStarlarkStringsAndComments(content string) string {
+	masked := []byte(content)
+	blank := func(start, end int) {
+		for i := start; i < end; i++ {
+			if masked[i] != '\n' {
+				masked[i] = ' '
+			}
+		}
+	}
+	for i := 0; i < len(content); {
+		start := i
+		if content[i] == '#' {
+			for i < len(content) && content[i] != '\n' {
+				i++
+			}
+			blank(start, i)
+			continue
+		}
+		if content[i] != '\'' && content[i] != '"' {
+			i++
+			continue
+		}
+		delimiter := content[i : i+1]
+		if triple := strings.Repeat(delimiter, 3); strings.HasPrefix(content[i:], triple) {
+			delimiter = triple
+		}
+		i += len(delimiter)
+		for i < len(content) {
+			if content[i] == '\\' && i+1 < len(content) {
+				i += 2
+			} else if strings.HasPrefix(content[i:], delimiter) {
+				i += len(delimiter)
+				break
+			} else {
+				i++
+			}
+		}
+		blank(start, i)
+	}
+	return string(masked)
 }
 
 type tracerConfig struct {
@@ -2981,12 +3054,18 @@ func hydrateManagedRulesGoVariant(cfg *config, content string) error {
 	if start < 0 || end < 0 || end <= start {
 		return nil
 	}
-	stripPrefixPattern := regexp.MustCompile(`strip_prefix\s*=\s*"([^"]+)"`)
-	match := stripPrefixPattern.FindStringSubmatch(content[start:end])
-	if len(match) != 2 {
+	prefix := literalAttribute(content[start:end], "strip_prefix")
+	if prefix == "" {
+		// Computed archive values are validated or replaced by explicit pins
+		// in configureModuleArchive. Do not infer a fork from part of a value.
 		return nil
 	}
-	upstream, variant, err := onboardingpins.RulesGoSelectionForStripPrefix(match[1])
+	if strings.Contains(content[start:end], "archive_override(") {
+		if index := strings.Index(prefix, "third_party/rgo/"); index > 0 {
+			prefix = prefix[index:]
+		}
+	}
+	upstream, variant, err := onboardingpins.RulesGoSelectionForStripPrefix(prefix)
 	if err != nil {
 		return err
 	}

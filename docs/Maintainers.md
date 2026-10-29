@@ -357,8 +357,10 @@ Planned next slices:
 
 ## Publication checklist (when BCR publication is enabled)
 
-This repository currently uses pre-publication install paths in README
-(`git_override` / commit pin). When publishing to BCR, update and verify:
+Release archives support direct installation without BCR. See the
+[release runbook](../CONTRIBUTING.md#release-runbook-core--companion-modules)
+for bundle generation and draft-release gates. BCR publication is a separate
+operation. When publishing to BCR, update and verify:
 
 - Module entries for:
   - `datadog-rules-test-optimization`

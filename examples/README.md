@@ -19,9 +19,11 @@ repository, use `./bazelw` for local development convenience.
 
 ## Prerequisites
 
-- Until BCR publication, install with `git_override(...)` as shown in the root `README.md`.
-  If you are consuming a published release, keep the `bazel_dep(...)` lines and
-  omit override blocks.
+- For a released version, copy the `archive_override(...)` blocks from its
+  `INSTALL.md` asset. See [release installation](../docs/Installation_Reference.md#option-a-install-from-a-release-archive-recommended).
+  The commit-based blocks in this document also support development snapshots
+  and older releases without bundle assets. Omit overrides only when the
+  selected modules are available from your configured registry.
 - Add module dependencies before `use_extension(...)`:
   - `bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")`
   - `bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")` for Go macro usage

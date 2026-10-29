@@ -305,7 +305,34 @@ This product includes software developed at Datadog
 
 - CI release gate:
   - Trigger `.github/workflows/release.yml` via `workflow_dispatch` (or push a version tag) before publication.
-  - The workflow now always executes the full validation suite for release safety.
+  - Both paths execute the full validation suite and test the packaged archive
+    with real Go consumers in Bzlmod and WORKSPACE. A branch dispatch saves the
+    bundle as a workflow artifact but never creates a tag or release.
+  - A version-tag push prepares a **draft** GitHub release only after every
+    release job passes. It does not publish the draft or submit BCR changes.
+    Review the generated notes/assets, then publish explicitly.
+  - The draft contains `rules_test_optimization-X.Y.Z.tar.gz`, `SHA256SUMS`,
+    `release.json`, `INSTALL.md`, and `RELEASE_NOTES.md`. Notes come from the
+    matching `CHANGELOG.md` section. Installation blocks cover core, all six
+    companions, and every maintained Go fork, with one archive and checksum.
+  - The archive contains only the committed revision, including executable
+    modes. Packaging uses a fixed gzip header, so repeated builds of the same
+    revision with the same toolchain produce the same bytes. The workflow
+    verifies its checksums before attaching the exact validated bundle.
+  - An existing release is not edited or overwritten. If draft creation fails
+    partway through, inspect the existing draft and its assets before deciding
+    how to resume; rerunning must not replace published checksums.
+
+- Local bundle preview (Python 3.11+ and Git; no publication):
+
+  ```sh
+  python3 tools/dev/build_release.py --ref HEAD --tag vX.Y.Z --output /path/to/empty-directory
+  ```
+
+  The expected tag must match `MODULE.bazel` and have a nonempty changelog
+  section. Omit `--tag` for a branch validation preview. Uncommitted edits are
+  not included. Do not relabel an older release archive or regenerate a
+  published asset in place.
 
 - Version alignment:
   - Keep root `MODULE.bazel` and all companion `modules/*/MODULE.bazel` versions aligned.

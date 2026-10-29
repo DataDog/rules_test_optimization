@@ -423,7 +423,9 @@ simulate_bep_artifact_only_outputs() {
     exit 1
   fi
   rm -rf "$artifact_root" "$simulated_testlogs"
-  cp -R "$ws_dir/bazel-testlogs" "$simulated_testlogs"
+  # bazel-testlogs is a symlink. Copy its contents so staging cannot mutate
+  # Bazel's read-only outputs through that symlink.
+  cp -RL "$ws_dir/bazel-testlogs" "$simulated_testlogs"
   mkdir -p "$(dirname "$staged_source")"
   cp -R "$original_source" "$staged_source"
   chmod -R u+w "$simulated_testlogs" "$artifact_root" 2>/dev/null || true
@@ -601,6 +603,17 @@ run_bep_freshness_scenario() {
 }
 
 create_fixture_archive() {
+  if [[ -n "${RTO_RELEASE_ARCHIVE:-}" ]]; then
+    if [[ ! -f "$RTO_RELEASE_ARCHIVE" || ! "${RTO_RELEASE_PREFIX:-}" =~ ^rules_test_optimization-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "error: release archive mode requires an existing RTO_RELEASE_ARCHIVE and versioned RTO_RELEASE_PREFIX" >&2
+      exit 1
+    fi
+    ARCHIVE_PATH="$RTO_RELEASE_ARCHIVE"
+    ARCHIVE_NAME="$RTO_RELEASE_PREFIX"
+    ARCHIVE_SHA256="$(sha256_file "$ARCHIVE_PATH")"
+    ARCHIVE_URL="$(file_uri "$ARCHIVE_PATH")"
+    return
+  fi
   local root_dir="$ARCHIVE_ROOT/$ARCHIVE_NAME"
 
   rm -rf "$ARCHIVE_ROOT"
@@ -1820,6 +1833,12 @@ if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
     echo "error: MEASURE_OUTPUT_PATH is required when INTEGRATION_SCENARIO_MODE=measure" >&2
     exit 1
   fi
+  run_positive_fixture "archive"
+  assert_go_integration_metadata_requests
+  exit 0
+fi
+
+if [[ "$INTEGRATION_SCENARIO_MODE" == "release" ]]; then
   run_positive_fixture "archive"
   assert_go_integration_metadata_requests
   exit 0
