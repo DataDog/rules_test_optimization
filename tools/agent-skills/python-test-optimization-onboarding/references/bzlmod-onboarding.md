@@ -18,7 +18,7 @@ module versions to the release. For older releases without bundle assets or
 development commits, use the Git alternative in `docs/Installation_Reference.md`.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization",
     urls = ["<release-archive-url>"],
@@ -26,7 +26,7 @@ archive_override(
     strip_prefix = "<archive-prefix>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-python",
     urls = ["<release-archive-url>"],

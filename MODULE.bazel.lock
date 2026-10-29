@@ -198,7 +198,7 @@
     "//tools/dev:dotnet_bootstrap.bzl%dotnet_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "UPeW5Tc9bGVY170mvXNHX3/Hod9plUSKN+ZWFasuDF8=",
-        "usagesDigest": "6XkQmtWoRSq45eriNj0RrOoU5lR56D6J9yWZ4zCY6rA=",
+        "usagesDigest": "GGt1FuXeviOq44G1cKynw2LOt8xNsj1MqONLjpftIEw=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -215,7 +215,7 @@
     "//tools/dev:go_bootstrap.bzl%go_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "hKApWFDD6wQhS26gyQpQNBE1Cc+J7WtqTgCDLAx6oRM=",
-        "usagesDigest": "g0B5hsO8fHJ3xF1BlfPdIf+mIq/yVoRfqDwEnbZkxYA=",
+        "usagesDigest": "J+OMcI8MgVcbDMVz0NkKXrUt53CzjQrNgPiKzjKXI6E=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -232,7 +232,7 @@
     "//tools/dev:java_bootstrap.bzl%java_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "y9kgju33Pes77Wm7i6LxtqHJeQgUNhyTlZTlLVpyqnw=",
-        "usagesDigest": "Wrd1HOHgAsWXRyDaqa9LAuDmO1auXTZxWoocYatozsQ=",
+        "usagesDigest": "C4sWjmCgyKfkfRNC44qEEwExXBAHZbWdGTdeL3JHy2c=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -249,7 +249,7 @@
     "//tools/dev:nodejs_bootstrap.bzl%nodejs_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "YelvV8D1FHQwD5h5oBWQpKIK+vrFBUPEZeH6vSQXac0=",
-        "usagesDigest": "jIOcR0sXCrNoct3oeR1ztrKw/we8EgVY85ex0oNoxTY=",
+        "usagesDigest": "GXNcVcmV3Srey9f5u2CrmtrUzEZvSwKVv9GwchEuQPw=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -266,7 +266,7 @@
     "//tools/dev:python_bootstrap.bzl%python_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "1HA/1MUgyYx5SYrKhSpQl/qH3hv/G4odAsLv4LXMQ5E=",
-        "usagesDigest": "c71Cd1X7lyXBYjgwdlYt8R6OdCKqAMeLeRTYeTcj3Ug=",
+        "usagesDigest": "3PPcIuysewV2oFmQcekIexvc4G9OUPb4IbpDtI7R85U=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -283,7 +283,7 @@
     "//tools/dev:ruby_bootstrap.bzl%ruby_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "ig/oJWWSi66NeqxG+UD065TtHW9MD06FkUwE+BZkFcE=",
-        "usagesDigest": "dfo3+uxu/KovmiW95gyPzOBDxUo0mcW/XKAZG3HIB7Y=",
+        "usagesDigest": "H6vKZ8jWtXWfcROGelu1Pf5/ch5QunGOkhcLIv5d/PM=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -300,7 +300,7 @@
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "rzTQJIRz9Kp9iW7tjdt2NIf5A0cF3TWHKRxR+nwEaXE=",
-        "usagesDigest": "2/zRxNH3uLMa+UUhYnrBQ3wVnNXOet9BkuroltezE6o=",
+        "usagesDigest": "Gri2t+kMgUd0C0EHEwPTzMJUz1gIZ9h9WUWtt2V5Wd0=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "test_optimization_data": {
@@ -570,7 +570,7 @@
     "@@rules_dotnet+//dotnet:extensions.bzl%dotnet": {
       "general": {
         "bzlTransitiveDigest": "3NFH9+PfsEdlRhZtq3iPX8FRGmmgowYZvWUuTyxUYdw=",
-        "usagesDigest": "ryXYUkWEz/SGjxpUY2AMlcdkrnbGdjcQfwqp8IVRfYg=",
+        "usagesDigest": "TillE1ozo7I8D7YIaNB9eVCFrfbOlrqnc+A1FIPkihs=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "dotnet_x86_64-apple-darwin": {
@@ -827,7 +827,7 @@
     "@@rules_nodejs+//nodejs:extensions.bzl%node": {
       "general": {
         "bzlTransitiveDigest": "4pUxCNc22K4I+6+4Nxu52Hur12tFRfa1JMsN5mdDv60=",
-        "usagesDigest": "sGNRCbzNq0vP19AjXzgEEpts4bg4STtWvdbAvyTd7Fo=",
+        "usagesDigest": "74X5VUbDwqcaYkgdywRT1hNlaUIALNmjatx0Nz0+wwY=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "nodejs_linux_amd64": {

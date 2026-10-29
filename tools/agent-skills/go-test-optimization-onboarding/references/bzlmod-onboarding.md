@@ -19,7 +19,7 @@ module versions to the release. For releases without bundle assets or for
 development commits, use the Git alternative in `docs/Installation_Reference.md`.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization",
     urls = ["<release-archive-url>"],
@@ -27,7 +27,7 @@ archive_override(
     strip_prefix = "<archive-prefix>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.3.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-go",
     urls = ["<release-archive-url>"],
