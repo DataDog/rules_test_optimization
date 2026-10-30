@@ -289,8 +289,8 @@ def dd_topt_go_test(
         topt_service = None,
         # Auto-select per-module known_tests/test_management group based on Go package import path
         module_label_override = None,
-        # Optional: stage direct test sources in runtime runfiles so dd-trace-go
-        # can open them for AST-derived metadata such as test.source.end.
+        # Optional: stage direct test sources in runtime runfiles so Mini can
+        # open them for AST-derived metadata such as test.source.end.
         stage_sources = False,
         # Enable CI Visibility in opt-in Go tests by default so payload-to-files
         # mode works without extra test_env wiring in consumer repos.
@@ -328,12 +328,12 @@ def dd_topt_go_test(
       module_label_override: Optional override for the sanitized module label suffix when the
         automatic detection doesn't match the expected module name.
       stage_sources: Optional boolean that stages direct `srcs` and `embedsrcs`
-        into runtime runfiles so the tracer can open source files for
+        into runtime runfiles so Mini can open source files for
         AST-derived metadata. When enabled, the macro defaults `rundir` to `.`
         only if the caller did not already set `rundir`.
       ci_visibility_enabled: Optional boolean. When true, the macro forces
         `DD_CIVISIBILITY_ENABLED=true` on the generated test environment.
-        Set false only when the caller intentionally owns this tracer switch.
+        Set false only when the caller intentionally owns this switch.
       enable_test_binary_linker_optimization: Optional boolean. When true, the
         hidden raw go_test target receives test-only `-s -w` `gc_linkopts` only
         in Bazel modes where rules_go is not already stripping and the user did
@@ -398,8 +398,8 @@ def dd_topt_go_test(
     user_data = kwargs.pop("data", None)
     data = user_data
 
-    # Stage direct source files only when callers opt in. This gives the Go
-    # tracer a runtime-visible path it can open for AST-derived source metadata.
+    # Stage direct source files only when callers opt in. This gives Mini a
+    # runtime-visible path it can open for AST-derived source metadata.
     if stage_sources:
         data = _concat_label_list_values(data, kwargs.get("srcs"))
         data = _concat_label_list_values(data, kwargs.get("embedsrcs"))
@@ -460,8 +460,8 @@ def dd_topt_go_test(
     # Same `pop` pattern keeps final go_test kwargs clean and explicit.
     user_env = kwargs.pop("env", None)
 
-    # Default DD_SERVICE from sync metadata so the tracer does not fall back
-    # to platform-specific executable names when callers omit the service.
+    # Default DD_SERVICE from sync metadata so Mini does not fall back to
+    # platform-specific executable names when callers omit the service.
     user_env = _merge_optional_env_defaults(
         user_env,
         {"DD_SERVICE": _svc.get("service_name")},

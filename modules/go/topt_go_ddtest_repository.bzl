@@ -137,7 +137,7 @@ def contract_error(values, what):
 UNCONFIGURED_MESSAGE = (
     "Go tests instrumented by dd_topt_go_test need a Go SDK to instrument: add " +
     "topt_go_ddtest.sdk(go_mod = \"//:go.mod\") to the root MODULE.bazel, or " +
-    "call topt_go_ddtest_repositories(go_version = ...) in WORKSPACE"
+    "call topt_go_ddtest_workspace_repositories(go_version = ...) in WORKSPACE"
 )
 
 def _unconfigured_impl(ctx):
