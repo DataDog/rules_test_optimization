@@ -118,12 +118,20 @@ def _test_execution_requirements(tags):
         return {"no-remote-exec": ""}
     return {}
 
+test_execution_requirements_for_tests = _test_execution_requirements
+
 def _first_target(dep):
     if type(dep) == "list":
         if len(dep) == 0:
             fail("ddtest_go_test: actual produced no targets")
         return dep[0]
     return dep
+
+def _wrapper_output_name(label_name, is_windows):
+    """The launcher's name: Windows runs it as a batch file."""
+    return label_name + (".bat" if is_windows else "")
+
+wrapper_output_name_for_tests = _wrapper_output_name
 
 def _unix_wrapper_content(actual_filename, metadata_filename):
     """The Unix launcher: it copies the target metadata next to the payloads."""
@@ -175,6 +183,8 @@ exit /b %%ERRORLEVEL%%
         _BAZEL_TARGET_METADATA_OUTPUT,
     )
 
+windows_wrapper_content_for_tests = _windows_wrapper_content
+
 def _ddtest_go_test_impl(ctx):
     target = _first_target(ctx.attr.actual)
     foreign = target[ToptGoForeignMiniInfo].labels.to_list()
@@ -185,7 +195,7 @@ def _ddtest_go_test_impl(ctx):
     dep_runfiles = default_info.default_runfiles.merge(default_info.data_runfiles)
     metadata_file = ctx.file.metadata
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
-    out = ctx.actions.declare_file(ctx.label.name + (".bat" if is_windows else ""))
+    out = ctx.actions.declare_file(_wrapper_output_name(ctx.label.name, is_windows))
     actual_out = ctx.actions.declare_file(ctx.label.name + "__wrapped_" + dep_exe.basename, sibling = out)
     metadata_out = ctx.actions.declare_file(ctx.label.name + "__wrapped_" + metadata_file.basename, sibling = out)
 

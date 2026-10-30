@@ -19,7 +19,6 @@ dd_topt_go_test(
         "instrumented_test.go",
     ],
     importpath = "example.com/ddtestfixture",
-    instrumentation = "ddtest",
     topt_data = TOPT_DATA,
     deps = [
         "@topt_go_ddtest_mini//propagation",
@@ -32,7 +31,6 @@ dd_topt_go_test(
     name = "foreign_mini_test",
     srcs = ["foreign_test.go"],
     importpath = "example.com/foreign",
-    instrumentation = "ddtest",
     tags = ["manual"],
     topt_data = TOPT_DATA,
     deps = ["//tests/ddtest/fake_mini"],
@@ -46,10 +44,7 @@ foreign_mini_failure_test(
 ddtest_transition_test(name = "ddtest_transition_test")
 
 # The standard library that instrumented tests build, warmed on its own.
-dd_topt_go_stdlib_warmup(
-    name = "stdlib_warmup",
-    instrumentation = "ddtest",
-)
+dd_topt_go_stdlib_warmup(name = "stdlib_warmup")
 
 stdlib_warmup_target_has_outputs_test(
     name = "stdlib_warmup_has_outputs_test",
