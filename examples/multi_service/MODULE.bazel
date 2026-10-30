@@ -11,10 +11,13 @@ bazel_dep(name = "gazelle", version = "0.39.0")
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
 
-# Run:
-#   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- --go-module-dir src/go-project
-# after adding your Go module files to let Datadog pin Orchestrion and patch
-# the managed rules_go override block required by dd_topt_go_test.
+# dd_topt_go_test builds tests with the Go SDK that ddtest instruments, at the
+# Go version of the module's toolchain (or go) directive.
+topt_go_ddtest = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",
+    "topt_go_ddtest",
+)
+topt_go_ddtest.sdk(go_mod = "//src/go-project:go.mod")
 
 # For local development before BCR publication, pin both modules from git:
 # git_override(
