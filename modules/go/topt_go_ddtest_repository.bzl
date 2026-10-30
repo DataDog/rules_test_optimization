@@ -359,3 +359,17 @@ def topt_go_ddtest_repositories(
             register_toolchains = False,
         )
     _toolchains(name = TOOLCHAINS_REPO, exec_platforms = platforms)
+
+def topt_go_ddtest_workspace_repositories(**kwargs):
+    """WORKSPACE: declare the ddtest repositories and register their toolchains.
+
+    In Bzlmod, the Go companion module registers the toolchains itself. In
+    WORKSPACE, call this after rules_go's go_rules_dependencies; rules_go must
+    be named io_bazel_rules_go, as the SDK repositories load it so.
+
+    Args:
+      **kwargs: The arguments of topt_go_ddtest_repositories; go_version or
+        base_sdk_roots is required.
+    """
+    topt_go_ddtest_repositories(**kwargs)
+    native.register_toolchains("@%s//:all" % TOOLCHAINS_REPO)

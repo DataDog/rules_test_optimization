@@ -148,7 +148,7 @@
   "moduleExtensions": {
     "//:topt_go_ddtest_extension.bzl%topt_go_ddtest": {
       "general": {
-        "bzlTransitiveDigest": "O26RDtjGWZ2FiSDGnLGz3c3KdqKPyQGy0Gj1DAxhc/I=",
+        "bzlTransitiveDigest": "u3eti2JisX/tv4+ZMycUNDSJcGu2N9xQrRxfz3SUFfY=",
         "usagesDigest": "knXMhHmkFPKsLmtLoM/dWhXgjvYrk5CfvOyFIQiOj2M=",
         "recordedInputs": [
           "REPO_MAPPING:,io_bazel_rules_go rules_go+",
