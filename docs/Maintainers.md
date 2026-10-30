@@ -246,6 +246,19 @@ Notes:
   uploader script/runtime evolution can ship without forcing a rules contract
   bump, while payload metadata still carries both values for observability.
 
+## ddtest instrument pin
+
+- `modules/go/topt_go_ddtest_repository.bzl` pins one ddtest release in
+  `DDTEST_RELEASE`: the release tag, the runtime version that ddtest writes
+  (`v0.0.0-` before a pre-release tag), the contract, the SDK name, and the
+  SHA256 of the six executables. Update all of them from the same release in
+  one change.
+- The repository rules compare every `DDTEST_INSTRUMENT` file that ddtest
+  writes with the pinned contract, SDK name, and runtime version, and fail on a
+  mismatch. Target metadata reports the same values.
+- The ddtest side of the integration is documented in
+  [ddtest's Bazel guide](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md).
+
 ## CI and reproducibility policy
 
 - CI includes a Linux hermetic lane (`bazel-tests-hermetic`) with sandboxed
@@ -275,11 +288,11 @@ Notes:
 - CI also keeps a dedicated WORKSPACE-compat probe on Bazel `8.8.2` (separate
   from the `8.8.2` baseline lanes) so legacy `--enable_workspace` behavior is
   continuously exercised during Bazel 9 migration.
-- The generated `rules_go` profile verifier rebuilds each maintained upstream
-  in two isolated output roots and compares action keys and bytes for
-  `GoStdlib`, `GoSyntheticTestmainHelpers`, synthetic `GoCompilePkg`
-  (`~testmain.a`), and `GoLink`. Ordinary `GoStdlib` outputs must not publish an
-  instrumented cache. Local compact execution-log checks require `zstd`.
+- `workspace-compat-shard` runs the WORKSPACE and Bzlmod Go consumer scripts
+  once per supported upstream `rules_go` version, with the host's `go` replaced
+  by a failing sentinel. The scripts check with `aquery` that the test's
+  compiles, link, and standard library use the Go SDK that `ddtest instrument`
+  instruments. `windows-go-smoke` runs one instrumented Bzlmod test on Windows.
 - Current PR baseline checks:
 
 ```sh

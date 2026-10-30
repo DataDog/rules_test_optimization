@@ -38,28 +38,27 @@ Interpretation:
   should not be injected into Go test sandboxes.
 - `DD_TEST_OPTIMIZATION_AGENTLESS_URL` can be forwarded as `--repo_env` for
   sync metadata fetches; this check is only about `--test_env`.
-- Manual `rules_go` patches should not be part of new onboarding.
+- `rules_go` patches and overrides should not be part of onboarding. Use
+  upstream `rules_go`.
 - `full_bundle_no_match` is valid for inferred/derived selection when no module
   group matches. Treat it as a stop condition only when the rollout requires a
   specific module group for that target; explicit selectors should fail
   analysis rather than produce this state when module groups exist.
 
-Check that the root pin labels referenced by wrappers are visible:
+For Bzlmod, confirm the root `MODULE.bazel` has exactly one
+`topt_go_ddtest.sdk(...)` tag and no `rules_go` override. If guided bootstrap
+wrote the setup, the tag is in the block between
+`# BEGIN Datadog Go Test Optimization bootstrap` and
+`# END Datadog Go Test Optimization bootstrap`. With `go_mod`, confirm the
+package that owns `go.mod` has a BUILD file.
 
-```bash
-bazel query 'set(//:go.mod //:go.sum //:orchestrion.tool.go //:orchestrion.yml)'
-```
+For WORKSPACE, confirm upstream `rules_go` is declared as `io_bazel_rules_go`
+before `datadog_go_test_optimization_workspace_repositories(...)`, and that
+`topt_go_ddtest_workspace_repositories(...)` runs after
+`go_rules_dependencies()`.
 
-If the repository keeps Go module files outside the root, query the actual
-labels used in `orchestrion_pin_files` instead.
-
-For Bzlmod manual wiring, confirm `MODULE.bazel` has an Orchestrion-enabled
-`rules_go` override and `orchestrion.from_source(...)` wiring. If guided
-bootstrap wrote the setup, this is in the Datadog-managed module block.
-For normal manual consumers, confirm that wiring passes exactly one exported
-`go.mod` and one exported `go.sum` through `dd_trace_go_pin_files`, along with
-the Bazel-managed Go SDK. An explicit version/map is acceptable only when the
-module graph requires the documented escape hatch.
+If `go.mod` requires `github.com/DataDog/ddtest/ddto`, confirm the Bzlmod
+workspace overrides `go_deps`' copy with `topt_go_ddtest_mini`.
 
 ## Managed Manifest Checks
 
@@ -71,8 +70,8 @@ For the automatic managed path, also prove:
 - unsupported or unselected central-macro targets retain the raw Go path;
 - selected labels resolve through `topt_data_by_target`;
 - disabled and enabled phases reuse one fresh output root;
-- disabled mode makes zero metadata requests and never invokes host Go;
-- enabled mode uses the Bazel-managed Go SDK;
+- disabled mode makes zero metadata requests and fetches no instrumented SDK;
+- enabled mode builds the selected tests with the instrumented Go SDK;
 - doctor consumes the aggregate context and generated exact-target file;
 - uploader consumes the same exact-target file and enriches every fresh
   selected payload with its matching virtual context;
@@ -125,14 +124,21 @@ if find "$testlogs" \
   echo "disabled run emitted Test Optimization outputs" >&2
   exit 1
 fi
+output_base="$(
+  bazel --output_user_root="$output_root" info output_base
+)"
+if ls "$output_base/external" | grep -E 'topt_go_ddtest_(sdk|sdk_files|base|host|mini)'; then
+  echo "disabled run fetched the instrumented SDK or Mini" >&2
+  exit 1
+fi
 ```
 
 Replace `<service_key>` and `//path/to:public_test` with the consumer's real
 repository and target. The ordinary public test must run, no Test Optimization
-payload or Bazel metadata files may appear for that target, and disabled
-repository resolution must not require a real Orchestrion tool repository or
-host Go binary. When the consumer test harness exposes a metadata-server
-request counter, require zero requests in this phase.
+payload or Bazel metadata files may appear for that target, and the disabled
+run must not fetch the instrumented SDKs or Mini. When the consumer test
+harness exposes a metadata-server request counter, require zero requests in
+this phase.
 
 Then reuse the exact same `output_root` for the enabled path:
 
@@ -157,13 +163,12 @@ find "$testlogs" -name bazel_target_metadata.json -type f -print
 ```
 
 Require both final `find` commands to return the expected files, then inspect
-the Bazel metadata for the expected Orchestrion mode. Every inspection command
-above is scoped to `output_root`; using the workspace's default output root at
-either stage does not prove the disabled-to-enabled repository transition.
-For the hermetic SDK proof, run this transition in an environment where a host
-`go` binary is absent from `PATH` after bootstrap has written the workspace
-files. The enabled phase must build or restore Orchestrion through the
-Bazel-managed SDK declared by the workspace.
+`bazel_target_metadata.json` for `bazel.go.instrumentation.backend = "ddtest"`.
+Every inspection command above is scoped to `output_root`; using the
+workspace's default output root at either stage does not prove the
+disabled-to-enabled repository transition. `ddtest instrument` needs no host
+Go, so both phases can run with no `go` binary on `PATH` after bootstrap has
+written the workspace files.
 
 ## Sync
 
@@ -264,20 +269,24 @@ Python workers; do not simulate concurrency by launching multiple uploader
 processes. Use `--debug` only when the normal report lacks enough redacted
 detail to diagnose a failure.
 
-If the source test carries `no-remote-exec`, inspect the transitioned target's
-actions:
+If the source test carries `no-remote-exec`, inspect the instrumented
+target's actions:
 
 ```bash
 bazel aquery --config=test-optimization \
-  'mnemonic("TestRunner", deps(//path/to:pilot_test.topt))' \
+  'mnemonic("TestRunner", deps(//path/to:pilot_test))' \
   --output=jsonproto
 bazel aquery --config=test-optimization \
-  'mnemonic("GoStdlib|GoSyntheticTestmainHelpers|GoCompilePkg|GoLink", deps(//path/to:pilot_test.topt))' \
+  'mnemonic("GoStdlib|GoCompilePkg|GoCompilePkgExternal|GoLink", deps(//path/to:pilot_test))' \
   --output=jsonproto
 ```
 
 The `TestRunner` must retain `no-remote-exec`. Deterministic build actions must
-not inherit it, so they remain cacheable and remote-capable.
+not inherit it, so they remain cacheable and remote-capable. The second query
+also shows that the standard library, compile, and link actions use the
+instrumented SDK: their inputs come from a `topt_go_ddtest_sdk_<platform>`
+repository, and the test's link includes Mini's `testopt` library from
+`topt_go_ddtest_mini`.
 
 ## Payload inspection
 
@@ -296,8 +305,13 @@ Expected:
 - No `.msgpack` or `.msgpack.gz` payloads exist.
 - Known pilots that require module selection do not report
   `bazel.go.payload_selection = "full_bundle_no_match"`.
-- Go target metadata records the expected `bazel.go.orchestrion.mode`. For
-  standard Go `testing` onboarding, that value should be `test_optimization`.
+- Go target metadata records the instrumentation:
+  `bazel.go.instrumentation.backend` is `ddtest`,
+  `bazel.go.instrumentation.version` is the runtime version (for example
+  `v0.0.0-pre-release-f5df4db`), `bazel.go.instrumentation.release` is the
+  ddtest release tag, `bazel.go.instrumentation.contract` is `1`,
+  `bazel.go.sdk.name` is `ddto`, and `bazel.go.sdk.version` is the Go version
+  of the instrumented SDK.
 
 Valid payload selections:
 
@@ -327,9 +341,10 @@ on the default allowlist:
 - Use `expected_targets` for runtime test targets that must emit payloads.
 - Use `expected_payload_selection_by_target` when a target must report a
   specific selection value.
-- Inspect `bazel_target_metadata.json` directly when the pilot must prove a
-  specific Orchestrion mode, because the doctor validates payload shape rather
-  than replacing mode-specific rollout evidence.
+- Inspect `bazel_target_metadata.json` directly when the pilot must prove the
+  instrumentation (`bazel.go.instrumentation.*` and `bazel.go.sdk.*`), because
+  the doctor validates payload shape rather than replacing that rollout
+  evidence.
 - Use `allowed_payload_selections` only when the whole onboarding deliberately
   permits a smaller set than the default.
 - Do not list `.build_test` or build-only controls in `expected_targets`
@@ -393,5 +408,5 @@ Before opening or finishing a consumer PR:
 - Dry-run enrichment passes.
 - Real upload passes when credentials are available.
 - Datadog shows Git metadata, Bazel metadata, and expected test service.
-- No local archive paths, patch directories, or private temporary paths are
-  committed.
+- No local archive paths, patch directories, `rules_go` overrides, or private
+  temporary paths are committed.

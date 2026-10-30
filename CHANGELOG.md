@@ -15,6 +15,98 @@ versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Go tests are instrumented by `ddtest instrument` instead of Orchestrion. This
+  is a breaking change for Go consumers. `dd_topt_go_test` builds every enabled
+  test with the Go SDK that `ddtest instrument` instruments, adds Mini's
+  `testopt` library and a registration file to the hidden raw `go_test` (Mini
+  is ddtest's Test Optimization runtime), and selects the instrumented
+  toolchains through the public test's transition. Builds without instrumented
+  tests fetch neither the instrumented SDKs nor Mini, and the instrumentation
+  needs no host Go. The ddtest release is pinned in
+  `modules/go/topt_go_ddtest_repository.bzl`.
+- Bzlmod root modules configure the SDK to instrument with
+  `topt_go_ddtest.sdk(...)` (`go_mod`, `go_version`, `base_sdk_roots`,
+  `exec_platforms`, `experiments`, `panic_hook`); the Go companion registers
+  the toolchains. WORKSPACE consumers call
+  `topt_go_ddtest_workspace_repositories(...)` after `go_rules_dependencies()`.
+- The Go companion uses upstream `rules_go` from the Bazel Central Registry,
+  `0.60.0` or newer, under the repository name `io_bazel_rules_go`. CI covers
+  `rules_go` `0.60.0`, `0.61.1`, `0.62.0`, `0.63.0`, `0.64.2`, and `0.65.0`.
+- `datadog_go_test_optimization_workspace_repositories` declares only the Go
+  companion and fails when `rules_go` is not declared yet. Declare upstream
+  `rules_go` as `io_bazel_rules_go` before calling it.
+- Go target metadata reports `bazel.go.instrumentation.backend`,
+  `bazel.go.instrumentation.version`, `bazel.go.instrumentation.release`,
+  `bazel.go.instrumentation.contract`, `bazel.go.sdk.name`, and
+  `bazel.go.sdk.version` instead of `bazel.go.orchestrion.enabled` and
+  `bazel.go.orchestrion.mode`.
+- The test-binary linker flags (`-s -w` where `rules_go` does not already
+  strip) apply to every enabled Go test by default. `no-remote-exec` stays on
+  the `TestRunner` action only.
+- `dd_topt_go_stdlib_warmup` always builds the instrumented standard library,
+  with or without `--config=test-optimization`.
+- `dd_topt_go_bootstrap` writes a managed `topt_go_ddtest.sdk(...)` block
+  (`go_version` from `--runtime-version`, otherwise `go_mod`) and adds
+  `bazel_dep(name = "rules_go", version = "0.60.0")` when it is missing. It
+  writes no `rules_go` override and runs no Go commands. Its WORKSPACE snippet
+  declares upstream `rules_go` first and calls
+  `topt_go_ddtest_workspace_repositories`. Published onboarding pins contain
+  only the six `RTO_*` values.
+
+### Removed
+
+- Orchestrion support: the `orchestrion_mode` and `orchestrion_pin_files`
+  attributes of `dd_topt_go_test`, which now fail with a migration message;
+  the `orchestrion` extension and `dd_topt_go_orchestrion_tool_repo`; pin
+  files; `orchestrion.tool.go` and `orchestrion.yml`; and `dd-trace-go` version
+  pinning in `go.mod`.
+- The vendored `rules_go` forks (`third_party/rgo`,
+  `third_party/rules_go_orchestrion`), their registry, consumer patch profiles,
+  tooling, and CI jobs, and the fork blocks of release bundles. The WORKSPACE
+  helper no longer accepts `rules_go_fetch`, `rules_go_upstream`, or
+  `rules_go_variant`.
+- Bootstrap flags `--write-orchestrion-files`, `--orchestrion-version`,
+  `--dd-trace-go-version`, `--rules-go-remote`, `--rules-go-commit`,
+  `--rules-go-upstream`, `--rules-go-variant`, `--rules-go-fetch`,
+  `--check-go-repositories`, `--print-go-repository-updates`,
+  `--go-repositories-file`, `--go-repositories-refresh-command`,
+  `--go-binary`, and `--go-mod-sync`, and the `--variant`,
+  `--rules-go-upstream`, `--dd-trace-go-version`, and `--orchestrion-version`
+  flags of `print_go_onboarding_pins`.
+- The Orchestrion and `rules_go` fork documents and the
+  `rules-go-orchestrion-upstream-migration` agent skill.
+
+### Migrating Go consumers
+
+- Remove `orchestrion_mode` and `orchestrion_pin_files` from `dd_topt_go_test`
+  calls and wrappers.
+- Remove the `rules_go` override that points at the fork
+  (`third_party/rgo/...`) and the `orchestrion` extension with its
+  `rules_go_orchestrion_tool` repository, and depend on upstream `rules_go`
+  `0.60.0` or newer. In WORKSPACE, declare upstream `rules_go` as
+  `io_bazel_rules_go`, drop the fork arguments of
+  `datadog_go_test_optimization_workspace_repositories`, and remove the
+  `dd_topt_go_orchestrion_tool_repo` call.
+- Delete `orchestrion.tool.go` and `orchestrion.yml`, and the Orchestrion and
+  `dd-trace-go` requirements in `go.mod` that only served as pins.
+- Add `topt_go_ddtest.sdk(go_mod = "//:go.mod")` to the root `MODULE.bazel`,
+  or call `topt_go_ddtest_workspace_repositories(go_version = ...)` in
+  WORKSPACE.
+- Or rerun `dd_topt_go_bootstrap`: it replaces the
+  `# BEGIN Datadog Go Orchestrion bootstrap` block with the new managed block,
+  and stops if an unmanaged `rules_go` override still points at the fork. If
+  the old block's fork commit no longer loads, run the bootstrap from another
+  workspace with `--workspace <path>`, or delete the block by hand. Old
+  `# BEGIN Datadog Go Pin Files` blocks in BUILD files are harmless and can be
+  deleted.
+- If `go.mod` requires `github.com/DataDog/ddtest/ddto`, replace `go_deps`'
+  copy with the generated Mini: `use_repo(topt_go_ddtest, "topt_go_ddtest_mini")`
+  and `override_repo(go_deps, com_github_datadog_ddtest_ddto = "topt_go_ddtest_mini")`.
+- Anything that read `bazel.go.orchestrion.*` from target metadata now reads
+  `bazel.go.instrumentation.*` and `bazel.go.sdk.*`.
+
 ## [1.4.0] - 2026-10-29
 
 ### Added

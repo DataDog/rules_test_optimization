@@ -32,7 +32,7 @@ repository, use `./bazelw` for local development convenience.
   - `bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.4.0")` for NodeJS macro usage
   - `bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.4.0")` for .NET macro usage
   - `bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.4.0")` for Ruby macro usage
-  - `bazel_dep(name = "rules_go", ...)` for Go examples shown below
+  - `bazel_dep(name = "rules_go", ...)` (upstream, `0.60.0` or newer) for Go examples shown below
 - For NodeJS/.NET/Ruby examples shown below, also pin reference rulesets and register toolchains:
   - `bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")`
   - `bazel_dep(name = "rules_nodejs", version = "6.7.3")`
@@ -41,7 +41,9 @@ repository, use `./bazelw` for local development convenience.
   - `node = use_extension("@rules_nodejs//nodejs:extensions.bzl", "node"); node.toolchain(node_version = "22.22.0"); use_repo(node, "nodejs", "nodejs_host", "nodejs_toolchains"); register_toolchains("@nodejs_toolchains//:all")`
   - `dotnet = use_extension("@rules_dotnet//dotnet:extensions.bzl", "dotnet"); dotnet.toolchain(name = "dotnet", dotnet_version = "8.0.100"); use_repo(dotnet, "dotnet_toolchains"); register_toolchains("@dotnet_toolchains//:all")`
   - `ruby = use_extension("@rules_ruby//ruby:extensions.bzl", "ruby"); ruby.toolchain(name = "ruby", version = "3.3.9"); use_repo(ruby, "ruby", "ruby_toolchains"); register_toolchains("@ruby_toolchains//:all")`
-- Configure Go toolchains/SDK in your repo if you build Go targets.
+- Configure Go toolchains/SDK in your repo if you build Go targets, and the Go
+  SDK that `ddtest instrument` instruments for `dd_topt_go_test` with
+  `topt_go_ddtest.sdk(...)`.
 - Provide sync credentials via environment and forward them to repository rules:
   - shell/CI secret: `DD_API_KEY`
   - `.bazelrc`: `common --repo_env=DD_API_KEY` (and optionally `common --repo_env=DD_SITE`)
@@ -53,9 +55,9 @@ repository, use `./bazelw` for local development convenience.
   ```
 
   Removing `--config=test-optimization` disables metadata resolution and the
-  matching Go/Python runtime wiring. Optimized Go targets enable Orchestrion
-  through their own transition. Other companions retain their existing
-  enablement contract in this release.
+  matching Go/Python runtime wiring. Instrumented Go tests select the
+  instrumented Go SDK through their own transition. Other companions retain
+  their existing enablement contract in this release.
 
 ## Single-service (classic)
 
@@ -70,7 +72,7 @@ bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.4.0")
 bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.4.0")
 bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.4.0")
 
-bazel_dep(name = "rules_go", version = "0.60.0")  # or your repo-selected version
+bazel_dep(name = "rules_go", version = "0.60.0")  # or newer
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
@@ -151,6 +153,14 @@ go_topt.test_optimization_go(
 )
 use_repo(go_topt, "test_optimization_data_go")
 
+# dd_topt_go_test builds tests with the Go SDK that ddtest instruments, at the
+# Go version of the module's toolchain (or go) directive.
+topt_go_ddtest = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",
+    "topt_go_ddtest",
+)
+topt_go_ddtest.sdk(go_mod = "//src/go-project:go.mod")
+
 runtime_topt = use_extension(
     "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
     "test_optimization_sync_extension",
@@ -209,29 +219,29 @@ runtime metadata and context label. If your team owns only Python, Java,
 NodeJS, .NET, or Ruby, the simpler runtime-specific setup is in
 [`docs/Language_Onboarding.md`](../docs/Language_Onboarding.md).
 
-The generated Go wrapper uses `orchestrion_mode = "test_optimization"` for
-standard Go `testing`. Manual `dd_topt_go_test` snippets below set the same mode
-explicitly. The default Go Orchestrion mode is `general`; these examples choose
-`test_optimization` because they target standard Go `testing` payloads rather
-than broader generic Orchestrion instrumentation.
+The `topt_go_ddtest.sdk(...)` block configures the Go SDK that
+[`ddtest instrument`](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md)
+instruments; the Go companion registers the toolchains. `go_mod` needs a
+`BUILD` file in the `go.mod` package.
 
-Bootstrap once after adding the module prerequisites:
+The guided bootstrap supports only fresh single-service Go workspaces, and it
+stops when `MODULE.bazel` already uses `test_optimization_sync_extension`, as
+this mixed-runtime workspace does. Write the central Go wrapper by hand:
 
-```bash
-bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-  --guided \
-  --service go-service \
-  --sync-repo-name test_optimization_data_go \
-  --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.1
+```bzl
+# tools/build/dd_go_test.bzl
+load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
+load("@test_optimization_data_go//:export.bzl", "topt_data")
+
+def dd_go_test(name, **kwargs):
+    dd_topt_go_test(
+        name = name,
+        topt_data = topt_data,
+        **kwargs
+    )
 ```
 
-`--dd-trace-go-version` is optional. If omitted, bootstrap uses the default
-`v2.9.1`. It accepts a tag,
-pseudo-version, branch, or commit SHA. Bootstrap resolves that input to exact
-versions and repins the local Go module to match what Bazel will use.
-
-BUILD.bazel (generated wrapper path, inference via embed):
+BUILD.bazel (central wrapper, inference via embed):
 
 ```bzl
 load("@rules_go//go:def.bzl", "go_library")
@@ -239,23 +249,24 @@ load("//tools/build:dd_go_test.bzl", "dd_go_test")
 
 go_library(
     name = "pkg_lib",
-    srcs = ["*.go"],
+    srcs = ["pkg.go"],
+    importpath = "example.com/single-service-go-project/pkg",
 )
 
 dd_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],      # importpath inferred via rules_go provider
 )
 ```
 
-Enable runtime source staging only when the tracer needs to open the source
-file for AST-derived metadata:
+Enable runtime source staging only when the test runtime needs to open the
+source file for metadata such as `test.source.end`:
 
 ```bzl
 dd_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],
     stage_sources = True,
 )
@@ -520,7 +531,7 @@ MODULE.bazel:
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
-bazel_dep(name = "rules_go", version = "0.60.0")  # or your repo-selected version
+bazel_dep(name = "rules_go", version = "0.60.0")  # or newer
 
 git_override(
     module_name = "datadog-rules-test-optimization",
@@ -553,17 +564,24 @@ use_repo(
 )
 ```
 
-Bootstrap once after adding the Go module files:
+Configure the Go SDK that `ddtest instrument` instruments, as the
+`examples/multi_service` workspace does:
+
+```bzl
+topt_go_ddtest = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",
+    "topt_go_ddtest",
+)
+topt_go_ddtest.sdk(go_mod = "//src/go-project:go.mod")
+```
+
+Instead of adding these lines by hand, you can let the bootstrap write them in
+its managed block. Do not do both: the root module accepts one `sdk` tag.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-  --go-module-dir src/go-project \
-  --dd-trace-go-version v2.9.1
+  --go-module-dir src/go-project
 ```
-
-As in the single-service flow, `--dd-trace-go-version` is optional and defaults
-to `v2.9.1`. It may resolve to one shared tracer version or to separate exact
-versions for the traced Go modules when you pass a branch or commit SHA.
 
 This multi-service path stays on the lower-level/manual API. Guided bootstrap is
 only for fresh single-service Go workspaces.
@@ -591,14 +609,14 @@ load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 go_library(
     name = "pkg_lib",
-    srcs = ["*.go"],
+    srcs = ["pkg.go"],
+    importpath = "example.com/multi-service-go-project/pkg",
 )
 
 dd_topt_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],
-    orchestrion_mode = "test_optimization",
     topt_data = topt_data_by_service["go_service_a"],  # sanitized key
 )
 ```
@@ -607,7 +625,7 @@ Mixed-runtime monorepo pattern:
 
 ```bzl
 # Keep runtime-specific sync repos separate. This remains the recommended path
-# when not every service is Go and not every service needs Orchestrion.
+# when not every service is Go.
 topt_go = use_extension(
     "@datadog-rules-test-optimization//tools/core:test_optimization_sync.bzl",
     "test_optimization_sync_extension",
@@ -646,14 +664,14 @@ load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 go_library(
     name = "pkg_lib",
-    srcs = ["*.go"],
+    srcs = ["pkg.go"],
+    importpath = "example.com/multi-service-go-project/pkg",
 )
 
 dd_topt_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],
-    orchestrion_mode = "test_optimization",
     topt_data = topt_data_by_service,
     topt_service = "go_service_a",               # or raw "go-service-a"
     # If two services sanitize to the same key, use the deduped key (e.g. go_service_a_2).

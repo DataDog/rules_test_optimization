@@ -10,7 +10,7 @@ This product includes software developed at Datadog
 
 This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.
 
-> `v1.4.0` is in preparation; `v1.3.0` remains the latest published release. For releases with an `INSTALL.md` asset, copy its checksum-pinned `archive_override` (Bzlmod) or `http_archive` (WORKSPACE) blocks. Keep core, companions, and the Go fork on the same archive. `v1.3.0` predates those assets; its commit-based installation remains supported. See [release installation](docs/Installation_Reference.md#option-a-install-from-a-release-archive-recommended).
+> `v1.4.0` is in preparation; `v1.3.0` remains the latest published release. For releases with an `INSTALL.md` asset, copy its checksum-pinned `archive_override` (Bzlmod) or `http_archive` (WORKSPACE) blocks. Keep core and companions on the same archive. `v1.3.0` predates those assets; its commit-based installation remains supported. See [release installation](docs/Installation_Reference.md#option-a-install-from-a-release-archive-recommended).
 
 ## Onboarding paths
 
@@ -105,8 +105,7 @@ are informative and may lag temporarily.
 - [`README.md`](README.md): fast onboarding, first-run checklist, and scenario
   quickstarts.
 - [`docs/Language_Onboarding.md`](docs/Language_Onboarding.md):
-  language-by-language recipes, including Go/Orchestrion and large WORKSPACE
-  monorepos.
+  language-by-language recipes, including Go and large WORKSPACE monorepos.
 - [`docs/Installation_Reference.md`](docs/Installation_Reference.md): complete
   installation reference for Bzlmod, WORKSPACE, bootstrap flags, archive pins,
   and generated Bazel config.
@@ -116,7 +115,7 @@ are informative and may lag temporarily.
   enrichment, uploader behavior, credentials, endpoints, and upload modes.
 - [`docs/Troubleshooting.md`](docs/Troubleshooting.md): operational debugging
   for sync, payload discovery, doctor failures, enrichment, Git/Bazel metadata,
-  and Go tracer drift.
+  and Go tests instrumented by `ddtest instrument`.
 - [`docs/Initial_documentation.md`](docs/Initial_documentation.md): current
   architecture overview and data-flow diagrams.
 - [`docs/RFC.md`](docs/RFC.md): historical design rationale and trade-offs.
@@ -135,60 +134,10 @@ are informative and may lag temporarily.
 - [`tools/agent-skills/java-test-optimization-onboarding/SKILL.md`](tools/agent-skills/java-test-optimization-onboarding/SKILL.md):
   neutral Codex-compatible agent workflow for instrumenting Java WORKSPACE and
   Bzlmod consumers with Test Optimization.
-- [`tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md`](tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md):
-  neutral Codex-compatible agent workflow for porting the vendored
-  Orchestrion-enabled `rules_go` fork to a new upstream tag or commit.
 - [`docs/internal_monorepo_go_rollout_guide.md`](docs/internal_monorepo_go_rollout_guide.md):
   operator checklist for large WORKSPACE Go pilot rollouts.
-- [`docs/go_orchestrion_bazel_deep_dive.md`](docs/go_orchestrion_bazel_deep_dive.md):
-  maintainer deep dive for the Go + Orchestrion Bazel pipeline.
-- [`docs/go_orchestrion_maintainer_state.md`](docs/go_orchestrion_maintainer_state.md):
-  current Go/Orchestrion maintainer state, kept optimizations, reverted
-  experiments, and next performance directions.
-- [`docs/rules_go_orchestrion_support_selection.md`](docs/rules_go_orchestrion_support_selection.md)
-  and [`docs/rules_go_variant_maintenance_guide.md`](docs/rules_go_variant_maintenance_guide.md):
-  how to maintain supported `rules_go` upstream versions and generated
-  consumer patch profiles.
-- [`docs/rules_go_orchestrion_performance_analysis.md`](docs/rules_go_orchestrion_performance_analysis.md)
-  and [`docs/rules_go_orchestrion_probe_measurements.md`](docs/rules_go_orchestrion_probe_measurements.md):
-  performance analysis and measured probe history for the vendored Go fork.
 - [`SECURITY.md`](SECURITY.md): vulnerability reporting and disclosure policy.
 - [`CHANGELOG.md`](CHANGELOG.md): release notes and unreleased changes.
-
-## Maintainer note on the vendored rules_go fork
-
-The repository publishes the Go integration as complete base `rules_go` trees.
-`rules_go_variant` currently supports only:
-
-- `base`: generic Orchestrion-enabled support.
-- `tools/tests/rules_go_variant_regressions`: maintainer-only regression
-  overlay copied into temporary smoke-test trees.
-
-When multiple upstream `rules_go` versions are supported, `rules_go_upstream`
-selects the upstream support line. Omitting `rules_go_upstream` preserves the
-repository default. The default `rules_go_upstream` is currently `v0_60_0`,
-which preserves the existing `third_party/rgo/v0_60_0/base` path.
-The registry also supports `v0_61_1`, `v0_62_0`, and `v0_63_0`.
-
-Maintainers track each supported upstream version with both patch series under
-`third_party/rules_go_orchestrion/patches/<upstream>/` and materialized base
-trees under the registry-selected `tree_path`. The patch series is the
-maintainer source for rebasing. The materialized tree is the consumer artifact.
-CI verifies that they match.
-
-Public consumer patch profiles live under `third_party/rules_go_orchestrion/profiles/`.
-They are generated and verified by `tools/dev/generate_rules_go_consumer_patch.py`
-and `tools/dev/verify_rules_go_profiles.py` so consumers that already own a
-`rules_go` patch stack can generate a sparse, profile-specific input and rebase
-or merge it locally instead of vendoring a second complete `rules_go` tree.
-
-Select `--profile workspace_runtime` for WORKSPACE consumers or
-`--profile bzlmod_runtime` for Bzlmod consumers. The Bzlmod profile includes
-`MODULE.bazel` and the public `go/extensions.bzl` alias. Both the consumer and
-patched rules_go must use `go:extensions.bzl`'s `orchestrion` extension so they
-share the same tool repository. A root-only `use_repo` does not make that
-repository visible inside rules_go. Neither profile includes upstream lockfile
-changes or repository tests.
 
 ## First-run checklist (all scenarios)
 
@@ -200,8 +149,9 @@ config must include
 public Go bootstrap helpers apply metadata gating by default. Manual Go
 extension wiring uses the same config-gated default. Direct use of the
 low-level core sync API in a config-gated Go or Python setup must opt into
-`enabled_by_env = True`. Go optimized targets enable Orchestrion through their
-own transition; no global `orchestrion:enabled` build setting is required.
+`enabled_by_env = True`. Instrumented Go tests select the Go SDK that
+`ddtest instrument` instruments through their own transition; no global build
+setting is required.
 Removing `--config=test-optimization` provides the complete metadata and
 runtime opt-out for the Go and Python integrations described below. This
 release does not change the enablement contract of the other companions.
@@ -210,7 +160,7 @@ When the selected Go sync export is disabled, `dd_topt_go_test` validates its
 macro-only inputs and selected service, then calls the supplied `go_test_rule`
 directly under the public target name with the caller's original Go rule
 arguments. It does not create the hidden raw test, payload selector, Bazel
-metadata, Orchestrion pin, or public wrapper targets. This lets a consumer keep
+metadata, registration, or public wrapper targets. This lets a consumer keep
 one central `dd_go_test` entry point while the named config decides whether the
 same BUILD call is a raw `go_test` or the existing enabled Test Optimization
 shape.
@@ -236,8 +186,8 @@ automatically. No per-target disable attribute is required.
    - `DD_GIT_*` must use `--repo_env`, never `--test_env`, so Git metadata
      does not become part of the test action cache key.
    - `DD_TEST_OPTIMIZATION_AGENT_URL` and
-     `DD_TEST_OPTIMIZATION_AGENTLESS_URL` are not part of the Go/Orchestrion
-     test sandbox. The uploader reads upload endpoints at `bazel run` time.
+     `DD_TEST_OPTIMIZATION_AGENTLESS_URL` are not part of the Go test
+     sandbox. The uploader reads upload endpoints at `bazel run` time.
    - `FETCH_SALT` is not part of the normal flow. Use it only for a separate,
      explicit force-refresh sync when you intentionally want fresh backend
      metadata.
@@ -268,41 +218,21 @@ already reachable from `origin/main`. Do not publish snippets that point at a
 feature-branch commit: those commits can disappear after squash merge and break
 consumer resolution.
 
-Maintainers can generate the full WORKSPACE/archive tuple from this checkout:
+Maintainers can generate the WORKSPACE/archive tuple from this checkout:
 
 ```bash
 ./bazelw run //tools/dev:print_go_onboarding_pins -- \
   --commit "$(git rev-parse origin/main)" \
-  --rules-go-upstream v0_60_0 \
-  --variant base \
   --verify-main-reachable
 ```
 
-The helper verifies the selected rules_go variant exists, verifies the commit is
-reachable from `origin/main`, downloads the real GitHub codeload archive, and
-prints `RTO_COMMIT`, `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`,
-`RTO_ARCHIVE_PREFIX`, the selected upstream support line, the selected variant,
-the default `dd-trace-go` version, and the default Orchestrion version.
+The helper verifies that the commit is reachable from `origin/main`, downloads
+the real GitHub codeload archive, and prints `RTO_COMMIT`, `RTO_REMOTE`,
+`RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`, `RTO_ARCHIVE_PREFIX`, and
+`RTO_ARCHIVE_TYPE`. Add `--print-summary` to also print a Markdown summary.
 Published GitHub pins use `tar.gz`; other archive types must be mirrored and
-documented outside this helper.
-
-Historical `v1.2.0` GitHub pins (not `v1.3.0`):
-
-```bash
-RTO_COMMIT="69953536d4ef1252c8181c267d16c61263f0aa4c"
-RTO_REMOTE="https://github.com/DataDog/rules_test_optimization.git"
-RTO_ARCHIVE_URL="https://codeload.github.com/DataDog/rules_test_optimization/tar.gz/69953536d4ef1252c8181c267d16c61263f0aa4c"
-RTO_ARCHIVE_SHA256="fd54d1871fc01ff0bb3db190dfaadaa8256edd68a4f3bb85ecc08b315fbf5bd4"
-RTO_ARCHIVE_PREFIX="rules_test_optimization-69953536d4ef1252c8181c267d16c61263f0aa4c"
-RTO_ARCHIVE_TYPE="tar.gz"
-RULES_GO_UPSTREAM="v0_60_0"
-RULES_GO_VARIANT="base"
-RULES_GO_STRIP_PREFIX="third_party/rgo/v0_60_0/base"
-DD_TRACE_GO_VERSION="v2.9.0"
-ORCHESTRION_VERSION="v1.9.0"
-```
-
-The archive URL, SHA256, and prefix are tied to the repository commit.
+documented outside this helper. The archive URL, SHA256, and prefix are tied to
+the repository commit.
 
 Consumers using the Go bootstrap can print the same tuple or write a
 repository-local summary:
@@ -310,15 +240,11 @@ repository-local summary:
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --print-published-pins \
-  --rto-commit <published-origin-main-sha> \
-  --rules-go-upstream v0_60_0 \
-  --rules-go-variant base
+  --rto-commit <published-origin-main-sha>
 
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --write-onboarding-summary=TEST_OPTIMIZATION_GUIDE.md \
-  --rto-commit <published-origin-main-sha> \
-  --rules-go-upstream v0_60_0 \
-  --rules-go-variant base
+  --rto-commit <published-origin-main-sha>
 ```
 
 If the bootstrap runs from a checkout that has this repository's Git history,
@@ -427,6 +353,13 @@ $env:DD_SITE = "datadoghq.com"
 
 ### Bzlmod + Go companion (`dd_topt_go_test`)
 
+`dd_topt_go_test` builds each enabled test with the Go SDK that
+[`ddtest instrument`](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md)
+instruments, and links Mini, ddtest's Test Optimization runtime. `rules_go` is
+the upstream module from the Bazel Central Registry, `0.60.0` or newer. The Go
+module needs no Datadog requirement in `go.mod`, and the instrumentation needs
+no Go installation on the host.
+
 For a fresh single-service Go workspace, start with the small manual
 prerequisite block below, then let the guided bootstrap finish the Go-specific
 setup.
@@ -451,17 +384,14 @@ bazel_dep(name = "rules_go", version = "0.60.0")
 ```
 
 Then run the Datadog bootstrap helper once from the workspace that owns your
-Go module. `--dd-trace-go-version` is optional; if you omit it, the default is
-`v2.9.1`. Orchestrion `v1.12.0` requires Go `1.25.0` or newer, so the
-`--runtime-version` value and registered Bazel Go toolchain must satisfy that
-minimum.
+Go module. `--runtime-version` is the Go version of the SDK that
+`ddtest instrument` instruments, and the runtime version of the sync metadata.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.1 \
   --write-bazelrc
 ```
 
@@ -472,48 +402,66 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --guided \
   --service go-service \
   --runtime-version 1.25.0 \
-  --dd-trace-go-version v2.9.1 \
   --go-module-dir path/to/go-module \
   --write-bazelrc
 ```
 
-`--dd-trace-go-version` accepts a normal tag, a pseudo-version, a branch, or a
-commit SHA. Bootstrap resolves that input to exact Go module versions before it
-writes anything back to the workspace. If you rerun bootstrap without
-`--dd-trace-go-version`, it preserves the managed tracer config that is already
-in place.
-
 The bootstrap helper:
-- updates `MODULE.bazel` with a Datadog-managed `rules_go` override back to this repository's selected clean vendored base module and the `@rules_go//go:extensions.bzl` Orchestrion wiring required for Bazel builds
+- adds a Datadog-managed block to `MODULE.bazel` that configures the
+  instrumented Go SDK with `topt_go_ddtest.sdk(go_version = "<runtime-version>")`
+- adds `bazel_dep(name = "rules_go", version = "0.60.0")` when `MODULE.bazel`
+  has no `rules_go` dependency
 - adds the Datadog-managed single-service Go sync block (`test_optimization_go_extension`)
 - creates a root `dd_test_optimization_doctor` target when missing
 - creates a root `dd_upload_payloads` target when missing
 - can print or write the recommended `.bazelrc` block with
   `--print-bazelrc-snippet` or `--write-bazelrc`
 - creates one central `//tools/build:dd_go_test.bzl` entry point for
-  workspace-local Go tests
-- configures that wrapper to delegate every call to `dd_topt_go_test` with
-  `orchestrion_mode = "test_optimization"`; omitting the named config makes the
-  generated disabled export preserve normal `go_test` behavior under the same
-  public target name
-- writes a deterministic `orchestrion.tool.go` that matches the Bazel-side Orchestrion wiring
-- repins `dd-trace-go` and the Orchestrion-managed Go helper packages to the resolved tracer versions
-- writes a starter `orchestrion.yml` when missing
-- writes either `dd_trace_go_version` or `dd_trace_go_versions` into the managed `MODULE.bazel` block, depending on whether the traced Go modules resolve to one shared version or different exact versions
-- keeps Bazel's injected tracer versions and the local Go module pins aligned, and the build fails fast if they drift apart
+  workspace-local Go tests, which delegates every call to `dd_topt_go_test`;
+  omitting the named config makes the generated disabled export preserve normal
+  `go_test` behavior under the same public target name
 
-By default, bootstrap uses `--go-mod-sync=targeted`. That mode updates only the
-Orchestrion and `dd-trace-go` tool requirements, resolves the exact packages
-needed by `orchestrion.tool.go`, and verifies the result with
-`go list -mod=readonly`. It does not run `go mod tidy`, which keeps large
-repositories from rewriting unrelated module state. Use `--go-mod-sync=tidy`
-when you explicitly want the broad tidy behavior, or `--go-mod-sync=off` when
-you only want bootstrap to write managed Bazel/Orchestrion files.
+The managed block looks like this:
 
-Bootstrap runs module-sync commands with `go` by default. Pass
-`--go-binary=/path/to/go` when the workspace must use a pinned Go SDK, such as
-the same SDK Bazel uses in a monorepo. The value must be a single executable
-path named `go` or `go.exe`; do not include shell arguments.
+```bzl
+# BEGIN Datadog Go Test Optimization bootstrap
+topt_go_ddtest = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",
+    "topt_go_ddtest",
+)
+topt_go_ddtest.sdk(go_version = "1.25.0")
+# END Datadog Go Test Optimization bootstrap
+```
+
+Without `--guided`, the bootstrap writes only this block and the `rules_go`
+dependency when it is missing. Without `--runtime-version`, the block reads
+`topt_go_ddtest.sdk(go_mod = "//:go.mod")` (or the `go.mod` label of the
+`--go-module-dir` package), and the extension takes the Go version from the
+`toolchain` directive, then the `go` directive. That package needs a `BUILD`
+file; the bootstrap stops otherwise. Workspaces that do not use the bootstrap
+add the same two lines by hand. The Go companion registers the toolchains, so
+the root module registers none. See
+[Go instrumentation SDK](docs/Configuration_Reference.md#go-instrumentation-sdk)
+for the `sdk` tag attributes.
+
+Only instrumented tests select these toolchains, so other builds fetch neither
+the instrumented SDKs nor Mini, and Bazel fetches only the SDKs of the exec
+platforms it selects. Without an `sdk` tag, an instrumented test fails with a
+message that says what to configure; see
+[Troubleshooting](docs/Troubleshooting.md#instrumented-test-fails-no-go-sdk-to-instrument).
+
+Rerunning the bootstrap on a workspace set up by 1.x replaces the Go block that
+1.x wrote. See the [migration note](CHANGELOG.md#unreleased) and
+[Bootstrap stops on a rules_go fork override](docs/Troubleshooting.md#bootstrap-stops-on-a-rules_go-fork-override).
+
+If the Go module requires `github.com/DataDog/ddtest/ddto` to use Mini's Go API
+in tests, replace `go_deps`' copy with the generated Mini, or the test fails at
+analysis:
+
+```bzl
+use_repo(topt_go_ddtest, "topt_go_ddtest_mini")
+override_repo(go_deps, com_github_datadog_ddtest_ddto = "topt_go_ddtest_mini")
+```
 
 By default, `dd_topt_go_test` also sets `DD_SERVICE` from the selected sync
 metadata service name. If you already set `DD_SERVICE` in the test target's
@@ -540,16 +488,23 @@ load("//tools/build:dd_go_test.bzl", "dd_go_test")
 
 dd_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],
 )
 ```
 
 Use the manual `dd_topt_go_test(..., topt_data = ...)` path only when the
 workspace already has custom sync wiring, mixed-language layout, or multi-service
-Go setup. Manual Go callsites should set
-`orchestrion_mode = "test_optimization"` for standard Go `testing`; the default
-`general` mode preserves broader generic Orchestrion behavior.
+Go setup.
+
+For an enabled export, `dd_topt_go_test` creates a hidden raw `go_test` built
+with the instrumented Go SDK, adds Mini's `testopt` library and a registration
+file to it, and exposes it through the public test target. It also adds the
+test-binary linker flags `-s -w` where `rules_go` does not already strip and the
+build does not ask for debug or unstripped binaries; set
+`enable_test_binary_linker_optimization = False` to keep the caller's linker
+flags unchanged. See
+[`dd_topt_go_test` attributes](docs/Configuration_Reference.md#dd_topt_go_test-attributes).
 
 An explicit per-service integration can pass the same macro a local-static
 descriptor instead of loading an external repository's `export.bzl`:
@@ -562,7 +517,6 @@ dd_topt_go_test(
         "service_name": "go-service",
         "runtime_module_path": "example.com/repo",
     },
-    orchestrion_mode = "test_optimization",
     srcs = ["pkg_test.go"],
 )
 ```
@@ -579,9 +533,9 @@ behavior.
 
 The `.topt` clone preserves the source test's execution policy. A source tagged
 `no-remote-exec` therefore still runs its `TestRunner` locally, but that policy
-does not leak into deterministic build actions such as stdlib preparation,
-synthetic testmain helpers, compilation, or linking. Those actions remain
-eligible for normal Bazel caching and remote execution.
+does not leak into deterministic build actions such as standard library
+preparation, compilation, or linking. Those actions remain eligible for normal
+Bazel caching and remote execution.
 
 Large consumers can warm the matching instrumented standard library in a
 dedicated cache-writing invocation:
@@ -598,21 +552,20 @@ bazel build //tools/test_optimization:go_stdlib_warmup \
   --config=remote-cache-write
 ```
 
-The warmup target applies the same target-scoped Go configuration transitions,
-enables Orchestrion in `test_optimization` mode, and materializes the
-instrumented stdlib plus its deterministic declared archive cache. Ordinary Go
-actions neither publish nor consume that instrumented cache. The consumer
-remains responsible for restricting remote-cache writes to a trusted CI
-invocation.
-Without the named config, the target is a no-op so ordinary broad builds can
-analyze its package without enabling Test Optimization.
+The warmup target applies the same Go configuration transitions as an
+instrumented test and materializes the standard library built with the
+instrumented Go SDK, plus its build cache directory. Ordinary Go actions
+neither publish nor consume that instrumented cache. The consumer remains
+responsible for restricting remote-cache writes to a trusted CI invocation.
+The target is tagged `manual`, so wildcard builds skip it. Building it needs the
+instrumented SDK configured, with or without the named config.
 
 ### Bzlmod + Python companion (`dd_topt_py_test`)
 
 Configure the Python sync extension with `enabled_by_env = True` and put
 `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1` in the
-named config. Python does not declare `rules_go` and must not copy the Go-only
-Orchestrion build flag.
+named config. Python does not declare `rules_go` and needs no Go SDK
+configuration.
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
@@ -954,8 +907,8 @@ and the same underlying test rule symbols, create thin local wrappers so
 package BUILD files do not repeat `topt_data` and `*_test_rule`.
 
 For config-gated Go onboarding, keep one central wrapper. It always delegates
-to `dd_topt_go_test`; the named config selects enabled metadata and
-Orchestrion, while the stable disabled export preserves normal `go_test`
+to `dd_topt_go_test`; the named config selects enabled metadata and the
+instrumented test, while the stable disabled export preserves normal `go_test`
 behavior without metadata requests. Python can use the same central-wrapper
 shape when its sync repository sets `enabled_by_env = True`. Other companions
 retain their existing enablement contract in this release.
@@ -971,13 +924,6 @@ def dd_go_test(name, **kwargs):
     dd_topt_go_test(
         name = name,
         topt_data = topt_data,
-        orchestrion_mode = "test_optimization",
-        orchestrion_pin_files = [
-            "//:go.mod",
-            "//:go.sum",
-            "//:orchestrion.tool.go",
-            "//:orchestrion.yml",
-        ],
         **kwargs
     )
 ```
@@ -988,7 +934,7 @@ load("//tools/build:dd_go_test.bzl", "dd_go_test")
 
 dd_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],
 )
 ```
@@ -1186,37 +1132,39 @@ the other companions remain unchanged.
 
 For Go in WORKSPACE mode, keep the core and Go companion as separate external
 repositories and load `dd_topt_go_test` from
-`@datadog-rules-test-optimization-go//:topt_go_test.bzl`. Prefer the public
-WORKSPACE helper so the Go companion and Orchestrion-enabled `rules_go` fork use
-the same commit, repo mapping, and upstream support line:
+`@datadog-rules-test-optimization-go//:topt_go_test.bzl`. Declare upstream
+`rules_go` first, named `io_bazel_rules_go`: the instrumented SDK repositories
+load it under that name. Then use the public WORKSPACE helper, which declares
+only the Go companion, and declare the instrumented Go SDK after `rules_go`'s
+own setup:
 
 ```bzl
 load("@datadog-rules-test-optimization//tools/go:workspace_repositories.bzl", "datadog_go_test_optimization_workspace_repositories")
 
 datadog_go_test_optimization_workspace_repositories(
     rto_commit = "<commit-sha>",
-    rules_go_repo_name = "io_bazel_rules_go",
-    rules_go_upstream = "v0_60_0",
-    rules_go_variant = "base",
 )
+
+load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
+
+go_rules_dependencies()
+
+go_register_toolchains(version = "1.25.0")
+
+load("@datadog-rules-test-optimization-go//:topt_go_ddtest_repository.bzl", "topt_go_ddtest_workspace_repositories")
+
+topt_go_ddtest_workspace_repositories(go_version = "1.25.0")
 ```
 
-Use `rules_go_variant = "base"`. When multiple upstream versions are supported,
-use `rules_go_upstream` to select the upstream support line; omit it to keep the
-repository default. The base variant is a complete `rules_go` tree and does not
-require `patches`, `patch_tool`, or a consumer-owned patch directory. The public
-WORKSPACE helper also expects the default tool-repo name
-`rules_go_orchestrion_tool`, so consumers should not rename that repository.
-When Go tests live below the module root, pass the module-root pin files through
-`orchestrion_pin_files` (for example `["//:go.mod", "//:orchestrion.tool.go"]`)
-or inject them from a repo-local wrapper.
-For large monorepos where root-level tool imports would churn or invalidate the
-main Go module, keep Orchestrion tool wiring in Bazel and use a repo-local
-wrapper with package-local pin files. An explicit
-`orchestrion_pin_files = []` is valid only when the target package contains a
-package-local `go.mod` that the macro can auto-discover. Otherwise pass visible
-module-root labels, including `go.mod` and every relevant Orchestrion pin file;
-do not add a root `orchestrion.tool.go` only to satisfy the wrapper pattern.
+`topt_go_ddtest_workspace_repositories` takes the same arguments as the Bzlmod
+`sdk` tag except `go_mod`, and registers the toolchains. To instrument the SDK
+that `go_register_toolchains` declared instead of downloading one, pass
+`base_sdk_roots = {"linux_amd64": "@go_sdk//:ROOT"}` together with
+`exec_platforms = ["linux_amd64"]`, or keep `go_version` for the other exec
+platforms. `datadog_go_test_optimization_workspace_repositories` fails when
+`rules_go` is not declared yet. See
+[step 8 of the WORKSPACE installation](docs/Installation_Reference.md#8-configure-go-support-in-workspace-with-the-public-helper)
+for the complete file.
 
 For Python in WORKSPACE mode, declare `rules_python` and the core repository
 first, then use the public Python helper to declare only the Python companion:
@@ -1263,10 +1211,15 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --print-workspace-snippet \
   --rto-commit <commit-sha> \
   --service my-service \
-  --runtime-version 1.25.0 \
-  --rules-go-upstream v0_60_0 \
-  --rules-go-variant base
+  --runtime-version 1.25.0
 ```
+
+The snippet declares upstream `rules_go` first as a commented `http_archive`
+placeholder with the release URL, then the core repository,
+`datadog_go_test_optimization_workspace_repositories(...)`,
+`go_rules_dependencies()`, `go_register_toolchains(...)`,
+`topt_go_ddtest_workspace_repositories(go_version = ...)`, and the sync
+repositories.
 
 For larger WORKSPACE monorepos, let bootstrap write the generic local files and
 keep only the final WORKSPACE placement as a manual review step:
@@ -1277,41 +1230,15 @@ bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --service my-service \
   --runtime-version 1.25.0 \
   --sync-repo-name test_optimization_data \
-  --rules-go-upstream v0_60_0 \
-  --rules-go-variant base \
-  --rules-go-repo-name io_bazel_rules_go \
   --write-bazelrc \
-  --write-orchestrion-files \
   --write-wrapper-template
 ```
 
 WORKSPACE mode does not edit `WORKSPACE`. It writes only Datadog-managed local
-blocks/files such as `.bazelrc`, `orchestrion.tool.go`, `orchestrion.yml`, and
-an optional repo-local wrapper template. Create the single doctor/uploader pair
-in the monorepo's lightweight Test Optimization package instead of asking
-bootstrap to modify the root BUILD. By default bootstrap also avoids running Go
-module commands; pass an explicit `--go-mod-sync=targeted` when you want it to
-repair the local Orchestrion tool graph.
-
-If your WORKSPACE repo also checks in Gazelle-style `go_repository(...)`
-declarations, ask bootstrap to validate those pins instead of discovering the
-drift later during Bazel analysis:
-
-```bash
-bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-  --workspace-mode \
-  --write-orchestrion-files \
-  --go-mod-sync=targeted \
-  --check-go-repositories \
-  --go-repositories-file repositories.bzl \
-  --go-repositories-refresh-command './tools/update-go-repositories.sh'
-```
-
-Bootstrap does not rewrite `repositories.bzl` itself. It checks only the
-Orchestrion-related modules it owns and runs the repository-owned refresh
-command only after targeted Go module sync succeeds. Use
-`--print-go-repository-updates` to print the expected versions without hiding
-the fact that the repo still owns the actual refresh command.
+blocks/files such as `.bazelrc` and an optional repo-local wrapper template.
+Create the single doctor/uploader pair in the monorepo's lightweight Test
+Optimization package instead of asking bootstrap to modify the root BUILD. The
+bootstrap runs no Go commands and does not touch `go.mod`.
 
 Bootstrap can also generate an operator-owned validation script for large
 repositories. The script repeats the RFC flow without hiding Bazel behavior:
@@ -1368,15 +1295,16 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 | Component | Recommended baseline | Notes |
 |-----------|----------------------|-------|
 | Bazel | `8.8.2` | Repository baseline (`.bazelversion`) and primary CI lanes |
-| rules_go (Go users) | `0.60.0` / `rules_go_upstream = "v0_60_0"` | README examples use the default support line; importpath inference requires `0.51.0+` |
-| Go toolchain (example) | `1.25.0` | Consumer repositories may use another supported version |
+| rules_go (Go users) | `0.60.0` | Upstream `rules_go`, `0.60.0` or newer; CI covers `0.60.0`, `0.61.1`, `0.62.0`, `0.63.0`, `0.64.2`, and `0.65.0` (which requires Go `1.26`) |
+| Go SDK (example) | `1.25.0` | The version that `ddtest instrument` instruments; consumer repositories may use another version |
+| `ddtest instrument` | pinned | The Go companion pins one ddtest release in [`modules/go/topt_go_ddtest_repository.bzl`](modules/go/topt_go_ddtest_repository.bzl) |
 | Module versions | `1.4.0` (in preparation) | Latest published release: `1.3.0`; use its Git installation recipe |
 
 - **Bazel 8.8.2 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
 - **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.8.2` during migration away from WORKSPACE mode in Bazel 9+
 - **Bazel 5.0+ minimum capability** - Earliest Bazel line with required `TEST_UNDECLARED_OUTPUTS_DIR` payload support
 - **Tracer/runtime with DD Test Optimization file-mode support** - Must honor `DD_TEST_OPTIMIZATION_MANIFEST_FILE` and `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES`
-- **rules_go v0.51.0+** (for Go importpath inference) - This repository reads `GoInfo`/`GoArchive` providers when selecting per-module payloads
+- **rules_go v0.60.0+** (Go users) - The Go companion depends on `rules_go` `0.60.0` and reads `GoInfo`/`GoArchive` providers when selecting per-module payloads
 - **DD_SITE format** - Accepts bare host, app/api-prefixed host, or full URL; leading/trailing ASCII whitespace is trimmed, then normalized to `https://api.<site>`
 - **Default uploader tooling** - `Python 3.10+` on every platform, plus `bash`
   on Linux/macOS or `powershell.exe` (Windows PowerShell 5.1+ or PowerShell 7+)
@@ -1467,7 +1395,7 @@ selection unit across features (avoids cross-feature collisions).
 For Go, the catalog also retains the exact backend module identifier behind
 each label. This matters for fallback `go_test` import paths whose final target
 name contains a period: Go escapes that period in runtime symbols (for example,
-`.topt` becomes `%2e`) before the tracer reports the module. If one test binary
+`.topt` becomes `%2e`) before the test runtime reports the module. If one test binary
 contains both `package pkg` and external `package pkg_test` tests, the base
 package target carries both module entries. Other runtimes keep one backend
 module per generated target.
@@ -1835,16 +1763,17 @@ For complete uploader details, use [`docs/Uploader_Reference.md`](docs/Uploader_
 
 The `dd_topt_go_test` macro preserves the caller's public target label in both
 modes. When the selected sync export is enabled, that label is a public
-`orch_go_test` wrapper around a hidden raw `go_test`, with Datadog Test
-Optimization data/env wiring included. When the export is disabled, the same
+`ddtest_go_test` wrapper around a hidden raw `go_test` built with the Go SDK that
+`ddtest instrument` instruments, with Datadog Test Optimization data/env wiring
+included. When the export is disabled, the same
 label is the supplied raw `go_test_rule`; no Test Optimization-owned hidden
 targets or argument mutations are created.
 
 Because the label is stable but its rule class is mode-dependent, automation
 should prefer explicit target labels. If it uses Bazel's
-`--test_lang_filters`, enabled Test Optimization invocations need `orch_go`,
+`--test_lang_filters`, enabled Test Optimization invocations need `ddtest_go`,
 ordinary raw Go invocations need `go`, and automation that covers both modes
-should use `--test_lang_filters=go,orch_go` or omit the language filter.
+should use `--test_lang_filters=go,ddtest_go` or omit the language filter.
 
 By default, it sets `rundir` to the current Bazel package when not explicitly
 provided. If you enable `stage_sources = True`, it instead defaults `rundir`
@@ -1881,14 +1810,11 @@ need an enablement attribute. Consumers upgrading from `1.2.0` must add the
 named config before updating the Rule; rerun `dd_topt_go_bootstrap` with
 `--write-bazelrc` for an idempotent migration. A consumer that deliberately
 keeps manually controlled, always-enabled metadata can set
-`enabled_by_env = False`, but it must also keep the Orchestrion build setting
-enabled; analysis rejects a partial activation.
+`enabled_by_env = False`.
 
-Without `--config=test-optimization`, the patched `rules_go` aliases select
-package-local empty targets and the gated Orchestrion repository returns before
-looking for a host Go binary or fetching/building Orchestrion source. The
-disabled path therefore preserves the repository interface without requiring
-Go to be installed on the analysis host.
+Without `--config=test-optimization`, the export is disabled and
+`dd_topt_go_test` creates a plain `go_test`, so Bazel fetches neither the
+instrumented Go SDK nor Mini, and the metadata repository makes no requests.
 
 Consumer-owned central wrappers may always delegate capable packages to
 `dd_topt_go_test`. The generated export and named config choose the raw or
@@ -1899,105 +1825,37 @@ attribute or a second macro name.
 still honors `GO_MODULE_PATH` first for CI overrides, but the explicit attr is
 the recommended default because it avoids repo-local `--repo_env` glue.
 
-Then run the Datadog bootstrap helper once so Orchestrion is pinned into the
-workspace Go module. Repository/bootstrap resolution may use network access.
-After that, Orchestrion build actions consume a declared offline Go module
-download cache staged in `@rules_go_orchestrion_tool`; they do not depend on a
-warmed host Go module cache. Test payloads still use the Bazel file-output
-contract: the tracer writes JSON files under `TEST_UNDECLARED_OUTPUTS_DIR`, and
-the uploader enriches those JSON files with repository and Bazel metadata. Pass
-`--dd-trace-go-version <query>` if you want a non-default tracer version;
-otherwise the default is `v2.9.1`.
+Then configure the Go SDK that `ddtest instrument` instruments. The Go
+companion registers the matching toolchains:
+
+```bzl
+topt_go_ddtest = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",
+    "topt_go_ddtest",
+)
+topt_go_ddtest.sdk(go_mod = "//:go.mod")  # or go_version = "1.25.0"
+```
+
+The bootstrap can write this block for you: `--runtime-version <go-version>`
+sets `go_version`, and without it the block uses the `go.mod` of the workspace
+root or of `--go-module-dir`.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
   --runtime-version <go-version>
 ```
 
-The bootstrap's default module-sync mode is `targeted`, which avoids a broad
-`go mod tidy`. Use `--go-mod-sync=tidy` only when you want bootstrap to tidy the
-whole module, and use `--go-mod-sync=off` when another repository-owned command
-will update `go.mod` and `go.sum`. Use `--go-binary=/path/to/go` if the module
-must be synced with a specific Go SDK. The path must point to a `go` or
-`go.exe` executable and must not include arguments. This option controls the
-one-time Go module update performed by bootstrap; enabled Bazel builds use the
-SDK declared from `--runtime-version`.
-
-For WORKSPACE repos with checked-in `go_repository(...)` declarations, add
-`--check-go-repositories` after targeted sync. This catches stale
-`repositories.bzl` pins for `github.com/DataDog/orchestrion` and the three
-`dd-trace-go` modules before Bazel tries to build with mismatched versions.
-
-Guided bootstrap declares a Bazel-managed Go SDK from `--runtime-version` and
-passes its root and exact version to the Orchestrion repository. Enabled builds
-therefore do not depend on a host `go` binary. The declaration is workspace-wide
-and is not repeated for each service or test.
-
-If you wire Orchestrion manually instead of using bootstrap, declare the same
-SDK and let Bazel derive the selected tracer module versions from the
-repository's checked-in `go.mod` and `go.sum`:
-
-```bzl
-test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-test_optimization_go_sdk.download(
-    name = "test_optimization_go_sdk",
-    version = "<go-version>",
-)
-use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
-
-orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
-orchestrion.from_source(
-    version = "v1.12.0",
-    dd_trace_go_pin_files = [
-        "@//:go.mod",
-        "@//:go.sum",
-    ],
-    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
-    go_sdk_version = "<go-version>",
-)
-use_repo(orchestrion, "rules_go_orchestrion_tool")
-```
-
-The root package must export those two files. Pin-file mode resolves direct and
-transitive supported dd-trace-go modules with the Bazel-managed SDK and
-`-mod=readonly`; it does not modify the consumer module.
-
-Use an explicit shared or per-module version only as an escape hatch for a
-module graph that pin-file mode cannot resolve:
-
-```bzl
-test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-test_optimization_go_sdk.download(
-    name = "test_optimization_go_sdk",
-    version = "<go-version>",
-)
-use_repo(test_optimization_go_sdk, "test_optimization_go_sdk")
-
-orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
-orchestrion.from_source(
-    version = "v1.12.0",
-    dd_trace_go_versions = {
-        "github.com/DataDog/dd-trace-go/v2": "v2.9.1",
-        "github.com/DataDog/dd-trace-go/contrib/net/http/v2": "v2.9.1",
-        "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": "v2.9.1",
-    },
-    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
-    go_sdk_version = "<go-version>",
-)
-use_repo(orchestrion, "rules_go_orchestrion_tool")
-```
+Test payloads use the Bazel file-output contract: Mini writes JSON files under
+`TEST_UNDECLARED_OUTPUTS_DIR`, and the uploader enriches those JSON files with
+repository and Bazel metadata. The ddtest release is pinned by the Go companion;
+the consumer's `go.mod` needs no Datadog requirement, and enabled builds need no
+host `go` binary. The configuration is workspace-wide and is not repeated for
+each service or test. The ddtest side of this integration is documented in
+[ddtest's Bazel guide](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md).
 
 The maintained repository integration scripts validate the hermetic Go path
 with explicit Bazel flags in the script itself. There is no special repo-root
 `--config=hermetic` shortcut for this flow.
-
-If all three selection settings are omitted, the legacy default is still
-`v2.9.1`. Manual setups must keep the local Go module pins on the same effective
-versions, or the build will stop with a mismatch error. Do not combine
-`dd_trace_go_pin_files`, `dd_trace_go_version`, or `dd_trace_go_versions` in
-the same `orchestrion.from_source(...)` call.
-Bootstrap also refuses to take over tracer settings that are already managed
-manually outside its own managed block.
 
 ### Basic usage
 
@@ -2008,12 +1866,13 @@ load("@test_optimization_data//:export.bzl", "topt_data")
 
 go_library(
     name = "pkg_lib",
-    srcs = ["*.go"],
+    srcs = ["pkg.go"],
+    importpath = "github.com/example/service/pkg",
 )
 
 dd_topt_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],  # enables provider-based importpath inference
     topt_data = topt_data,
 )
@@ -2022,62 +1881,48 @@ dd_topt_go_test(
 `dd_topt_go_test` enables CI Visibility and payload-to-files mode by default,
 so opt-in Go tests emit payload files without extra `--test_env` settings.
 
-### Go Orchestrion mode selection
+### What the macro builds
 
-`dd_topt_go_test` accepts `orchestrion_mode`:
+For an enabled export, `dd_topt_go_test` creates:
 
-| Value | Description |
-|-------|-------------|
-| `general` | Default. Preserves broad generic Orchestrion behavior for consumers that need instrumentation beyond the Test Optimization-only Go testing path. |
-| `test_optimization` | Standard Go `testing` Test Optimization mode. Keeps the stdlib `testing`, synthetic `testmain`, helper packagefile, importcfg, and link support needed for payloads while leaving customer package compiles and external `_test` package compiles on the normal rules_go path. |
+- a hidden raw `go_test` named `<name>__raw_go_test`, tagged `manual`, with the
+  caller's attributes, built with the Go SDK that `ddtest instrument`
+  instruments;
+- Mini's `@topt_go_ddtest_mini//testopt` library in that test's `deps`, unless
+  they already name it;
+- a registration file for the test package, generated from the package clauses
+  of `srcs`;
+- the public `<name>` test, which runs the raw test and copies
+  `bazel_target_metadata.json` next to the payloads.
 
-For standard Go `testing` onboarding, including large WORKSPACE monorepos that
-only need Test Optimization payloads, use the `test_optimization` mode shown
-next. The basic snippet above leaves the default `general` mode implicit.
+The public test's transition sets `@io_bazel_rules_go//go/toolchain:sdk_name`
+to `ddto`, and only the instrumented toolchains match that value. Other targets
+keep the workspace's normal Go toolchain. If a test would link a copy of Mini's
+packages from another repository, such as `go_deps`, analysis fails with the
+`override_repo` recipe; see
+[Troubleshooting](docs/Troubleshooting.md#analysis-fails-test-would-link-mini-twice).
 
-### Standard `testing` Orchestrion mode
+The macro also applies test-binary-only linker flags (`-s -w`) in Bazel modes
+where rules_go is not already stripping and the build does not ask for debug or
+unstripped binaries. Set `enable_test_binary_linker_optimization = False` on a
+specific `dd_topt_go_test` target or repo-local wrapper if a consumer needs the
+exact caller-provided linker flags. A `no-remote-exec` tag applies only to the
+`TestRunner` action; compile and link actions stay remote-capable.
 
-`dd_topt_go_test` also accepts:
+Target metadata records the instrumentation in
+`bazel.go.instrumentation.backend`, `bazel.go.instrumentation.version`,
+`bazel.go.instrumentation.release`, `bazel.go.instrumentation.contract`,
+`bazel.go.sdk.name`, and `bazel.go.sdk.version`. See
+[Go target metadata](docs/Configuration_Reference.md#go-target-metadata).
 
-```bzl
-dd_topt_go_test(
-    name = "pkg_go_test",
-    srcs = ["*_test.go"],
-    embed = [":pkg_lib"],
-    orchestrion_mode = "test_optimization",
-    orchestrion_pin_files = [
-        "//:go.mod",
-        "//:go.sum",
-        "//:orchestrion.tool.go",
-        "//:orchestrion.yml",
-    ],
-    topt_data = topt_data,
-)
-```
-
-In this mode, the Go fork keeps the standard-library `testing` path,
-synthetic `testmain` helper packagefiles, importcfg rewrites, and final link
-support needed for Test Optimization payloads. Customer package compiles and
-external `_test` package compiles stay on the normal rules_go compile path.
-
-When enabled, the macro also applies test-binary-only linker flags in Bazel modes
-where rules_go is not already stripping. Set
-`enable_test_binary_linker_optimization = False` on a specific
-`dd_topt_go_test` target or repo-local wrapper if a consumer needs the exact
-caller-provided linker flags during rollout.
-
-This mode is for standard Go `testing` support. Automatic `testify/suite`
-instrumentation is not supported in `test_optimization` mode.
-
-If the tracer needs runtime-visible source files for AST-derived metadata such
-as `test.source.end`, enable source staging explicitly:
+If the test runtime needs runtime-visible source files for metadata such as
+`test.source.end`, enable source staging explicitly:
 
 ```bzl
 dd_topt_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],
-    orchestrion_mode = "test_optimization",
     stage_sources = True,
     topt_data = topt_data,
 )
@@ -2101,9 +1946,8 @@ Declare fixture files explicitly in `data`:
 ```bzl
 dd_topt_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     data = glob(["testdata/**"]),
-    orchestrion_mode = "test_optimization",
     topt_data = topt_data,
 )
 ```
@@ -2140,10 +1984,9 @@ module suffix:
 ```bzl
 dd_topt_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
+    srcs = ["pkg_test.go"],
     embed = [":pkg_lib"],
     module_label_override = "github_com_example_custom_pkg",
-    orchestrion_mode = "test_optimization",
     topt_data = topt_data,
 )
 ```
@@ -2168,8 +2011,7 @@ load("@test_optimization_data//:export.bzl", "topt_data_by_service")
 
 dd_topt_go_test(
     name = "pkg_go_test",
-    srcs = ["*_test.go"],
-    orchestrion_mode = "test_optimization",
+    srcs = ["pkg_test.go"],
     topt_data = topt_data_by_service,   # pass mapping
     topt_service = "go_service_a",      # select service
 )

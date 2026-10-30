@@ -62,23 +62,12 @@ This product includes software developed at Datadog
 - Python tooling tests:
   - `bash tools/tests/python/run_python_tools_test.sh`
   - `./bazelw test //tools/tests/python:python_tools_test`
-- rules_go variant verification:
-  - `python3 tools/dev/generate_rules_go_fork_maps.py --check`
-  - `python3 tools/dev/materialize_rules_go_fork.py check --all`
-  - `python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt`
-  - `python3 tools/dev/verify_rules_go_profiles.py --profile bzlmod_runtime --public-denylist tools/dev/private_leak_public_denylist.txt`
-    applies the generated patch to clean upstream rules_go and runs the same
-    instrumented CGO/reproducibility smoke with Bzlmod enabled and WORKSPACE
-    disabled. CI runs both profiles for every maintained upstream.
-  - `python3 tools/dev/check_release_archive_contents.py`
-  - `python3 tools/dev/diff_rules_go_fork.py --all --write-report`
 - Optional Python tooling dependencies (for local script execution):
   - `python3 -m pip install --require-hashes -r tools/requirements.txt`
 - Local lint prerequisites (match CI tooling):
   - `shellcheck` (shell lint lane)
   - `buildifier` (Starlark formatting lane)
   - `jq` (integration harness payload/CODEOWNERS checks)
-  - `zstd` (rules_go compact execution-log verification)
 - Optional pre-commit setup:
   - `python3 -m pip install pre-commit && pre-commit install`
 - Optional Python syntax smoke check when editing tooling:
@@ -103,88 +92,56 @@ This product includes software developed at Datadog
     `--config=test-optimization` as the only user-facing switch. The shared
     config entry is
     `common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1`.
-  - Go also sets the existing `rules_go` Orchestrion `enabled=true`
-    build setting. Python-only consumers must not declare that Go-only label.
+  - Go needs no other build setting: an instrumented test selects the Go SDK
+    that `ddtest instrument` instruments through its own transition.
   - Omitting the config is the documented complete opt-out for Go and Python:
-    metadata repositories use disabled stubs when `enabled_by_env = True`, Go
-    aliases select local empty targets, and Python keeps the consumer runner
-    without Test Optimization wiring.
+    metadata repositories use disabled stubs when `enabled_by_env = True`,
+    `dd_topt_go_test` creates a plain `go_test`, and Python keeps the consumer
+    runner without Test Optimization wiring.
   - Other companions retain their existing enablement contract. Do not add
     `enabled_by_env = True` to their sync repositories until their runtime
     wrapper implements and tests the disabled export contract.
-  - Do not add a consumer-local Test Optimization bool flag or a second Go
-    Orchestrion repository chooser.
+  - Do not add a consumer-local Test Optimization bool flag.
 - Go consumer integration harnesses:
-  - Bzlmod default smoke:
-    `tools/tests/integration/run_bzlmod_go_integration.sh`
-  - WORKSPACE default smoke:
-    `tools/tests/integration/run_workspace_go_integration.sh`
-  - WORKSPACE base, rules_go v0_60_0:
-    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - Bzlmod base, rules_go v0_60_0:
-    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
-  - WORKSPACE base, rules_go v0_61_1:
-    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - Bzlmod base, rules_go v0_61_1:
-    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_61_1 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
-  - WORKSPACE base, rules_go v0_62_0:
-    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - Bzlmod base, rules_go v0_62_0:
-    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_62_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
-  - WORKSPACE base, rules_go v0_63_0:
-    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_63_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - Bzlmod base, rules_go v0_63_0:
-    `USE_BAZEL_VERSION=8.8.2 RULES_GO_UPSTREAM=v0_63_0 RULES_GO_VARIANT=base tools/tests/integration/run_bzlmod_go_integration.sh`
-  - Disabled alias gate for a fresh output root:
-    `WINDOWS_DISABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - Enabled alias and payload gate with valid Orchestrion pins:
-    `WINDOWS_ENABLED_SMOKE_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - Same-output-root disabled then enabled transition for the public central
-    wrapper:
-    `CONFIG_TRANSITION_ONLY=1 RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - Cold bootstrap without host Go, using the Bazel-managed SDK and an isolated
-    bootstrap cache:
-    `cache_root="$(mktemp -d)"; CONFIG_TRANSITION_ONLY=1 FORBID_HOST_GO=1 EXPECTED_ORCHESTRION_CACHE_PHASE=extensions.bootstrap_cache_miss XDG_CACHE_HOME="$cache_root" RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/tests/integration/run_workspace_go_integration.sh`
-  - Repeat that command with the same `XDG_CACHE_HOME` and
-    `EXPECTED_ORCHESTRION_CACHE_PHASE=extensions.bootstrap_cache_hit` to prove
-    warm restoration also avoids host Go. Run both commands for WORKSPACE and
-    Bzlmod; CI covers both supported `rules_go` upstreams.
-  - Each script now validates:
-    - the same consumer-owned central wrapper call expands to a raw `go_test`
-      without the named config and to the existing Orchestrion-backed shape
-      with it
-    - disabled then enabled resolution on one fixture workspace and output
-      root, with no intervening clean or shutdown
-    - no hidden Test Optimization targets, empty Orchestrion aliases, exact
-      disabled stubs, zero metadata HTTP requests, and no payload while
-      disabled
-    - normal mode
-    - hermetic mode with the inline CI sandbox/network-blocking flags
+  - Bzlmod: `tools/tests/integration/run_bzlmod_go_integration.sh`
+  - WORKSPACE: `tools/tests/integration/run_workspace_go_integration.sh`
+  - Both scripts build a temporary consumer from this checkout with upstream
+    `rules_go` and the Go SDK that `ddtest instrument` instruments. Bzlmod
+    consumes the repository through `archive_override(...)`; WORKSPACE runs a
+    local and an archive fixture.
+  - `RULES_GO_VERSION` (default `0.60.0`) selects upstream `rules_go`: a BCR
+    `bazel_dep` in Bzlmod, or the release zip with its BCR integrity in
+    WORKSPACE. `GO_VERSION` (default `1.25.0`) selects the Go SDK. `rules_go`
+    `0.65.0` requires Go 1.26:
+    `USE_BAZEL_VERSION=8.8.2 RULES_GO_VERSION=0.65.0 GO_VERSION=1.26.3 tools/tests/integration/run_workspace_go_integration.sh`
+  - A new `rules_go` version in the WORKSPACE script needs its integrity in
+    `rules_go_integrity`.
+  - `FORBID_HOST_GO=1` shadows the host `go` with a failing sentinel (Unix
+    only). ddtest needs no host Go, and CI runs every shard this way.
+  - `WINDOWS_SMOKE_ONLY=1` (Bzlmod) runs only the instrumented test and its
+    payload check, for Windows hosts without the hermetic sandbox:
+    `WINDOWS_SMOKE_ONLY=1 tools/tests/integration/run_bzlmod_go_integration.sh`
+  - `INTEGRATION_SCENARIO_MODE=release` runs only the archive fixture in
+    WORKSPACE; `full` (default) runs both.
+  - Set `KEEP_TMP=1` to keep the generated workspaces after a failure.
+  - Each script validates:
+    - normal mode, and hermetic mode with the inline CI sandbox/network-blocking flags
+    - JSON payloads, the `bazel.go.instrumentation.*` and `bazel.go.sdk.*`
+      target metadata, and the uploader dry run
     - strict BEP fresh/cached uploader behavior
-    - structural `aquery` assertions for the Orchestrion offline module proxy wiring
-  - For Go Orchestrion changes, run each relevant script with both
-    `ORCHESTRION_MODE=general` and `ORCHESTRION_MODE=test_optimization`; the
-    optimized mode is the standard Go `testing` Test Optimization path and
-    should still produce payloads.
-- Vendored rules_go variant smoke:
-  - `RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_smoke.sh`
-  - when adding a new upstream, run the same commands with
-    `RULES_GO_UPSTREAM=<new_upstream>`
-  - copies the selected variant into a temp tree, applies the maintainer-only
-    proof overlay, and runs the fast vendored-fork regression set
-- Vendored rules_go extended variant coverage:
-  - `RULES_GO_UPSTREAM=v0_60_0 RULES_GO_VARIANT=base tools/dev/run_rules_go_variant_extended.sh`
-  - runs the slower extended regression set against the selected variant
+    - structural `aquery` assertions (`assert_ddtest_aquery.py`) in the
+      default, `opt`, and no-strip modes: compiles, link, and standard library
+      use the instrumented SDK, the compile gets the registration file, the
+      link gets Mini's `testopt`, and only the `TestRunner` has `no-remote-exec`
+    - (Bzlmod) a build of the library alone fetches neither the instrumented
+      SDK nor Mini, and contacts no metadata server while Test Optimization is
+      disabled
 - Hermetic smoke (mirror CI flags):
   - run the same test commands with sandbox/network-blocking flags from `.github/workflows/ci.yml`
 - Cross-repo fixture validation for mixed-runtime changes:
   - In `../rules_test_optimization_tests/MODULE.bazel`, temporarily enable the
     documented `local_path_override(...)` entries for core and each affected
     companion module so the fixture repo resolves this checkout.
-  - If the change touches a rules_go fork tree or related Go
-    bootstrap/orchestrion wiring, also add a temporary
-    `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/<registry-resolved-tree-path>")`
-    there so the sibling repo resolves the selected local fork.
   - For BEP artifact-resolution changes, run the Go fixture scripts with
     `RTO_LOCAL_ARCHIVE=1 RTO_BEP_ARTIFACT_STAGING=1` so the fixture validates
     staged BEP artifacts instead of only the pinned release/local-output path:
@@ -218,29 +175,19 @@ This product includes software developed at Datadog
   - core tests with hermetic flags
   - companion module tests with hermetic flags
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
-- `workspace-compat`:
-  - one shard per supported `rules_go` upstream and WORKSPACE/Bzlmod pair
-  - general and Test Optimization modes run sequentially inside each shard
+- `workspace-compat-shard (rules_go <version>, <module system>)`:
+  - one shard per supported `rules_go` version (`0.60.0`, `0.61.1`, `0.62.0`,
+    `0.63.0`, `0.64.2`, `0.65.0`) and WORKSPACE/Bzlmod pair, with
+    `FORBID_HOST_GO=1`; `0.65.0` runs with Go `1.26.3`
   - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
-- `go-bootstrap-no-host`:
-  - one shard per supported `rules_go` upstream and WORKSPACE/Bzlmod pair
-  - installs Bazelisk without Go and shadows any hosted-runner `go` binary with
-    a failing sentinel
-  - proves both a cold Bazel-managed-SDK build and warm bootstrap-cache restore
-    without invoking host Go
-- `rules-go-variant-smoke`:
-  - vendored `rules_go` variant verification and fast fork regression coverage
-  - one independent shard per supported upstream
-  - Linux-only by design so the PR gate stays fast and stable
-- `rules-go-variant-extended`:
-  - nightly/manual vendored `rules_go` variant coverage for slower XML, proto, cross, and cgo regression suites
+- `workspace-compat`:
+  - requires every `workspace-compat-shard` to succeed when full CI runs
+- `windows-go-smoke`:
+  - runs `WINDOWS_SMOKE_ONLY=1 tools/tests/integration/run_bzlmod_go_integration.sh`
+    on Windows: one instrumented Go test and its payload check
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)
-  - global fork drift checks plus x86-64 and ARM64 consumer patch-profile shards
-    for every supported `rules_go` upstream; each profile shard rebuilds the
-    cache-critical Test Optimization actions twice from isolated output roots
-    and requires identical action keys and output bytes
   - shell scripts, PowerShell, Buildifier, gofmt, schema sync checks, fixture JSON checks, and Python tooling tests
 - Workflow dependency pinning:
   - Keep GitHub Actions pinned by commit SHA and preserve the `# vX.Y.Z` comment.
@@ -292,9 +239,9 @@ This product includes software developed at Datadog
 - [ ] For manifest-driven changes, proved no committed target/service mapping,
   exact target-set validation, disabled no-fetch behavior, and deterministic
   rendering.
-- [ ] For Go Orchestrion changes, documented any `orchestrion_mode` behavior,
-  pin-file or explicit-version behavior, unsupported `testify/suite` scope,
-  opt-out flags, and payload metadata changes.
+- [ ] For Go instrumentation changes, documented any change to the pinned
+  ddtest release, the `topt_go_ddtest` SDK configuration, opt-out flags, and
+  payload metadata.
 - [ ] Updated `LICENSE-3rdparty.csv` for dependency or vendored-code changes.
 - [ ] Confirmed no stale references to removed legacy paths (for example
   `//tools/go:*`, replaced by `modules/go/...` targets).
@@ -313,8 +260,8 @@ This product includes software developed at Datadog
     Review the generated notes/assets, then publish explicitly.
   - The draft contains `rules_test_optimization-X.Y.Z.tar.gz`, `SHA256SUMS`,
     `release.json`, `INSTALL.md`, and `RELEASE_NOTES.md`. Notes come from the
-    matching `CHANGELOG.md` section. Installation blocks cover core, all six
-    companions, and every maintained Go fork, with one archive and checksum.
+    matching `CHANGELOG.md` section. Installation blocks cover core and all six
+    companions, with one archive and checksum.
   - The archive contains only the committed revision, including executable
     modes. Packaging uses a fixed gzip header, so repeated builds of the same
     revision with the same toolchain produce the same bytes. The workflow
