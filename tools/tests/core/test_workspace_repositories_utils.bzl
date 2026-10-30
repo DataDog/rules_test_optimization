@@ -21,7 +21,7 @@ def _base_git_specs_test(ctx):
     asserts.equals(env, "git_repository", specs[0]["kind"])
     asserts.equals(env, "datadog-rules-test-optimization-go", specs[0]["attrs"]["name"])
     asserts.equals(env, "modules/go", specs[0]["attrs"]["strip_prefix"])
-    asserts.equals(env, {"@rules_go": "@io_bazel_rules_go"}, specs[0]["attrs"]["repo_mapping"])
+    asserts.equals(env, {"@io_bazel_rules_go": "@io_bazel_rules_go"}, specs[0]["attrs"]["repo_mapping"])
     asserts.equals(env, "git_repository", specs[1]["kind"])
     asserts.equals(env, "io_bazel_rules_go", specs[1]["attrs"]["name"])
     asserts.equals(env, "third_party/rgo/v0_60_0/base", specs[1]["attrs"]["strip_prefix"])
@@ -57,7 +57,7 @@ def _custom_rules_go_repo_name_test(ctx):
         rto_commit = "abc123",
         rules_go_repo_name = "custom_rules_go",
     )
-    asserts.equals(env, {"@rules_go": "@custom_rules_go"}, specs[0]["attrs"]["repo_mapping"])
+    asserts.equals(env, {"@io_bazel_rules_go": "@custom_rules_go"}, specs[0]["attrs"]["repo_mapping"])
     asserts.equals(env, "custom_rules_go", specs[1]["attrs"]["name"])
     return unittest.end(env)
 

@@ -8,7 +8,7 @@
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
 load("@datadog-rules-test-optimization-go//:topt_go_infer.bzl", "topt_go_payloads_selector")
-load("@rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
 
 _COMMON_MODULE_GROUPS = [
     ":module_example_com_explicit_pkg",

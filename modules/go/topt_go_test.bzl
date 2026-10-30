@@ -75,8 +75,8 @@ load(
     "split_test_wrapper_kwargs",
     _is_dict = "is_dict",
 )
-load("@rules_go//go:def.bzl", "go_test")
-load("@rules_go//go/private/orchestrion:pin_files.bzl", _orchestrion_pin_files = "orchestrion_pin_files")
+load("@io_bazel_rules_go//go:def.bzl", "go_test")
+load("@io_bazel_rules_go//go/private/orchestrion:pin_files.bzl", _orchestrion_pin_files = "orchestrion_pin_files")
 load("//:topt_go_infer.bzl", "topt_go_bazel_metadata", "topt_go_payloads_selector")
 load("//:topt_go_orchestrion.bzl", "orch_go_test")
 
@@ -385,7 +385,7 @@ def dd_topt_go_test(
         aggregator mapping (topt_data_by_service) exported by the multi-service repo.
         Used to derive the repo alias and whether to include per-module files.
       go_test_rule: Optional override for the underlying rules_go go_test rule.
-        Defaults to `go_test` from `@rules_go//go:def.bzl`. This hook is for
+        Defaults to `go_test` from `@io_bazel_rules_go//go:def.bzl`. This hook is for
         tests and low-level experiments; repository policy wrappers should stay
         outside `dd_topt_go_test`.
       topt_service: Optional when passing the aggregator mapping; selects which service to use.

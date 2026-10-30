@@ -6,11 +6,11 @@
 
 """Build target for warming the Test Optimization Go standard library."""
 
-load("@rules_go//go/private:providers.bzl", "GoStdLib")
-load("@rules_go//go/private/rules:transition.bzl", "go_transition")
+load("@io_bazel_rules_go//go/private:providers.bzl", "GoStdLib")
+load("@io_bazel_rules_go//go/private/rules:transition.bzl", "go_transition")
 
-_ORCHESTRION_ENABLED_SETTING = "@rules_go//go/private/orchestrion:enabled"
-_ORCHESTRION_MODE_SETTING = "@rules_go//go/private/orchestrion:mode"
+_ORCHESTRION_ENABLED_SETTING = "@io_bazel_rules_go//go/private/orchestrion:enabled"
+_ORCHESTRION_MODE_SETTING = "@io_bazel_rules_go//go/private/orchestrion:mode"
 _ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
 def _stdlib_warmup_transition_impl(_settings, _attr):
@@ -57,7 +57,7 @@ _go_transition_stdlib_warmup = rule(
     implementation = _go_transition_stdlib_warmup_impl,
     attrs = {
         "_stdlib": attr.label(
-            default = "@rules_go//:stdlib",
+            default = "@io_bazel_rules_go//:stdlib",
             providers = [GoStdLib],
         ),
         "_allowlist_function_transition": attr.label(

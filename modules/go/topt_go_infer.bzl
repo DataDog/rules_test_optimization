@@ -47,7 +47,7 @@ load(
 
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
 # GoArchive still exists separately.
-load("@rules_go//go:def.bzl", "GoArchive", "GoInfo")
+load("@io_bazel_rules_go//go:def.bzl", "GoArchive", "GoInfo")
 
 _select_module_group_name = select_module_group_name
 _selected_payload_runfiles = selected_payload_runfiles
@@ -418,7 +418,7 @@ topt_go_bazel_metadata = rule(
         "test_binary_linker_optimization": attr.bool(default = False),
         "_orchestrion_tool": attr.label(
             allow_files = True,
-            default = "@rules_go//go/private/orchestrion:tool_binary",
+            default = "@io_bazel_rules_go//go/private/orchestrion:tool_binary",
         ),
     },
 )

@@ -612,7 +612,7 @@ class RulesGoProfileVerifierTests(unittest.TestCase):
             self.assertIn('path = "%s"' % (root / "patched_rules_go").as_posix(), module)
             self.assertNotIn("go/private/orchestrion:extensions.bzl", module)
             transition = workspace.joinpath("transition_rule/MODULE.bazel").read_text()
-            self.assertIn('bazel_dep(name = "rules_go", version = "0.63.0")', transition)
+            self.assertIn('bazel_dep(name = "rules_go", version = "0.63.0", repo_name = "io_bazel_rules_go")', transition)
             self.assertIn('bazel_dep(name = "platforms", version = "1.0.0")', transition)
 
     def test_smoke_rejects_unknown_module_system_before_downloading(self) -> None:

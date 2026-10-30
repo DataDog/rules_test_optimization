@@ -48,7 +48,7 @@ load(
     "validate_orchestrion_mode_for_tests",
     "validate_test_optimization_pin_files_for_tests",
 )
-load("@rules_go//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
+load("@io_bazel_rules_go//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
 ToptGoMacroCaptureInfo = provider(
     doc = "Captured arguments forwarded by dd_topt_go_test to the underlying go_test rule.",
@@ -154,7 +154,7 @@ _go_test_transition_mode_rule = rule(
         "rundir": attr.string(),
         "srcs": attr.label_list(allow_files = True),
         "_orchestrion_mode": attr.label(
-            default = "@rules_go//go/private/orchestrion:mode",
+            default = "@io_bazel_rules_go//go/private/orchestrion:mode",
             providers = [BuildSettingInfo],
         ),
     },
@@ -1296,8 +1296,8 @@ def _orch_transition_forwards_mode_test_impl(ctx):
     env = unittest.begin(ctx)
     result = orch_transition_impl_for_tests(None, struct(orchestrion_mode = "test_optimization"))
     asserts.equals(env, 2, len(result))
-    asserts.true(env, result["@rules_go//go/private/orchestrion:enabled"])
-    asserts.equals(env, "test_optimization", result["@rules_go//go/private/orchestrion:mode"])
+    asserts.true(env, result["@io_bazel_rules_go//go/private/orchestrion:enabled"])
+    asserts.equals(env, "test_optimization", result["@io_bazel_rules_go//go/private/orchestrion:mode"])
     return unittest.end(env)
 
 def _stdlib_warmup_transition_selects_test_optimization_test_impl(ctx):
@@ -1305,8 +1305,8 @@ def _stdlib_warmup_transition_selects_test_optimization_test_impl(ctx):
     env = unittest.begin(ctx)
     result = stdlib_warmup_transition_impl_for_tests(None, None)
     asserts.equals(env, 2, len(result))
-    asserts.true(env, result["@rules_go//go/private/orchestrion:enabled"])
-    asserts.equals(env, "test_optimization", result["@rules_go//go/private/orchestrion:mode"])
+    asserts.true(env, result["@io_bazel_rules_go//go/private/orchestrion:enabled"])
+    asserts.equals(env, "test_optimization", result["@io_bazel_rules_go//go/private/orchestrion:mode"])
     return unittest.end(env)
 
 def _stdlib_warmup_tags_test_impl(ctx):
@@ -1584,6 +1584,6 @@ orch_wrapper_materialized_actual_non_windows_test = analysistest.make(
 orch_wrapper_materialized_actual_windows_test = analysistest.make(
     _orch_wrapper_materialized_actual_windows_test_impl,
     config_settings = {
-        "//command_line_option:platforms": str(Label("@rules_go//go/toolchain:windows_amd64")),
+        "//command_line_option:platforms": str(Label("@io_bazel_rules_go//go/toolchain:windows_amd64")),
     },
 )

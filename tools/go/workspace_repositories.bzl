@@ -141,7 +141,7 @@ def _build_workspace_repository_specs(
             _fail_existing_repo(repo_name)
 
     rules_go_strip_prefix = rules_go_fork_strip_prefix(rules_go_upstream, rules_go_variant)
-    companion_repo_mapping = {"@rules_go": "@" + rules_go_repo_name}
+    companion_repo_mapping = {"@io_bazel_rules_go": "@" + rules_go_repo_name}
 
     specs = []
     if datadog_fetch == "git":

@@ -96,7 +96,7 @@ def archive_call(metadata: dict, name: str, prefix: str, *, bzlmod: bool) -> str
     function, attribute = ("archive_override", "module_name") if bzlmod else ("http_archive", "name")
     repository_mapping = ""
     if not bzlmod and name == "datadog-rules-test-optimization-go":
-        repository_mapping = '    repo_mapping = {"@rules_go": "@io_bazel_rules_go"},\n'
+        repository_mapping = '    repo_mapping = {"@io_bazel_rules_go": "@io_bazel_rules_go"},\n'
     return (
         f"{function}(\n"
         f"    {attribute} = {json.dumps(name)},\n"

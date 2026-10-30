@@ -430,7 +430,7 @@ local_repository(
 local_repository(
     name = "datadog_go_transition",
     path = "%s",
-    repo_mapping = {"@rules_go": "@io_bazel_rules_go"},
+    repo_mapping = {"@io_bazel_rules_go": "@io_bazel_rules_go"},
 )
 
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
@@ -546,7 +546,7 @@ def write_smoke_module(
     transition_repo = workspace / "transition_rule"
     transition_repo.joinpath("MODULE.bazel").write_text(
         'module(name = "datadog_go_transition")\n'
-        'bazel_dep(name = "rules_go", version = "%s")\n'
+        'bazel_dep(name = "rules_go", version = "%s", repo_name = "io_bazel_rules_go")\n'
         'bazel_dep(name = "platforms", version = "1.0.0")\n' % rules_go_version,
         encoding="utf-8",
     )

@@ -7,7 +7,7 @@
 """Thin WORKSPACE wrapper around rules_go's public Orchestrion repository API."""
 
 load(
-    "@rules_go//go:orchestrion_workspace.bzl",
+    "@io_bazel_rules_go//go:orchestrion_workspace.bzl",
     "go_orchestrion_tool_repo",
 )
 

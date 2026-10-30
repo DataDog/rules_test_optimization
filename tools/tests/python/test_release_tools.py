@@ -193,7 +193,7 @@ class ReleaseBundleTests(unittest.TestCase):
                     call = ast.parse(block).body[0].value
                     attrs = {keyword.arg: ast.literal_eval(keyword.value) for keyword in call.keywords}
                     if not bzlmod and name == "datadog-rules-test-optimization-go":
-                        self.assertEqual(attrs.get("repo_mapping"), {"@rules_go": "@io_bazel_rules_go"})
+                        self.assertEqual(attrs.get("repo_mapping"), {"@io_bazel_rules_go": "@io_bazel_rules_go"})
                     else:
                         self.assertNotIn("repo_mapping", attrs)
 

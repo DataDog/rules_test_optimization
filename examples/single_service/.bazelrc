@@ -3,7 +3,7 @@ build --enable_runfiles
 
 # One user-facing switch for Go/Python metadata bootstrap and Go Orchestrion analysis.
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
+build:test-optimization --@io_bazel_rules_go//go/private/orchestrion:enabled=true
 
 # Hermetic config (sandbox, stable env, network blocking)
 build:hermetic --incompatible_strict_action_env

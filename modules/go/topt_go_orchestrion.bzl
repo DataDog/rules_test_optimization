@@ -7,8 +7,8 @@
 """Internal Orchestrion wrapper rule for Go tests."""
 
 _BAZEL_TARGET_METADATA_OUTPUT = "bazel_target_metadata.json"
-_ORCHESTRION_ENABLED_SETTING = "@rules_go//go/private/orchestrion:enabled"
-_ORCHESTRION_MODE_SETTING = "@rules_go//go/private/orchestrion:mode"
+_ORCHESTRION_ENABLED_SETTING = "@io_bazel_rules_go//go/private/orchestrion:enabled"
+_ORCHESTRION_MODE_SETTING = "@io_bazel_rules_go//go/private/orchestrion:mode"
 _ORCHESTRION_MODE_GENERAL = "general"
 _ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
 
