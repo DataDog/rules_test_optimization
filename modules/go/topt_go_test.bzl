@@ -150,7 +150,7 @@ def _reject_removed_orchestrion_attrs(kwargs):
 
 reject_removed_orchestrion_attrs_for_tests = _reject_removed_orchestrion_attrs
 
-def _with_mini(name, deps):
+def _with_mini(name, deps, target_compatible_with):
     """Add Mini's testopt to the raw test's deps unless they already name it.
 
     After a workspace overrides go_deps' copy of Mini's module with the
@@ -166,6 +166,7 @@ def _with_mini(name, deps):
             name = alias_name,
             actual = MINI_TESTOPT,
             tags = ["manual"],
+            target_compatible_with = target_compatible_with,
             visibility = ["//visibility:private"],
         )
         return deps + [":" + alias_name]
@@ -639,7 +640,7 @@ def dd_topt_go_test(
         visibility = ["//visibility:private"],
     )
     kwargs["srcs"] = _concat_label_list_values(kwargs.get("srcs"), [":" + registration_name])
-    kwargs["deps"] = _with_mini(name, kwargs.get("deps"))
+    kwargs["deps"] = _with_mini(name, kwargs.get("deps"), wrapper_kwargs.get("target_compatible_with", []))
 
     # Create the hidden raw go_test first, then expose it through a public
     # wrapper target that builds it with the instrumentation.

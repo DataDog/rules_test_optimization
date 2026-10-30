@@ -403,15 +403,18 @@ def go_macro_helper_compatibility_fixture(name):
             ("composed", {"target_compatible_with": ["@platforms//os:linux"] + gate}),
         ]:
             target_name = mode + "_" + case
+
+            # Configurable deps make the macro add Mini through an alias.
             dd_topt_go_test(
                 name = target_name,
                 topt_data = descriptor,
                 go_test_rule = _go_test_capture_rule,
                 tags = ["manual"],
+                deps = select({"//conditions:default": []}),
                 **attrs
             )
             expected = native.existing_rule(target_name).get("target_compatible_with", ())
-            for suffix in ["__raw_go_test", "_topt_payloads", "_topt_bazel_metadata", "_ddtest_registration"]:
+            for suffix in ["__raw_go_test", "_topt_payloads", "_topt_bazel_metadata", "_ddtest_registration", "_ddtest_mini"]:
                 actual = native.existing_rule(target_name + suffix).get("target_compatible_with", ())
                 loadingtest.equals(env, target_name + suffix, str(expected), str(actual))
 
@@ -425,6 +428,7 @@ def go_macro_helper_compatibility_fixture(name):
         ),
         go_test_rule = _go_test_capture_rule,
         tags = ["manual"],
+        deps = select({"//conditions:default": []}),
         target_compatible_with = select({
             ":enabled": [],
             "//conditions:default": ["@platforms//:incompatible"],

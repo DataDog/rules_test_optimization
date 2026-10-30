@@ -54,6 +54,7 @@ in this release.
 | Instrumented Go test fails with "need a Go SDK to instrument" | `topt_go_ddtest.sdk(...)` in the root `MODULE.bazel`, or `topt_go_ddtest_workspace_repositories(...)` in WORKSPACE | Instrumented test fails: no Go SDK to instrument |
 | Go test analysis fails with "would link Mini's packages twice" | `override_repo` of go_deps' `github.com/DataDog/ddtest/ddto` | Analysis fails: test would link Mini twice |
 | Repository rule fails with "DDTEST_INSTRUMENT has" | the pinned ddtest release | DDTEST_INSTRUMENT contract mismatch |
+| A Go target under an instrumented test builds with the wrong Go version | an `sdk_version` transition below the test | Instrumented tests ignore sdk_version |
 | Go bootstrap stops on a `rules_go` override | override that points at the removed Datadog fork | Bootstrap stops on a rules_go fork override |
 | WORKSPACE archive pins fail after a PR was squash-merged | generated pins commit reachability and archive SHA | Published Go pins |
 | Private/internal WORKSPACE fetch returns 404 | SSH git or authenticated archive access | Private repository fetch |
@@ -1025,6 +1026,26 @@ has no payloads or no `bazel_target_metadata.json`.
 5. **The outputs stayed remote.** With remote execution or a remote cache,
    follow item 4 of
    [Uploader not finding payloads](#uploader-not-finding-payloads).
+
+### Instrumented tests ignore sdk_version
+
+**Symptom**: A Go binary or library that a transition builds with a specific
+Go version, through `@io_bazel_rules_go//go/toolchain:sdk_version`, builds with
+the instrumented SDK when it is a dependency, `data`, or tool of an instrumented
+test, for example a binary that needs a FIPS Go SDK.
+
+**Cause**: The public test's transition sets
+`@io_bazel_rules_go//go/toolchain:sdk_name` to `ddto`, and the instrumented
+toolchains match only that setting. Every Go target in the test's
+configuration, including exec tools, then resolves to the instrumented SDK,
+whatever `sdk_version` a transition below the test sets. That SDK is the
+official Go release that `topt_go_ddtest.sdk(...)` configures, or the base SDK
+from `base_sdk_roots`.
+
+**Solution**: Keep targets that need another Go SDK out of instrumented tests'
+`deps`, `data` and tools, or configure the instrumented SDK with that SDK as
+its base through `base_sdk_roots` when every Go target of the test can use it.
+Targets outside instrumented tests are not affected.
 
 ### Bootstrap stops on a rules_go fork override
 

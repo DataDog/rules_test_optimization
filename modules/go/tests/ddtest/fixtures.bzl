@@ -30,6 +30,7 @@ def _foreign_mini_failure_test_impl(ctx):
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "would link Mini's packages twice")
     asserts.expect_failure(env, "override_repo(go_deps, com_github_datadog_ddtest_ddto")
+    asserts.expect_failure(env, "In WORKSPACE, depend on @topt_go_ddtest_mini labels")
     return analysistest.end(env)
 
 foreign_mini_failure_test = analysistest.make(

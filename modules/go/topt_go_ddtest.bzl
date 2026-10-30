@@ -76,8 +76,10 @@ def foreign_mini_error(test_label, labels):
         "of github.com/DataDog/ddtest/ddto with the generated Mini:\n\n" +
         "    topt_go_ddtest = use_extension(\"@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl\", \"topt_go_ddtest\")\n" +
         "    use_repo(topt_go_ddtest, \"%s\")\n" +
-        "    override_repo(go_deps, com_github_datadog_ddtest_ddto = \"%s\")"
-    ) % (test_label, ", ".join([str(label) for label in labels]), MINI_REPO, MINI_REPO, MINI_REPO)
+        "    override_repo(go_deps, com_github_datadog_ddtest_ddto = \"%s\")\n\n" +
+        "In WORKSPACE, depend on @%s labels instead of another repository's copy " +
+        "of github.com/DataDog/ddtest/ddto."
+    ) % (test_label, ", ".join([str(label) for label in labels]), MINI_REPO, MINI_REPO, MINI_REPO, MINI_REPO)
 
 # --- Registration -------------------------------------------------------
 
