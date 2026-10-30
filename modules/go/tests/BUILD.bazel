@@ -9,6 +9,14 @@ load(
     "dd_topt_go_stdlib_warmup",
 )
 load(
+    ":test_ddtest_repository.bzl",
+    "contract_test",
+    "go_version_from_go_mod_test",
+    "platforms_test",
+    "sdk_config_test",
+    "toolchains_build_content_test",
+)
+load(
     ":test_extension.bzl",
     "go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test",
     "go_single_spec_propagates_non_default_enablement_and_flaky_tests_test",
@@ -190,6 +198,16 @@ go_multi_specs_propagate_non_default_enablement_and_flaky_tests_test(
     size = "small",
     timeout = "short",
 )
+
+contract_test(name = "ddtest_contract_test")
+
+go_version_from_go_mod_test(name = "ddtest_go_version_from_go_mod_test")
+
+platforms_test(name = "ddtest_platforms_test")
+
+sdk_config_test(name = "ddtest_sdk_config_test")
+
+toolchains_build_content_test(name = "ddtest_toolchains_build_content_test")
 
 go_specs_default_to_config_gated_test(
     name = "go_specs_default_to_config_gated_test",
@@ -987,6 +1005,11 @@ test_suite(
         ":build_module_labels_invalid_shape_failure_test",
         ":build_module_labels_unsanitized_entry_failure_test",
         ":build_module_labels_valid_test",
+        ":ddtest_contract_test",
+        ":ddtest_go_version_from_go_mod_test",
+        ":ddtest_platforms_test",
+        ":ddtest_sdk_config_test",
+        ":ddtest_toolchains_build_content_test",
         ":go_macro_ci_visibility_opt_out_wiring_test",
         ":go_macro_default_general_public_wrapper_mode_test",
         ":go_macro_disabled_raw_wiring_test",

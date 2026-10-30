@@ -11,6 +11,7 @@ module(
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 bazel_dep(name = "platforms", version = "1.0.0")
+
 # The SDK repositories that go_wrap_sdk writes load rules_go as
 # @io_bazel_rules_go, so this module sees it under that name.
 bazel_dep(name = "rules_go", version = "0.60.0", repo_name = "io_bazel_rules_go")
@@ -20,6 +21,22 @@ local_path_override(
     module_name = "rules_go",
     path = "../../third_party/rgo/v0_60_0/base",
 )
+
+# The ddtest-instrumented Go SDKs and Mini. The root module configures the SDK
+# with topt_go_ddtest.sdk(...); these toolchains only match tests that the
+# instrumentation transition selects, so other builds fetch nothing.
+topt_go_ddtest = use_extension("//:topt_go_ddtest_extension.bzl", "topt_go_ddtest")
+use_repo(topt_go_ddtest, "topt_go_ddtest_mini", "topt_go_ddtest_toolchains")
+
+register_toolchains("@topt_go_ddtest_toolchains//:all")
+
+# The companion's own tests instrument the official Go SDK.
+topt_go_ddtest_dev = use_extension(
+    "//:topt_go_ddtest_extension.bzl",
+    "topt_go_ddtest",
+    dev_dependency = True,
+)
+topt_go_ddtest_dev.sdk(go_version = "1.26.3")
 
 # Dev-only stub repository so companion-module tests can resolve
 # @test_optimization_data labels without network access.
