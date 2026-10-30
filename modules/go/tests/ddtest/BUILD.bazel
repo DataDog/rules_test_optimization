@@ -27,6 +27,24 @@ dd_topt_go_test(
     ],
 )
 
+# Its configurable deps already name testopt, which the macro adds through an
+# alias.
+dd_topt_go_test(
+    name = "select_deps_test",
+    srcs = [
+        "external_test.go",
+        "instrumented_test.go",
+    ],
+    importpath = "example.com/selectfixture",
+    topt_data = TOPT_DATA,
+    deps = select({
+        "//conditions:default": [
+            "@topt_go_ddtest_mini//propagation",
+            "@topt_go_ddtest_mini//testopt",
+        ],
+    }),
+)
+
 # Its only source comes through embed, which the registration also reads.
 go_library(
     name = "widget",

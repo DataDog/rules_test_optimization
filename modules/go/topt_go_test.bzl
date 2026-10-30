@@ -150,17 +150,25 @@ def _reject_removed_orchestrion_attrs(kwargs):
 
 reject_removed_orchestrion_attrs_for_tests = _reject_removed_orchestrion_attrs
 
-def _with_mini(deps):
+def _with_mini(name, deps):
     """Add Mini's testopt to the raw test's deps unless they already name it.
 
     After a workspace overrides go_deps' copy of Mini's module with the
     generated Mini, a test that uses Mini's Go API already depends on testopt,
-    and Bazel rejects a duplicated label.
+    and Bazel rejects a duplicated label. A select() cannot be inspected, so
+    Mini joins it through an alias: the same archive under another label.
     """
     if deps == None:
         return [MINI_TESTOPT]
     if type(deps) == "select":
-        return deps + [MINI_TESTOPT]
+        alias_name = name + "_ddtest_mini"
+        native.alias(
+            name = alias_name,
+            actual = MINI_TESTOPT,
+            tags = ["manual"],
+            visibility = ["//visibility:private"],
+        )
+        return deps + [":" + alias_name]
     for dep in deps:
         if native.package_relative_label(dep) == MINI_TESTOPT:
             return deps
@@ -631,7 +639,7 @@ def dd_topt_go_test(
         visibility = ["//visibility:private"],
     )
     kwargs["srcs"] = _concat_label_list_values(kwargs.get("srcs"), [":" + registration_name])
-    kwargs["deps"] = _with_mini(kwargs.get("deps"))
+    kwargs["deps"] = _with_mini(name, kwargs.get("deps"))
 
     # Create the hidden raw go_test first, then expose it through a public
     # wrapper target that builds it with the instrumentation.

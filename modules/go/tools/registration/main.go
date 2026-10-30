@@ -50,8 +50,11 @@ func source(name string) string {
 
 // testPackage returns the package that the registration joins: the external
 // test package when a source declares one, the package under test otherwise.
+// Sources without a build constraint decide; constrained ones only decide
+// when no source is unconstrained, since the configuration may exclude them.
 func testPackage(files []string) (string, error) {
-	names := map[string]bool{}
+	unconstrained := map[string]bool{}
+	constrained := map[string]bool{}
 	for _, file := range files {
 		if !strings.HasSuffix(file, ".go") {
 			continue
@@ -60,11 +63,21 @@ func testPackage(files []string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if ignored(parsed.Comments) {
-			continue
+		expr := buildConstraint(parsed.Comments)
+		switch {
+		case expr == nil:
+			unconstrained[parsed.Name.Name] = true
+		case satisfiable(expr):
+			constrained[parsed.Name.Name] = true
 		}
-		names[parsed.Name.Name] = true
 	}
+	if len(unconstrained) > 0 {
+		return choose(unconstrained)
+	}
+	return choose(constrained)
+}
+
+func choose(names map[string]bool) (string, error) {
 	var external, internal []string
 	for name := range names {
 		if strings.HasSuffix(name, "_test") {
@@ -86,25 +99,27 @@ func testPackage(files []string) (string, error) {
 	return "", fmt.Errorf("sources declare packages %s", strings.Join(append(internal, external...), ", "))
 }
 
-// ignored reports whether a //go:build constraint excludes the file on every
-// platform, such as //go:build ignore on generators kept next to tests: the
-// go command never sets the ignore tag. Other constraints, such as !windows,
-// hold for some platform, and rules_go applies them itself.
-func ignored(groups []*ast.CommentGroup) bool {
+// buildConstraint returns the file's //go:build expression, or nil.
+func buildConstraint(groups []*ast.CommentGroup) constraint.Expr {
 	for _, group := range groups {
 		for _, comment := range group.List {
 			if !constraint.IsGoBuild(comment.Text) {
 				continue
 			}
 			expr, err := constraint.Parse(comment.Text)
-			return err == nil && !satisfiable(expr)
+			if err != nil {
+				return nil
+			}
+			return expr
 		}
 	}
-	return false
+	return nil
 }
 
 // satisfiable reports whether some set of tags other than ignore satisfies
-// expr. A constraint with too many tags to enumerate counts as satisfiable.
+// expr: a constraint such as //go:build ignore on generators kept next to
+// tests holds on no platform, since the go command never sets ignore, while
+// one such as !windows holds on some platform, and rules_go applies it. A constraint with too many tags to enumerate counts as satisfiable.
 func satisfiable(expr constraint.Expr) bool {
 	var tags []string
 	collect(expr, map[string]bool{"ignore": true}, &tags)

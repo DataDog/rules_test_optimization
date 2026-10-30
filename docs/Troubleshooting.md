@@ -961,11 +961,9 @@ override_repo(go_deps, com_github_datadog_ddtest_ddto = "topt_go_ddtest_mini")
 ```
 
 After the override, a test whose `deps` name `testopt` keeps that dependency;
-the macro does not add it a second time. The macro cannot look inside a
-`select()`, so when `deps` is or contains one, it always adds `testopt`, and
-Bazel reports a duplicated label if `testopt` is also in the list. Remove
-`@topt_go_ddtest_mini//testopt` from such a `deps`; the macro adds it. In
-WORKSPACE, depend on `@topt_go_ddtest_mini` labels rather than on another
+the macro does not add it a second time. When `deps` is a `select()`, which
+the macro cannot inspect, it adds Mini through a private alias, so the same
+archive can appear under both labels. In WORKSPACE, depend on `@topt_go_ddtest_mini` labels rather than on another
 repository that provides the same module.
 
 ### DDTEST_INSTRUMENT contract mismatch
