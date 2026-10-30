@@ -14,14 +14,13 @@ set -euo pipefail
 # This script creates a temporary Bzlmod consumer and validates the supported Go
 # product path against the current checkout:
 # - core repo and Go companion repo consumed via archive_override(...)
-# - rules_go consumed from one published Orchestrion variant in this repository
-# - Orchestrion extension wiring in the consumer root module
+# - upstream rules_go from the Bazel Central Registry (RULES_GO_VERSION)
+# - the companion's topt_go_ddtest extension instrumenting the Go SDK
 # - module-selected payload wiring through the example stub extension
+# - a plain build that fetches neither the instrumented SDK nor Mini
 #
-# INSTRUMENTATION=ddtest runs the positive fixture with tests instrumented by
-# `ddtest instrument` instead of Orchestrion: the companion's topt_go_ddtest
-# extension replaces the Orchestrion extension, and the hermetic lane checks
-# the action graph with assert_ddtest_aquery.py.
+# WINDOWS_SMOKE_ONLY=1 runs only the instrumented test and its payload check,
+# for Windows hosts where the hermetic lane's sandbox is not available.
 #
 # Debugging tips:
 # - Set KEEP_TMP=1 to inspect the generated workspaces after a failure.
@@ -32,7 +31,6 @@ set -euo pipefail
 #
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-PIN_GRAPH_FIXTURE="$REPO_ROOT/tools/tests/integration/fixtures/orchestrion_pin_graph"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/rules_topt_bzlmod_go.XXXXXX")"
 WORKSPACE_ROOT="$TMP_ROOT/workspaces"
 ARCHIVE_ROOT="$TMP_ROOT/archive_root"
@@ -46,33 +44,18 @@ BAZEL_VERSION="${BAZEL_VERSION:-$(tr -d '[:space:]' < "$REPO_ROOT/.bazelversion"
 # release downloaded SDKs, extracted repos, and sandbox outputs during cleanup.
 BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_root}"
 GO_VERSION="${GO_VERSION:-1.25.0}"
-ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
-ORCHESTRION_MODE="${ORCHESTRION_MODE:-general}"
-INSTRUMENTATION="${INSTRUMENTATION:-orchestrion}"
-ORCHESTRION_DISABLED_SENTINEL="${ORCHESTRION_DISABLED_SENTINEL:-0}"
-ORCHESTRION_DISABLED_SENTINEL_VERSION="v0.0.0-rto-disabled-fetch-sentinel"
-WINDOWS_DISABLED_SMOKE_ONLY="${WINDOWS_DISABLED_SMOKE_ONLY:-0}"
-WINDOWS_ENABLED_SMOKE_ONLY="${WINDOWS_ENABLED_SMOKE_ONLY:-0}"
-WINDOWS_CONFIG_TRANSITION_ONLY="${WINDOWS_CONFIG_TRANSITION_ONLY:-0}"
-CONFIG_TRANSITION_ONLY="${CONFIG_TRANSITION_ONLY:-$WINDOWS_CONFIG_TRANSITION_ONLY}"
+RULES_GO_VERSION="${RULES_GO_VERSION:-0.60.0}"
+WINDOWS_SMOKE_ONLY="${WINDOWS_SMOKE_ONLY:-0}"
 FORBID_HOST_GO="${FORBID_HOST_GO:-0}"
-EXPECTED_ORCHESTRION_CACHE_PHASE="${EXPECTED_ORCHESTRION_CACHE_PHASE:-}"
 HOST_GO_SENTINEL_LOG=""
-DD_TRACE_GO_VERSION="${DD_TRACE_GO_VERSION:-v2.9.1}"
-PIN_ROOT_VERSION="v2.9.1-rc.3"
-PIN_HTTP_VERSION="v2.9.1-rc.3"
-PIN_SLOG_VERSION="v2.3.0"
 SERVICE_NAME="${SERVICE_NAME:-bzlmod-go-service}"
 MODULE_IMPORTPATH="${MODULE_IMPORTPATH:-example.com/bzlmod-go-integration}"
 MODULE_LABEL="${MODULE_LABEL:-example_com_bzlmod_go_integration}"
 OUT_DIR="${OUT_DIR:-custom_topt}"
 HELLO_TEST_TARGET="${HELLO_TEST_TARGET:-//app:hello_test}"
 INTEGRATION_SCENARIO_MODE="${INTEGRATION_SCENARIO_MODE:-full}"
-MEASURE_OUTPUT_PATH="${MEASURE_OUTPUT_PATH:-}"
 ARCHIVE_SHA256=""
 ARCHIVE_URL=""
-RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
-RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
 FIXTURE_GIT_REPOSITORY_URL="${FIXTURE_GIT_REPOSITORY_URL:-https://github.com/DataDog/rules-test-optimization-fixture.git}"
 FIXTURE_GIT_BRANCH="${FIXTURE_GIT_BRANCH:-main}"
 FIXTURE_GIT_COMMIT_SHA="${FIXTURE_GIT_COMMIT_SHA:-1234567890abcdef1234567890abcdef12345678}"
@@ -101,47 +84,6 @@ BAZEL_EXTRA_ARGS+=(
 )
 
 source "$REPO_ROOT/tools/tests/integration/go_integration_mock_server.sh"
-
-assert_pin_version_file() {
-  local ws_dir="$1"
-  local files_list="$2"
-  shift 2
-  local execution_root
-  local output_base
-  local version_file
-
-  execution_root="$(
-    cd "$ws_dir"
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "$@" execution_root
-  )"
-  output_base="$(
-    cd "$ws_dir"
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "$@" output_base
-  )"
-  version_file="$(head -n 1 "$files_list")"
-  if [[ "$version_file" != /* && ! "$version_file" =~ ^[A-Za-z]:[/\\] ]]; then
-    if [[ "$version_file" == external/* ]]; then
-      version_file="$output_base/$version_file"
-    else
-      version_file="$execution_root/$version_file"
-    fi
-  fi
-  "$PYTHON" - "$version_file" "$PIN_ROOT_VERSION" "$PIN_HTTP_VERSION" "$PIN_SLOG_VERSION" <<'PY'
-import json
-import pathlib
-import sys
-
-path = pathlib.Path(sys.argv[1])
-versions = json.loads(path.read_text(encoding="utf-8"))["modules"]
-expected = {
-    "github.com/DataDog/dd-trace-go/v2": sys.argv[2],
-    "github.com/DataDog/dd-trace-go/contrib/net/http/v2": sys.argv[3],
-    "github.com/DataDog/dd-trace-go/contrib/log/slog/v2": sys.argv[4],
-}
-if versions != expected:
-    raise SystemExit(f"resolved pin versions mismatch: got {versions!r}, expected {expected!r}")
-PY
-}
 
 shutdown_bazel_workspace_servers() {
   local workspace_dir
@@ -235,31 +177,6 @@ fi
 require_command tar "tar is required for the Bzlmod archive fixture"
 enable_host_go_sentinel
 
-resolve_rules_go_fork_path() {
-  "$PYTHON" "$REPO_ROOT/tools/dev/materialize_rules_go_fork.py" resolve \
-    --upstream "$RULES_GO_UPSTREAM" \
-    --variant "$RULES_GO_VARIANT"
-}
-
-rules_go_fork_rel="$(resolve_rules_go_fork_path)"
-
-resolve_rules_go_version() {
-  "$PYTHON" - "$REPO_ROOT" "$RULES_GO_UPSTREAM" "$RULES_GO_VARIANT" <<'PY'
-import sys
-from pathlib import Path
-
-repo_root = Path(sys.argv[1])
-sys.path.insert(0, str(repo_root))
-
-from tools.dev.rules_go_fork_registry import load_registry
-
-registry = load_registry(repo_root / "third_party" / "rules_go_orchestrion" / "registry.json")
-print(registry.resolve(sys.argv[2], sys.argv[3]).rules_go_version)
-PY
-}
-
-rules_go_version="$(resolve_rules_go_version)"
-
 bzl_quote() {
   "$PYTHON" - <<'PY' "$1"
 import json
@@ -294,51 +211,6 @@ from pathlib import Path
 import sys
 
 print(Path(sys.argv[1]).resolve().as_uri())
-PY
-}
-
-wall_time_ns() {
-  "$PYTHON" - <<'PY'
-import time
-print(time.time_ns())
-PY
-}
-
-module_proxy_size_bytes() {
-  local output_base="$1"
-  "$PYTHON" - <<'PY' "$output_base"
-from pathlib import Path
-import sys
-
-external_root = Path(sys.argv[1]) / "external"
-candidates = sorted(external_root.glob("*rules_go_orchestrion_tool*/module_proxy"))
-if not candidates:
-    print(0)
-    raise SystemExit(0)
-total = 0
-for path in candidates[0].rglob("*"):
-    if path.is_file():
-        total += path.stat().st_size
-print(total)
-PY
-}
-
-write_measure_json() {
-  local elapsed_seconds="$1"
-  local module_proxy_size="$2"
-  local output_path="$3"
-  "$PYTHON" - <<'PY' "$elapsed_seconds" "$module_proxy_size" "$output_path"
-import json
-import sys
-
-payload = {
-    "mode": "bzlmod",
-    "elapsed_seconds": float(sys.argv[1]),
-    "module_proxy_size_bytes": int(sys.argv[2]),
-}
-with open(sys.argv[3], "w", encoding="utf-8") as fh:
-    json.dump(payload, fh, sort_keys=True)
-    fh.write("\n")
 PY
 }
 
@@ -652,7 +524,6 @@ create_fixture_archive() {
   cp "$REPO_ROOT/WORKSPACE" "$root_dir/WORKSPACE"
   cp -R "$REPO_ROOT/tools" "$root_dir/tools"
   cp -R "$REPO_ROOT/modules/go" "$root_dir/modules/go"
-  cp -R "$REPO_ROOT/third_party" "$root_dir/third_party"
   (
     cd "$ARCHIVE_ROOT"
     tar -czf "$ARCHIVE_PATH" "$ARCHIVE_NAME"
@@ -663,47 +534,21 @@ create_fixture_archive() {
 
 write_fixture_bazelrc() {
   local ws_dir="$1"
-  local rules_go_repo="$2"
 
-  cat > "$ws_dir/.bazelrc" <<EOF
+  cat > "$ws_dir/.bazelrc" <<'EOF'
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 common --incompatible_allow_tags_propagation
 common --incompatible_disallow_empty_glob=false
 EOF
-  if [[ "$INSTRUMENTATION" == "orchestrion" ]]; then
-    echo "build:test-optimization --@${rules_go_repo}//go/private/orchestrion:enabled=true" >> "$ws_dir/.bazelrc"
-  fi
 }
 
 write_shared_fixture_sources() {
   local ws_dir="$1"
-  local hello_test_instrumentation_attrs
-
-  if [[ "$INSTRUMENTATION" == "ddtest" ]]; then
-    hello_test_instrumentation_attrs='    tags = ["no-remote-exec"],
-    instrumentation = "ddtest",'
-  else
-    hello_test_instrumentation_attrs="    tags = [\"no-remote-exec\"] if \"${ORCHESTRION_MODE}\" == \"test_optimization\" else [],
-    orchestrion_pin_files = [
-        \"//:go.mod\",
-        \"//:go.sum\",
-        \"//:orchestrion.tool.go\",
-        \"//:orchestrion.yml\",
-    ],
-    orchestrion_mode = \"${ORCHESTRION_MODE}\","
-  fi
 
   mkdir -p "$ws_dir/app" "$ws_dir/tools/build"
 
   cat > "$ws_dir/BUILD.bazel" <<'EOF'
 load("@datadog-rules-test-optimization//tools/core:test_optimization_targets.bzl", "dd_test_optimization_targets")
-
-exports_files([
-    "go.mod",
-    "go.sum",
-    "orchestrion.tool.go",
-    "orchestrion.yml",
-])
 
 dd_test_optimization_targets(
     name = "test_optimization",
@@ -769,7 +614,7 @@ dd_go_test(
         ":fixture_tool_reset",
     ],
     embed = [":hello_lib"],
-${hello_test_instrumentation_attrs}
+    tags = ["no-remote-exec"],
 )
 
 genquery(
@@ -830,9 +675,6 @@ const (
 	wantBazelPackage = "//app"
 	wantBazelTarget = "//app:hello_test"
 	wantModuleImportpath = "${MODULE_IMPORTPATH}"
-	wantOrchestrionEnabled = true
-	wantOrchestrionMode = "${ORCHESTRION_MODE}"
-	wantInstrumentation = "${INSTRUMENTATION}"
 )
 
 func resolveRlocation(p string) (string, bool) {
@@ -990,29 +832,17 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 	if selection != "module" {
 		t.Fatalf("bazel.go.payload_selection = %v with deterministic module metadata, want module", selection)
 	}
-	if wantInstrumentation == "ddtest" {
-		if got, _ := metadata["bazel.go.instrumentation.backend"].(string); got != "ddtest" {
-			t.Fatalf("bazel.go.instrumentation.backend = %v, want ddtest", metadata["bazel.go.instrumentation.backend"])
-		}
-		for _, key := range []string{
-			"bazel.go.instrumentation.version",
-			"bazel.go.instrumentation.release",
-			"bazel.go.sdk.name",
-			"bazel.go.sdk.version",
-		} {
-			if got, _ := metadata[key].(string); got == "" {
-				t.Fatalf("%s = %v, want a non-empty string", key, metadata[key])
-			}
-		}
-		if _, ok := metadata["bazel.go.orchestrion.enabled"]; ok {
-			t.Fatalf("bazel.go.orchestrion.enabled = %v, want no Orchestrion metadata", metadata["bazel.go.orchestrion.enabled"])
-		}
-	} else {
-		if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
-			t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
-		}
-		if got, _ := metadata["bazel.go.orchestrion.mode"].(string); got != wantOrchestrionMode {
-			t.Fatalf("bazel.go.orchestrion.mode = %v, want %q", metadata["bazel.go.orchestrion.mode"], wantOrchestrionMode)
+	if got, _ := metadata["bazel.go.instrumentation.backend"].(string); got != "ddtest" {
+		t.Fatalf("bazel.go.instrumentation.backend = %v, want ddtest", metadata["bazel.go.instrumentation.backend"])
+	}
+	for _, key := range []string{
+		"bazel.go.instrumentation.version",
+		"bazel.go.instrumentation.release",
+		"bazel.go.sdk.name",
+		"bazel.go.sdk.version",
+	} {
+		if got, _ := metadata[key].(string); got == "" {
+			t.Fatalf("%s = %v, want a non-empty string", key, metadata[key])
 		}
 	}
 	// This runtime lane uses Bazel's default fastbuild/strip=sometimes
@@ -1026,49 +856,20 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 	}
 }
 EOF
-
-  cp "$PIN_GRAPH_FIXTURE/go.mod" "$ws_dir/go.mod"
-  cp "$PIN_GRAPH_FIXTURE/go.sum" "$ws_dir/go.sum"
-
-  cat > "$ws_dir/orchestrion.tool.go" <<'EOF'
-//go:build tools
-
-package tools
-
-import (
-	_ "github.com/DataDog/orchestrion" // integration
-	_ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
-	_ "github.com/DataDog/dd-trace-go/v2/orchestrion"      // integration
-)
-EOF
-
-  cat > "$ws_dir/orchestrion.yml" <<'EOF'
-# yaml-language-server: $schema=https://datadoghq.dev/orchestrion/schema.json
-meta:
-  name: bzlmod-go-integration
-  description: Minimal Bzlmod-mode Orchestrion fixture.
-
-aspects: []
-EOF
 }
 
 write_module_file() {
   local ws_dir="$1"
-  local version_mode="${2:-pin_files}"
   local archive_url_bzl
-  local explicit_version_line=""
 
   archive_url_bzl="$(bzl_quote "$ARCHIVE_URL")"
-  if [[ "$version_mode" == "conflicting_pin_version" ]]; then
-    explicit_version_line="    dd_trace_go_version = \"${DD_TRACE_GO_VERSION}\","
-  fi
 
   cat > "$ws_dir/MODULE.bazel" <<EOF
 module(name = "bzlmod_go_integration")
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
-bazel_dep(name = "rules_go", version = "${rules_go_version}")
+bazel_dep(name = "rules_go", version = "${RULES_GO_VERSION}")
 
 archive_override(
     module_name = "datadog-rules-test-optimization",
@@ -1084,22 +885,6 @@ archive_override(
     strip_prefix = "${ARCHIVE_NAME}/modules/go",
 )
 
-archive_override(
-    module_name = "rules_go",
-    urls = [${archive_url_bzl}],
-    sha256 = "${ARCHIVE_SHA256}",
-    strip_prefix = "${ARCHIVE_NAME}/${rules_go_fork_rel}",
-EOF
-  cat >> "$ws_dir/MODULE.bazel" <<EOF
-)
-
-go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
-go_sdk.download(
-    name = "test_optimization_go_sdk",
-    version = "${GO_VERSION}",
-)
-use_repo(go_sdk, "test_optimization_go_sdk")
-
 test_optimization = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
     "test_optimization_go_extension",
@@ -1113,9 +898,6 @@ test_optimization.test_optimization_go(
     require_git_metadata = True,
 )
 use_repo(test_optimization, "test_optimization_data")
-EOF
-  if [[ "$INSTRUMENTATION" == "ddtest" ]]; then
-    cat >> "$ws_dir/MODULE.bazel" <<EOF
 
 topt_go_ddtest = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",
@@ -1123,59 +905,6 @@ topt_go_ddtest = use_extension(
 )
 topt_go_ddtest.sdk(go_version = "${GO_VERSION}")
 EOF
-    return
-  fi
-  cat >> "$ws_dir/MODULE.bazel" <<EOF
-
-orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
-orchestrion.from_source(
-    version = "${ORCHESTRION_VERSION}",
-    dd_trace_go_pin_files = [
-        "//:go.mod",
-        "//:go.sum",
-    ],
-${explicit_version_line}
-    go_sdk_root = "@test_optimization_go_sdk//:ROOT",
-    go_sdk_version = "${GO_VERSION}",
-    log_timing = True,
-)
-use_repo(orchestrion, "rules_go_orchestrion_tool")
-EOF
-}
-
-run_conflicting_pin_mode_failure() {
-  local ws_dir="$WORKSPACE_ROOT/conflicting-pin-version"
-  local output_path="$ws_dir/conflicting-pin-version.log"
-
-  rm -rf "$ws_dir"
-  mkdir -p "$ws_dir"
-  write_module_file "$ws_dir" "conflicting_pin_version"
-  write_shared_fixture_sources "$ws_dir"
-  write_fixture_bazelrc "$ws_dir" "rules_go"
-
-  set +e
-  (
-    cd "$ws_dir"
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
-      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
-      --enable_bzlmod \
-      --config=test-optimization \
-      "@rules_go//go/private/orchestrion:dd_trace_go_version_file" \
-      --output=files
-  ) >"$output_path" 2>&1
-  local rc=$?
-  set -e
-
-  if [[ $rc -eq 0 ]]; then
-    echo "error: expected conflicting Bzlmod tracer version modes to fail" >&2
-    cat "$output_path" >&2
-    exit 1
-  fi
-  if ! grep -F "dd_trace_go_version, dd_trace_go_versions, and dd_trace_go_pin_files are mutually exclusive" "$output_path" >/dev/null 2>&1; then
-    echo "error: conflicting Bzlmod tracer version modes did not fail with the expected guidance" >&2
-    cat "$output_path" >&2
-    exit 1
-  fi
 }
 
 run_fixture() {
@@ -1185,13 +914,45 @@ run_fixture() {
   mkdir -p "$ws_dir"
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
-  write_fixture_bazelrc "$ws_dir" "rules_go"
-  if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
-    run_fixture_subscenario "$ws_dir" "hermetic"
-    return
-  fi
+  write_fixture_bazelrc "$ws_dir"
+  assert_plain_build_fetches_no_instrumentation "$ws_dir"
   run_fixture_subscenario "$ws_dir" "standard"
   run_fixture_subscenario "$ws_dir" "hermetic"
+}
+
+# assert_plain_build_fetches_no_instrumentation builds the fixture's library
+# without the test. Bazel must fetch neither the instrumented SDK nor Mini,
+# with or without Test Optimization enabled, and nothing may contact the
+# metadata server while it is disabled. (Enabled, loading //app fetches the
+# sync repository that its BUILD file loads.)
+assert_plain_build_fetches_no_instrumentation() {
+  local ws_dir="$1"
+  local output_base
+  local fetched
+  local config
+
+  for config in "" "--config=test-optimization"; do
+    (
+      cd "$ws_dir"
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" build \
+        ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+        --enable_bzlmod \
+        ${config:+"$config"} \
+        //app:hello_lib
+    )
+    output_base="$(cd "$ws_dir" && USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info --enable_bzlmod output_base)"
+    fetched="$(ls "$output_base/external" | grep -E 'topt_go_ddtest_(sdk|sdk_files|base|host|mini)' || true)"
+    if [[ -n "$fetched" ]]; then
+      echo "error: a build without instrumented tests (${config:-disabled}) fetched ddtest repositories:" >&2
+      printf '%s\n' "$fetched" >&2
+      exit 1
+    fi
+    if [[ -z "$config" && -s "$GO_INTEGRATION_MOCK_SERVER_LOG" ]]; then
+      echo "error: a build with Test Optimization disabled contacted the metadata server" >&2
+      cat "$GO_INTEGRATION_MOCK_SERVER_LOG" >&2
+      exit 1
+    fi
+  done
 }
 
 # assert_ddtest_action_graph checks with aquery that the test is built by
@@ -1265,56 +1026,7 @@ run_fixture_subscenario() {
   local hermetic_root="$ws_dir/.hermetic"
   local hermetic_home="$hermetic_root/home"
   local hermetic_xdg="$hermetic_root/xdg-cache"
-  local aquery_output="$hermetic_root/hello_test_aquery.textproto"
-  local opt_aquery_output="$hermetic_root/hello_test_opt_aquery.textproto"
-  local no_strip_aquery_output="$hermetic_root/hello_test_no_strip_aquery.textproto"
-  local -a execution_policy_assertion=()
-  local output_base=""
-  local start_ns=""
-  local end_ns=""
-  local elapsed_seconds=""
-  local proxy_size_bytes=""
   mkdir -p "$hermetic_home" "$hermetic_xdg"
-
-  if [[ "$ORCHESTRION_MODE" == "test_optimization" ]]; then
-    execution_policy_assertion+=(--require-test-runner-only-no-remote-exec)
-  fi
-
-  if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
-    (
-      cd "$ws_dir"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
-        ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
-        "${bzlmod_flags[@]}" \
-        "deps(${HELLO_TEST_TARGET})" \
-        --output=textproto > /dev/null
-    )
-    (
-      cd "$ws_dir"
-      output_base="$(USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${bzlmod_flags[@]}" output_base)"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" shutdown
-      start_ns="$(wall_time_ns)"
-      HOME="$hermetic_home" \
-      XDG_CACHE_HOME="$hermetic_xdg" \
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
-        ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
-        "${bzlmod_flags[@]}" \
-        "${HERMETIC_BUILD_FLAGS[@]}" \
-        "${HERMETIC_TEST_FLAGS[@]}" \
-        "$HELLO_TEST_TARGET"
-      end_ns="$(wall_time_ns)"
-      elapsed_seconds="$("$PYTHON" - <<'PY' "$start_ns" "$end_ns"
-import sys
-start_ns = int(sys.argv[1])
-end_ns = int(sys.argv[2])
-print(f"{(end_ns - start_ns) / 1_000_000_000:.6f}")
-PY
-)"
-      proxy_size_bytes="$(module_proxy_size_bytes "$output_base")"
-      write_measure_json "$elapsed_seconds" "$proxy_size_bytes" "$MEASURE_OUTPUT_PATH"
-    )
-    return
-  fi
 
   (
     cd "$ws_dir"
@@ -1328,455 +1040,64 @@ PY
       "$HELLO_TEST_TARGET"
   )
   assert_json_test_payloads "$ws_dir" "$mode"
-
-  if [[ "$INSTRUMENTATION" == "ddtest" ]]; then
-    assert_ddtest_action_graph "$ws_dir" "$hermetic_home" "$hermetic_xdg" "${bzlmod_flags[@]}"
-    return
-  fi
-
-  (
-    cd "$ws_dir"
-    HOME="$hermetic_home" \
-    XDG_CACHE_HOME="$hermetic_xdg" \
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
-      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
-      "${bzlmod_flags[@]}" \
-      "${HERMETIC_BUILD_FLAGS[@]}" \
-      "deps(${HELLO_TEST_TARGET})" \
-      --output=textproto > "$aquery_output"
-  )
-
-  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
-    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
-    --required-test-optimization-pin-file go.mod \
-    --required-test-optimization-pin-file orchestrion.yml \
-    --require-plain-compile-in-test-optimization \
-    --require-reduced-synthetic-testmain-link-inputs \
-    --require-test-optimization-linker-flags \
-    --expected-test-optimization-linker-flag-count 2 \
-    "${execution_policy_assertion[@]}" \
-    "$aquery_output"
-
-  (
-    cd "$ws_dir"
-    HOME="$hermetic_home" \
-    XDG_CACHE_HOME="$hermetic_xdg" \
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
-      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
-      "${bzlmod_flags[@]}" \
-      "${HERMETIC_BUILD_FLAGS[@]}" \
-      --compilation_mode=opt \
-      "deps(${HELLO_TEST_TARGET})" \
-      --output=textproto > "$opt_aquery_output"
-  )
-
-  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
-    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
-    --required-test-optimization-pin-file go.mod \
-    --required-test-optimization-pin-file orchestrion.yml \
-    --require-plain-compile-in-test-optimization \
-    --require-reduced-synthetic-testmain-link-inputs \
-    --require-test-optimization-linker-flags \
-    --expected-test-optimization-linker-flag-count 1 \
-    "${execution_policy_assertion[@]}" \
-    "$opt_aquery_output"
-
-  (
-    cd "$ws_dir"
-    HOME="$hermetic_home" \
-    XDG_CACHE_HOME="$hermetic_xdg" \
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
-      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
-      "${bzlmod_flags[@]}" \
-      "${HERMETIC_BUILD_FLAGS[@]}" \
-      --strip=never \
-      "deps(${HELLO_TEST_TARGET})" \
-      --output=textproto > "$no_strip_aquery_output"
-  )
-
-  "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_orchestrion_module_proxy_aquery.py" \
-    --expected-orchestrion-mode "$ORCHESTRION_MODE" \
-    --required-test-optimization-pin-file go.mod \
-    --required-test-optimization-pin-file orchestrion.yml \
-    --require-plain-compile-in-test-optimization \
-    --require-reduced-synthetic-testmain-link-inputs \
-    --require-test-optimization-linker-flags \
-    --expected-test-optimization-linker-flag-count 0 \
-    "${execution_policy_assertion[@]}" \
-    "$no_strip_aquery_output"
+  assert_ddtest_action_graph "$ws_dir" "$hermetic_home" "$hermetic_xdg" "${bzlmod_flags[@]}"
 }
 
-write_disabled_fixture_test() {
-  local ws_dir="$1"
-
-  cat > "$ws_dir/app/hello_test.go" <<'EOF'
-package main
-
-import "testing"
-
-func TestDisabledBootstrap(t *testing.T) {
-	if greeting() != "Hello, Bzlmod!" {
-		t.Fatalf("unexpected greeting %q", greeting())
-	}
-}
-EOF
-}
-
-run_disabled_no_fetch_smoke() {
-  local ws_dir="$WORKSPACE_ROOT/disabled"
-  local resolved_repos="$TMP_ROOT/disabled-resolved-repositories.bzl"
-  local alias_log="$TMP_ROOT/disabled-aliases.log"
-  local genquery_log="$TMP_ROOT/disabled-genquery.log"
-  local repository_files="$TMP_ROOT/disabled-orchestrion-repository.files"
-  local test_log="$TMP_ROOT/disabled-test.log"
-  local disabled_home="$TMP_ROOT/disabled-home"
-  local disabled_xdg="$TMP_ROOT/disabled-xdg-cache"
-  local disabled_orchestrion_cache="$disabled_xdg/datadog-orchestrion-go-cache"
+# run_windows_smoke runs the instrumented test from its package directory, so
+# Git Bash does not rewrite //pkg:target into a path, and checks its payloads.
+run_windows_smoke() {
+  local ws_dir="$WORKSPACE_ROOT/windows"
+  local test_log="$TMP_ROOT/windows-test.log"
   local test_target_path="${HELLO_TEST_TARGET#//}"
   local test_package="${test_target_path%%:*}"
   local test_name="${test_target_path#*:}"
-  local -a disabled_flags=(
-    "${BAZEL_EXTRA_ARGS[@]}"
-    --enable_bzlmod
-  )
-  local -a disabled_env=(
-    env
-    -u DD_API_KEY
-    -u DD_SITE
-    -u DD_TEST_OPTIMIZATION_ENABLED
-    HOME="$disabled_home"
-    XDG_CACHE_HOME="$disabled_xdg"
-  )
-  local aliases=(
-    tool_binary
-    dd_trace_go_version_file
-    dd_trace_go_module_proxy_files
-    dd_trace_go_module_proxy_root_marker
-    orchestrion_tool_version_file
-  )
+  local testlogs
 
   rm -rf "$ws_dir"
-  rm -rf "$disabled_orchestrion_cache"
-  mkdir -p "$ws_dir" "$disabled_home" "$disabled_xdg"
+  mkdir -p "$ws_dir"
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
-  write_fixture_bazelrc "$ws_dir" "rules_go"
-  write_disabled_fixture_test "$ws_dir"
-
-  : > "$alias_log"
-  for alias in "${aliases[@]}"; do
-    if ! (
-      cd "$ws_dir"
-      "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
-        "${disabled_flags[@]}" \
-        --experimental_repository_resolved_file="$resolved_repos" \
-        "@rules_go//go/private/orchestrion:$alias" --output=files \
-        >"$TMP_ROOT/disabled-alias-$alias.out"
-    ) 2>"$TMP_ROOT/disabled-alias-$alias.err"; then
-      echo "error: disabled Bzlmod alias query failed for $alias" >&2
-      cat "$TMP_ROOT/disabled-alias-$alias.err" >&2
-      exit 1
-    fi
-    cat "$TMP_ROOT/disabled-alias-$alias.out" >>"$alias_log"
-  done
-  if [[ -s "$alias_log" ]]; then
-    echo "error: disabled Bzlmod Orchestrion aliases exposed files" >&2
-    cat "$alias_log" >&2
-    exit 1
-  fi
-
+  write_fixture_bazelrc "$ws_dir"
   if ! (
-    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
-    cd "$ws_dir/$test_package"
-    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" build \
-      "${disabled_flags[@]}" \
-      --experimental_repository_resolved_file="$resolved_repos" \
-      ":${test_name}_deps_query"
-  ) >"$genquery_log" 2>&1; then
-    echo "error: disabled Bzlmod genquery failed" >&2
-    cat "$genquery_log" >&2
-    exit 1
-  fi
-
-  if ! (
-    cd "$ws_dir"
-    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
-      "${disabled_flags[@]}" \
-      @rules_go_orchestrion_tool//:orchestrion --output=files
-  ) >"$repository_files" 2>>"$genquery_log"; then
-    echo "error: disabled Bzlmod Orchestrion repository query failed" >&2
-    cat "$genquery_log" >&2
-    exit 1
-  fi
-  if [[ -s "$repository_files" ]]; then
-    echo "error: disabled Bzlmod Orchestrion repository exposed real files" >&2
-    cat "$repository_files" >&2
-    exit 1
-  fi
-
-  if ! (
-    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
-    cd "$ws_dir/$test_package"
-    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
-      "${disabled_flags[@]}" \
-      --experimental_repository_resolved_file="$resolved_repos" \
-      ":$test_name"
-  ) >"$test_log" 2>&1; then
-    echo "error: disabled Bzlmod test failed" >&2
-    cat "$test_log" >&2
-    exit 1
-  fi
-
-  if grep -Ein 'building orchestrion|downloading orchestrion|Could not find .go. binary' "$test_log"; then
-    echo "error: disabled Bzlmod smoke attempted the real Orchestrion bootstrap" >&2
-    cat "$test_log" >&2
-    exit 1
-  fi
-  if grep -En 'building orchestrion|downloading orchestrion|Could not find .go. binary' "$genquery_log"; then
-    echo "error: disabled Bzlmod genquery attempted the real Orchestrion bootstrap" >&2
-    cat "$genquery_log" >&2
-    exit 1
-  fi
-
-  local testlogs
-  if ! testlogs="$(cd "$ws_dir" && "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${disabled_flags[@]}" bazel-testlogs)"; then
-    echo "error: unable to locate disabled Bzlmod test logs" >&2
-    exit 1
-  fi
-  if find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -print -quit | grep -q .; then
-    echo "error: disabled Bzlmod smoke emitted Test Optimization payloads" >&2
-    exit 1
-  fi
-
-  local public_kind
-  public_kind="$(
-    cd "$ws_dir/$test_package"
-    "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
-      "${disabled_flags[@]}" \
-      ":$test_name" \
-      --output=label_kind
-  )"
-  if [[ "$public_kind" != "go_test rule "* ]]; then
-    echo "error: disabled Bzlmod public target kind is '$public_kind', want raw go_test rule" >&2
-    exit 1
-  fi
-
-  local hidden_name
-  for hidden_name in \
-    "${test_name}__raw_go_test" \
-    "${test_name}_topt_payloads" \
-    "${test_name}_topt_bazel_metadata" \
-    "${test_name}_orchestrion_pin_files"; do
-    if (
-      cd "$ws_dir/$test_package"
-      "${disabled_env[@]}" USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
-        "${disabled_flags[@]}" \
-        ":$hidden_name"
-    ) >/dev/null 2>&1; then
-      echo "error: disabled Bzlmod branch created enabled-only target :$hidden_name" >&2
-      exit 1
-    fi
-  done
-
-  if [[ -e "$disabled_orchestrion_cache" ]]; then
-    echo "error: disabled Bzlmod smoke wrote the Test Optimization Orchestrion cache" >&2
-    find "$disabled_orchestrion_cache" -maxdepth 3 -print >&2
-    exit 1
-  fi
-}
-
-run_windows_enabled_smoke() {
-  local reuse_disabled_workspace="${1:-0}"
-  local ws_dir="$WORKSPACE_ROOT/windows-enabled"
-  local resolved_repos="$TMP_ROOT/windows-enabled-resolved-repositories.bzl"
-  local test_log="$TMP_ROOT/windows-enabled-test.log"
-  local test_target_path="${HELLO_TEST_TARGET#//}"
-  local test_package="${test_target_path%%:*}"
-  local test_name="${test_target_path#*:}"
-  local -a bazel_test_flags=()
-
-  if [[ "$(uname -s)" == "Darwin" && "$BAZEL_VERSION" == "8.8.2" ]]; then
-    bazel_test_flags+=(--noexperimental_split_xml_generation)
-  fi
-
-  if [[ "$reuse_disabled_workspace" == "1" ]]; then
-    ws_dir="$WORKSPACE_ROOT/disabled"
-  fi
-  if [[ -z "$GO_INTEGRATION_MOCK_SERVER_PID" ]]; then
-    start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
-  fi
-
-  local -a enabled_flags=(
-    "${BAZEL_EXTRA_ARGS[@]}"
-    "${GO_INTEGRATION_MOCK_REPO_ENVS[@]}"
-    --enable_bzlmod
-    --config=test-optimization
-  )
-  local aliases=(
-    tool_binary
-    dd_trace_go_version_file
-    dd_trace_go_module_proxy_files
-    dd_trace_go_module_proxy_root_marker
-    orchestrion_tool_version_file
-  )
-
-  if [[ "$reuse_disabled_workspace" != "1" ]]; then
-    rm -rf "$ws_dir"
-    mkdir -p "$ws_dir"
-    write_module_file "$ws_dir"
-    write_shared_fixture_sources "$ws_dir"
-    write_fixture_bazelrc "$ws_dir" "rules_go"
-  fi
-
-  for alias in "${aliases[@]}"; do
-    local alias_files="$TMP_ROOT/windows-enabled-bzlmod-$alias.files"
-    local alias_log="$TMP_ROOT/windows-enabled-bzlmod-$alias.log"
-    if ! (
-      cd "$ws_dir"
-      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" cquery \
-        "${enabled_flags[@]}" \
-        --experimental_repository_resolved_file="$resolved_repos" \
-        "@rules_go//go/private/orchestrion:$alias" --output=files
-    ) >"$alias_files" 2>"$alias_log"; then
-      echo "error: enabled Bzlmod Orchestrion alias $alias failed analysis" >&2
-      cat "$alias_log" >&2
-      exit 1
-    fi
-    if [[ ! -s "$alias_files" ]]; then
-      echo "error: enabled Bzlmod Orchestrion alias $alias exposed no files" >&2
-      cat "$alias_log" >&2
-      exit 1
-    fi
-    if ! grep -Eq 'rules_go_orchestrion_tool' "$alias_files"; then
-      echo "error: enabled Bzlmod Orchestrion alias $alias did not expose real repository files" >&2
-      cat "$alias_files" >&2
-      cat "$alias_log" >&2
-      exit 1
-    fi
-  done
-  assert_pin_version_file \
-    "$ws_dir" \
-    "$TMP_ROOT/windows-enabled-bzlmod-dd_trace_go_version_file.files" \
-    "${enabled_flags[@]}"
-
-  if [[ -n "$EXPECTED_ORCHESTRION_CACHE_PHASE" ]]; then
-    if ! grep -F "phase=\"$EXPECTED_ORCHESTRION_CACHE_PHASE\"" "$TMP_ROOT"/windows-enabled-bzlmod-*.log >/dev/null 2>&1; then
-      echo "error: enabled Bzlmod smoke did not emit expected Orchestrion cache phase '$EXPECTED_ORCHESTRION_CACHE_PHASE'" >&2
-      cat "$TMP_ROOT"/windows-enabled-bzlmod-*.log >&2
-      exit 1
-    fi
-  fi
-
-  if ! (
-    # Avoid Git Bash converting //pkg:target into a Windows filesystem path.
     cd "$ws_dir/$test_package"
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \
-      "${enabled_flags[@]}" \
+      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+      --enable_bzlmod \
+      --config=test-optimization \
       --test_output=errors \
       --verbose_failures \
-      "${bazel_test_flags[@]}" \
-      --experimental_repository_resolved_file="$resolved_repos" \
       ":$test_name"
   ) >"$test_log" 2>&1; then
-    echo "error: enabled Bzlmod test failed" >&2
+    echo "error: the instrumented Bzlmod test failed on Windows" >&2
     cat "$test_log" >&2
     exit 1
   fi
-
-  local testlogs
-  testlogs="$(cd "$ws_dir" && USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info "${enabled_flags[@]}" bazel-testlogs)"
+  testlogs="$(cd "$ws_dir" && USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" info --enable_bzlmod bazel-testlogs)"
   if ! find "$testlogs" -path '*/test.outputs/payloads/tests/*.json' -print -quit | grep -q .; then
-    echo "error: enabled Bzlmod smoke emitted no Test Optimization payloads" >&2
+    echo "error: the instrumented Bzlmod test emitted no Test Optimization payloads on Windows" >&2
     cat "$test_log" >&2
     exit 1
   fi
-  local public_kind
-  public_kind="$(
-    cd "$ws_dir/$test_package"
-    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" query \
-      "${enabled_flags[@]}" \
-      ":$test_name" \
-      --output=label_kind
-  )"
-  if [[ "$public_kind" != "orch_go_test rule "* ]]; then
-    echo "error: enabled Bzlmod public target kind is '$public_kind', want orch_go_test rule" >&2
-    exit 1
-  fi
-  assert_go_integration_metadata_requests
 }
 
 mkdir -p "$WORKSPACE_ROOT"
-
-case "$INSTRUMENTATION" in
-  orchestrion) ;;
-  ddtest)
-    if [[ "$WINDOWS_DISABLED_SMOKE_ONLY" == "1" || "$ORCHESTRION_DISABLED_SENTINEL" == "1" || "$WINDOWS_ENABLED_SMOKE_ONLY" == "1" || "$CONFIG_TRANSITION_ONLY" == "1" ]]; then
-      echo "error: INSTRUMENTATION=ddtest runs only the positive fixture" >&2
-      exit 1
-    fi
-    ;;
-  *)
-    echo "error: unsupported INSTRUMENTATION=$INSTRUMENTATION; want orchestrion or ddtest" >&2
-    exit 1
-    ;;
-esac
-
-if [[ "$WINDOWS_DISABLED_SMOKE_ONLY" == "1" || "$ORCHESTRION_DISABLED_SENTINEL" == "1" ]]; then
-  ORCHESTRION_VERSION="$ORCHESTRION_DISABLED_SENTINEL_VERSION"
-  ORCHESTRION_MODE="test_optimization"
-  create_fixture_archive
-  run_disabled_no_fetch_smoke
-  exit 0
-fi
-
-if [[ "$WINDOWS_ENABLED_SMOKE_ONLY" == "1" ]]; then
-  ORCHESTRION_MODE="test_optimization"
-  create_fixture_archive
-  run_windows_enabled_smoke
-  exit 0
-fi
-
-if [[ "$CONFIG_TRANSITION_ONLY" == "1" ]]; then
-  ORCHESTRION_MODE="test_optimization"
-  create_fixture_archive
-  start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
-  run_disabled_no_fetch_smoke
-  if [[ -s "$GO_INTEGRATION_MOCK_SERVER_LOG" ]]; then
-    echo "error: disabled Bzlmod phase contacted the metadata server" >&2
-    cat "$GO_INTEGRATION_MOCK_SERVER_LOG" >&2
-    exit 1
-  fi
-  run_windows_enabled_smoke 1
-  exit 0
-fi
-
 create_fixture_archive
 start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
 BAZEL_EXTRA_ARGS+=("${GO_INTEGRATION_MOCK_REPO_ENVS[@]}")
 
-if [[ "$INTEGRATION_SCENARIO_MODE" == "measure" ]]; then
-  if [[ -z "$MEASURE_OUTPUT_PATH" ]]; then
-    echo "error: MEASURE_OUTPUT_PATH is required when INTEGRATION_SCENARIO_MODE=measure" >&2
+if [[ "$WINDOWS_SMOKE_ONLY" == "1" ]]; then
+  run_windows_smoke
+  assert_go_integration_metadata_requests
+  exit 0
+fi
+
+case "$INTEGRATION_SCENARIO_MODE" in
+  full | release) ;;
+  *)
+    echo "error: unsupported INTEGRATION_SCENARIO_MODE=$INTEGRATION_SCENARIO_MODE" >&2
     exit 1
-  fi
-  run_fixture
-  assert_go_integration_metadata_requests
-  exit 0
-fi
-
-if [[ "$INTEGRATION_SCENARIO_MODE" == "release" ]]; then
-  run_fixture
-  assert_go_integration_metadata_requests
-  exit 0
-fi
-
-if [[ "$INTEGRATION_SCENARIO_MODE" != "full" ]]; then
-  echo "error: unsupported INTEGRATION_SCENARIO_MODE=$INTEGRATION_SCENARIO_MODE" >&2
-  exit 1
-fi
+    ;;
+esac
 
 run_fixture
-if [[ "$INSTRUMENTATION" == "orchestrion" ]]; then
-  run_conflicting_pin_mode_failure
-fi
 assert_go_integration_metadata_requests
