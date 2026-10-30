@@ -1,0 +1,92 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("//:topt_go_stdlib.bzl", "dd_topt_go_stdlib_warmup")
+load("//:topt_go_test.bzl", "dd_topt_go_test")
+load("//tests:test_macro.bzl", "stdlib_warmup_target_has_outputs_test")
+load(":fixtures.bzl", "TOPT_DATA", "ddtest_transition_test", "foreign_mini_failure_test")
+
+# Runs instrumented: it fails unless Mini set its context's trace. Its deps
+# name testopt, which the macro then adds only once; its external test
+# package receives the registration.
+dd_topt_go_test(
+    name = "instrumented_test",
+    srcs = [
+        "external_test.go",
+        "instrumented_test.go",
+    ],
+    importpath = "example.com/ddtestfixture",
+    topt_data = TOPT_DATA,
+    deps = [
+        "@topt_go_ddtest_mini//propagation",
+        "@topt_go_ddtest_mini//testopt",
+    ],
+)
+
+# Its configurable deps already name testopt, which the macro adds through an
+# alias.
+dd_topt_go_test(
+    name = "select_deps_test",
+    srcs = [
+        "external_test.go",
+        "instrumented_test.go",
+    ],
+    importpath = "example.com/selectfixture",
+    topt_data = TOPT_DATA,
+    deps = select({
+        "//conditions:default": [
+            "@topt_go_ddtest_mini//propagation",
+            "@topt_go_ddtest_mini//testopt",
+        ],
+    }),
+)
+
+# Its only source comes through embed, which the registration also reads.
+go_library(
+    name = "widget",
+    srcs = ["widget.go"],
+    importpath = "example.com/widget",
+)
+
+dd_topt_go_test(
+    name = "embed_only_test",
+    embed = [":widget"],
+    topt_data = TOPT_DATA,
+)
+
+# Every source has a negated build constraint, which holds on this platform.
+dd_topt_go_test(
+    name = "constrained_test",
+    srcs = ["constrained_test.go"],
+    importpath = "example.com/constrained",
+    topt_data = TOPT_DATA,
+)
+
+# A copy of Mini's packages from another repository stops analysis.
+dd_topt_go_test(
+    name = "foreign_mini_test",
+    srcs = ["foreign_test.go"],
+    importpath = "example.com/foreign",
+    tags = ["manual"],
+    topt_data = TOPT_DATA,
+    deps = ["//tests/ddtest/fake_mini"],
+)
+
+foreign_mini_failure_test(
+    name = "foreign_mini_failure_test",
+    target_under_test = ":foreign_mini_test",
+)
+
+ddtest_transition_test(name = "ddtest_transition_test")
+
+# The standard library that instrumented tests build, warmed on its own.
+dd_topt_go_stdlib_warmup(name = "stdlib_warmup")
+
+stdlib_warmup_target_has_outputs_test(
+    name = "stdlib_warmup_has_outputs_test",
+    target_under_test = ":stdlib_warmup",
+)

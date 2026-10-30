@@ -4,31 +4,20 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
 
 exports_files(
     [
-        "benchmark_go_orchestrion_perf.py",
         "build_release.py",
         "check_bazelversion_sync.py",
         "check_module_versions.py",
-        "check_release_archive_contents.py",
-        "compact_execution_log.py",
-        "diff_rules_go_fork.py",
         "dotnet_bootstrap.bzl",
-        "generate_rules_go_consumer_patch.py",
-        "generate_rules_go_fork_maps.py",
         "go_bootstrap.bzl",
         "java_bootstrap.bzl",
         "lint_uploader_templates.py",
-        "materialize_rules_go_fork.py",
         "nodejs_bootstrap.bzl",
-        "orchestrion_stub.bzl",
-        "private_leak_public_denylist.txt",
         "python_bootstrap.bzl",
-        "rules_go_fork_registry.py",
         "ruby_bootstrap.bzl",
-        "verify_rules_go_profiles.py",
     ],
     visibility = ["//visibility:public"],
 )

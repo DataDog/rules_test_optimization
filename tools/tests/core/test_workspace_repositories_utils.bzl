@@ -12,161 +12,125 @@ load(
     "build_workspace_repository_specs_for_tests",
 )
 
-def _base_git_specs_test(ctx):
-    """Validate the default git/git base repository shape."""
+def _go_git_specs_test(ctx):
+    """Validate the default git repository shape."""
     env = unittest.begin(ctx)
     specs = build_workspace_repository_specs_for_tests(
         rto_commit = "abc123",
     )
+    asserts.equals(env, 1, len(specs))
     asserts.equals(env, "git_repository", specs[0]["kind"])
     asserts.equals(env, "datadog-rules-test-optimization-go", specs[0]["attrs"]["name"])
     asserts.equals(env, "modules/go", specs[0]["attrs"]["strip_prefix"])
-    asserts.equals(env, {"@rules_go": "@io_bazel_rules_go"}, specs[0]["attrs"]["repo_mapping"])
-    asserts.equals(env, "git_repository", specs[1]["kind"])
-    asserts.equals(env, "io_bazel_rules_go", specs[1]["attrs"]["name"])
-    asserts.equals(env, "third_party/rgo/v0_60_0/base", specs[1]["attrs"]["strip_prefix"])
+    asserts.equals(env, {"@io_bazel_rules_go": "@io_bazel_rules_go"}, specs[0]["attrs"]["repo_mapping"])
     return unittest.end(env)
 
-base_git_specs_test = unittest.make(_base_git_specs_test)
+go_git_specs_test = unittest.make(_go_git_specs_test)
 
-def _archive_archive_specs_test(ctx):
-    """Validate local-archive style archive/archive repository specs."""
+def _go_archive_specs_test(ctx):
+    """Validate local-archive style repository specs."""
     env = unittest.begin(ctx)
     specs = build_workspace_repository_specs_for_tests(
         rto_commit = "",
         datadog_fetch = "archive",
-        rules_go_fetch = "archive",
-        rules_go_variant = "base",
         rto_archive_url = "file:///tmp/rto.tar.gz",
         rto_archive_sha256 = "1" * 64,
         rto_archive_prefix = "rules_test_optimization-local",
         rto_archive_type = "tar.gz",
     )
+    asserts.equals(env, 1, len(specs))
     asserts.equals(env, "http_archive", specs[0]["kind"])
+    asserts.equals(env, "datadog-rules-test-optimization-go", specs[0]["attrs"]["name"])
     asserts.equals(env, "rules_test_optimization-local/modules/go", specs[0]["attrs"]["strip_prefix"])
-    asserts.equals(env, "http_archive", specs[1]["kind"])
-    asserts.equals(env, "rules_test_optimization-local/third_party/rgo/v0_60_0/base", specs[1]["attrs"]["strip_prefix"])
+    asserts.equals(env, "file:///tmp/rto.tar.gz", specs[0]["attrs"]["urls"][0])
+    asserts.equals(env, "1" * 64, specs[0]["attrs"]["sha256"])
     return unittest.end(env)
 
-archive_archive_specs_test = unittest.make(_archive_archive_specs_test)
+go_archive_specs_test = unittest.make(_go_archive_specs_test)
 
-def _custom_rules_go_repo_name_test(ctx):
-    """Validate custom rules_go repo names are reflected in repo_mapping."""
-    env = unittest.begin(ctx)
-    specs = build_workspace_repository_specs_for_tests(
+def _go_custom_rules_go_repo_name_target_impl(_ctx):
+    """Create a target that fails during analysis for another rules_go name."""
+    build_workspace_repository_specs_for_tests(
         rto_commit = "abc123",
         rules_go_repo_name = "custom_rules_go",
     )
-    asserts.equals(env, {"@rules_go": "@custom_rules_go"}, specs[0]["attrs"]["repo_mapping"])
-    asserts.equals(env, "custom_rules_go", specs[1]["attrs"]["name"])
-    return unittest.end(env)
+    return []
 
-custom_rules_go_repo_name_test = unittest.make(_custom_rules_go_repo_name_test)
+go_custom_rules_go_repo_name_target_rule = rule(implementation = _go_custom_rules_go_repo_name_target_impl)
 
-def _explicit_upstream_base_specs_test(ctx):
-    """Validate explicit upstream selection keeps the v0.60 base path."""
-    env = unittest.begin(ctx)
-    specs = build_workspace_repository_specs_for_tests(
-        rto_commit = "abc123",
-        rules_go_upstream = "v0_60_0",
-        rules_go_variant = "base",
-    )
-    rules_go_specs = [spec for spec in specs if spec["attrs"]["name"] == "io_bazel_rules_go"]
-    asserts.equals(env, 1, len(rules_go_specs))
-    asserts.equals(env, "third_party/rgo/v0_60_0/base", rules_go_specs[0]["attrs"]["strip_prefix"])
-    return unittest.end(env)
-
-explicit_upstream_base_specs_test = unittest.make(_explicit_upstream_base_specs_test)
-
-def _invalid_variant_target_impl(ctx):
-    """Create a target that fails during analysis for an invalid variant."""
+def _go_invalid_fetch_mode_target_impl(_ctx):
+    """Create a target that fails during analysis for an invalid fetch mode."""
     build_workspace_repository_specs_for_tests(
         rto_commit = "abc123",
-        rules_go_variant = "custom",
+        datadog_fetch = "local",
     )
     return []
 
-invalid_variant_target_rule = rule(implementation = _invalid_variant_target_impl)
+go_invalid_fetch_mode_target_rule = rule(implementation = _go_invalid_fetch_mode_target_impl)
 
-def _removed_complete_variant_target_impl(ctx):
-    """Create a target that fails during analysis for the removed complete variant."""
+def _go_missing_git_commit_target_impl(_ctx):
+    """Create a target that fails during analysis for missing git commit input."""
     build_workspace_repository_specs_for_tests(
-        rto_commit = "abc123",
-        rules_go_variant = "complete",
+        rto_commit = "",
     )
     return []
 
-removed_complete_variant_target_rule = rule(implementation = _removed_complete_variant_target_impl)
+go_missing_git_commit_target_rule = rule(implementation = _go_missing_git_commit_target_impl)
 
-def _invalid_upstream_impl(ctx):
-    """Create a target that fails during analysis for an invalid upstream."""
-    build_workspace_repository_specs_for_tests(
-        rto_commit = "abc123",
-        rules_go_upstream = "v9_99_0",
-        rules_go_variant = "base",
-    )
-    return []
-
-invalid_upstream_rule = rule(
-    implementation = _invalid_upstream_impl,
-)
-
-def _missing_archive_target_impl(ctx):
+def _go_missing_archive_target_impl(_ctx):
     """Create a target that fails during analysis for missing archive inputs."""
     build_workspace_repository_specs_for_tests(
         rto_commit = "",
         datadog_fetch = "archive",
-        rules_go_fetch = "archive",
         rto_archive_url = "file:///tmp/rto.tar.gz",
     )
     return []
 
-missing_archive_target_rule = rule(implementation = _missing_archive_target_impl)
+go_missing_archive_target_rule = rule(implementation = _go_missing_archive_target_impl)
 
-def _existing_repo_target_impl(ctx):
+def _go_existing_repo_target_impl(_ctx):
     """Create a target that fails during analysis for repository collisions."""
     build_workspace_repository_specs_for_tests(
         rto_commit = "abc123",
-        existing_repositories = {"io_bazel_rules_go": {}},
+        existing_repositories = {"datadog-rules-test-optimization-go": {}},
     )
     return []
 
-existing_repo_target_rule = rule(implementation = _existing_repo_target_impl)
+go_existing_repo_target_rule = rule(implementation = _go_existing_repo_target_impl)
 
-def _invalid_variant_failure_test_impl(ctx):
-    """Assert invalid variant failures remain actionable."""
+def _go_missing_rules_go_repo_target_impl(_ctx):
+    """Create a target that fails when rules_go is not declared first."""
+    build_workspace_repository_specs_for_tests(
+        rto_commit = "abc123",
+        existing_repositories = {},
+    )
+    return []
+
+go_missing_rules_go_repo_target_rule = rule(implementation = _go_missing_rules_go_repo_target_impl)
+
+def _go_invalid_fetch_mode_failure_test_impl(ctx):
+    """Assert invalid fetch mode failures remain actionable."""
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "rules_go_variant must be one of")
+    asserts.expect_failure(env, "datadog_fetch must be one of")
     return analysistest.end(env)
 
-invalid_variant_failure_test = analysistest.make(
-    _invalid_variant_failure_test_impl,
+go_invalid_fetch_mode_failure_test = analysistest.make(
+    _go_invalid_fetch_mode_failure_test_impl,
     expect_failure = True,
 )
 
-def _removed_complete_variant_failure_test_impl(ctx):
-    """Assert complete variant failures explain the migration."""
+def _go_missing_git_commit_failure_test_impl(ctx):
+    """Assert missing git commit failures remain actionable."""
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "rules_go_variant \"complete\" is no longer supported. Use \"base\".")
+    asserts.expect_failure(env, "rto_commit is required when datadog_fetch is 'git'")
     return analysistest.end(env)
 
-removed_complete_variant_failure_test = analysistest.make(
-    _removed_complete_variant_failure_test_impl,
+go_missing_git_commit_failure_test = analysistest.make(
+    _go_missing_git_commit_failure_test_impl,
     expect_failure = True,
 )
 
-def _invalid_upstream_failure_test_impl(ctx):
-    """Assert invalid upstream failures remain actionable."""
-    env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "rules_go_upstream must be one of")
-    return analysistest.end(env)
-
-invalid_upstream_failure_test = analysistest.make(
-    _invalid_upstream_failure_test_impl,
-    expect_failure = True,
-)
-
-def _missing_archive_failure_test_impl(ctx):
+def _go_missing_archive_failure_test_impl(ctx):
     """Assert archive mode reports all missing archive inputs."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "archive fetch mode requires")
@@ -174,19 +138,42 @@ def _missing_archive_failure_test_impl(ctx):
     asserts.expect_failure(env, "rto_archive_prefix")
     return analysistest.end(env)
 
-missing_archive_failure_test = analysistest.make(
-    _missing_archive_failure_test_impl,
+go_missing_archive_failure_test = analysistest.make(
+    _go_missing_archive_failure_test_impl,
     expect_failure = True,
 )
 
-def _existing_repo_failure_test_impl(ctx):
+def _go_existing_repo_failure_test_impl(ctx):
     """Assert repository collision failures include a correction snippet."""
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "repository 'io_bazel_rules_go' is already declared")
-    asserts.expect_failure(env, "rules_go_repo_name")
+    asserts.expect_failure(env, "repository 'datadog-rules-test-optimization-go' is already declared")
+    asserts.expect_failure(env, "stop calling this helper for the Go companion repository")
     return analysistest.end(env)
 
-existing_repo_failure_test = analysistest.make(
-    _existing_repo_failure_test_impl,
+go_existing_repo_failure_test = analysistest.make(
+    _go_existing_repo_failure_test_impl,
+    expect_failure = True,
+)
+
+def _go_missing_rules_go_repo_failure_test_impl(ctx):
+    """Assert missing rules_go failures explain declaration ordering."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "rules_go repository 'io_bazel_rules_go' is not declared")
+    asserts.expect_failure(env, "Declare upstream rules_go before calling this helper")
+    return analysistest.end(env)
+
+go_missing_rules_go_repo_failure_test = analysistest.make(
+    _go_missing_rules_go_repo_failure_test_impl,
+    expect_failure = True,
+)
+
+def _go_custom_rules_go_repo_name_failure_test_impl(ctx):
+    """Assert that another rules_go name fails: the SDK repositories need io_bazel_rules_go."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "rules_go_repo_name must be \"io_bazel_rules_go\", got \"custom_rules_go\"")
+    return analysistest.end(env)
+
+go_custom_rules_go_repo_name_failure_test = analysistest.make(
+    _go_custom_rules_go_repo_name_failure_test_impl,
     expect_failure = True,
 )

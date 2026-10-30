@@ -20,11 +20,9 @@ bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
 
 # Dev-only dependency for in-repo example builds that compile Go targets.
 # Consumer-facing core usage remains rules_go-free.
-bazel_dep(name = "rules_go", version = "0.60.0", dev_dependency = True)
-local_path_override(
-    module_name = "rules_go",
-    path = "third_party/rgo/v0_60_0/base",
-)
+# The Go companion, which the root loads as a local repository, and the SDK
+# repositories that go_wrap_sdk writes load rules_go as @io_bazel_rules_go.
+bazel_dep(name = "rules_go", version = "0.60.0", dev_dependency = True, repo_name = "io_bazel_rules_go")
 
 # Dev-only dependency for in-repo Python companion/example builds.
 bazel_dep(name = "rules_python", version = "1.7.0", dev_dependency = True)

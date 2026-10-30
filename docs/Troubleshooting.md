@@ -27,14 +27,14 @@ languages set the metadata repository environment:
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 ```
 
-Go optimized targets enable Orchestrion through their own transition; do not
-add a global `orchestrion:enabled` setting.
+Instrumented Go tests select the Go SDK that `ddtest instrument` instruments
+through their own transition; no other build setting is needed.
 
 When the config is omitted, the public Go extension's config-gated default and
 repositories explicitly configured with `enabled_by_env = True` generate the
-documented no-fetch stubs. Go aliases select local empty targets; Python keeps
-the normal consumer runner without Test Optimization metadata or payload
-wiring. Java, NodeJS, .NET, and Ruby retain their existing enablement contract
+documented no-fetch stubs. `dd_topt_go_test` then creates a plain `go_test`;
+Python keeps the normal consumer runner without Test Optimization metadata or
+payload wiring. Java, NodeJS, .NET, and Ruby retain their existing enablement contract
 in this release.
 
 ## Quick triage map
@@ -42,7 +42,7 @@ in this release.
 | Symptom | First checks | Likely section |
 |---------|--------------|----------------|
 | No files fetched or stale data | `DD_API_KEY` forwarded with `--repo_env`; use `FETCH_SALT` only for an explicit force-refresh sync | Repository rule not fetching data |
-| Uploader says no payload files | tracer file-mode contract + payload files under `bazel-testlogs/*/test.outputs/` | Uploader not finding payloads |
+| Uploader says no payload files | tracer file-mode contract + payload files under `bazel-testlogs/*/test.outputs/` | Uploader not finding payloads, Instrumented test writes no payloads |
 | Doctor reports msgpack payloads | tracer is not in Bazel JSON file mode | Doctor failures |
 | Doctor reports missing Git or Bazel metadata | sync metadata context or sidecar metadata is absent | Doctor failures |
 | Uploaded tests miss Git or Bazel tags | run uploader dry-run enrichment validation | Uploader enrichment dry-run |
@@ -51,8 +51,11 @@ in this release.
 | Upload network errors | credential mode (agentless vs EVP), intake reachability | Tests not uploading (network errors) |
 | CI failure requires log archaeology | archive the support bundle from the failing run | Collect diagnostic reports |
 | Module selection misses | `bazel query` for `module_*` targets and importpath/module label expectations | Per-module files not found |
-| Go build fails with a tracer version mismatch | `dd_trace_go_pin_files`, explicit version escape hatches, local `go.mod`/`go.sum` | Go tracer version drift |
-| Bazel resolves an older tracer or Orchestrion module in WORKSPACE mode | checked-in `go_repository(...)` pins | WORKSPACE go_repository drift |
+| Instrumented Go test fails with "need a Go SDK to instrument" | `topt_go_ddtest.sdk(...)` in the root `MODULE.bazel`, or `topt_go_ddtest_workspace_repositories(...)` in WORKSPACE | Instrumented test fails: no Go SDK to instrument |
+| Go test analysis fails with "would link Mini's packages twice" | `override_repo` of go_deps' `github.com/DataDog/ddtest/ddto` | Analysis fails: test would link Mini twice |
+| Repository rule fails with "DDTEST_INSTRUMENT has" | the pinned ddtest release | DDTEST_INSTRUMENT contract mismatch |
+| A Go target under an instrumented test builds with the wrong Go version | an `sdk_version` transition below the test | Instrumented tests ignore sdk_version |
+| Go bootstrap stops on a `rules_go` override | override that points at the removed Datadog fork | Bootstrap stops on a rules_go fork override |
 | WORKSPACE archive pins fail after a PR was squash-merged | generated pins commit reachability and archive SHA | Published Go pins |
 | Private/internal WORKSPACE fetch returns 404 | SSH git or authenticated archive access | Private repository fetch |
 | Bazel downloads unrelated toolchains or analyzes unrelated packages | cold monorepo state or root-package doctor/uploader placement | Monorepo analysis cost |
@@ -340,17 +343,17 @@ no-op. If a cached target is reported as missing instead, verify that doctor
 received the BEP from the exact matching `bazel test` invocation. Use separate
 cache-isolation tests when validating action-key behavior.
 
-### Disabled mode or enabled bootstrap invokes host Go
+### Disabled mode or enabled run invokes host Go
 
-Disabled manifest sync must not read the manifest, contact Datadog, or resolve
-the real Orchestrion tool repository. Enabled Go bootstrap uses the
-Bazel-managed Go SDK and must not depend on a host `go` binary. If a host-Go
-sentinel fires, verify the patched `rules_go` profile, generated SDK wiring,
-and central wrapper before installing Go on the host.
+Disabled manifest sync must not read the manifest or contact Datadog. Neither
+mode needs a host `go` binary: `ddtest instrument` writes the instrumented Go
+SDK and Mini without it, and rules_go builds with its registered SDK. If a
+host-Go sentinel fires, check which repository rule or action called `go`
+before installing Go on the host.
 
 ## Published Go pins
 
-**Symptom**: A consumer cannot fetch the published Go/Orchestrion archive, or a
+**Symptom**: A consumer cannot fetch the published Go companion archive, or a
 pin that worked during review stops working after a squash merge.
 
 **Cause**: The consumer was given a feature-branch commit, a stale archive hash,
@@ -362,8 +365,6 @@ or a tuple that was not generated from the real GitHub codeload archive.
    ```bash
    ./bazelw run //tools/dev:print_go_onboarding_pins -- \
      --commit "$(git rev-parse origin/main)" \
-     --rules-go-upstream v0_60_0 \
-     --variant base \
      --verify-main-reachable
    ```
 
@@ -372,16 +373,13 @@ or a tuple that was not generated from the real GitHub codeload archive.
    ```bash
    bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
      --print-published-pins \
-     --rto-commit <published-origin-main-sha> \
-     --rules-go-upstream v0_60_0 \
-     --rules-go-variant base
+     --rto-commit <published-origin-main-sha>
    ```
 
 3. **Keep the generated tuple together**. If `RTO_COMMIT`,
    `RTO_ARCHIVE_URL`, `RTO_ARCHIVE_SHA256`, and `RTO_ARCHIVE_PREFIX` come from
-   different commits, archive mode will fail or fetch the wrong source. The
-   current published tuple is tracked in
-   [`docs/Installation_Reference.md`](Installation_Reference.md#current-v120-published-tuple).
+   different commits, archive mode will fail or fetch the wrong source. See
+   [Generate published Go pins](Installation_Reference.md#generate-published-go-pins).
 
 4. **Authenticate private archive downloads**. The helper uses `GITHUB_TOKEN`,
    `GH_TOKEN`, or `gh auth token` when available. If codeload returns `404` for
@@ -393,9 +391,7 @@ or a tuple that was not generated from the real GitHub codeload archive.
    ```bash
    bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
      --write-onboarding-summary=TEST_OPTIMIZATION_GUIDE.md \
-     --rto-commit <published-origin-main-sha> \
-     --rules-go-upstream v0_60_0 \
-     --rules-go-variant base
+     --rto-commit <published-origin-main-sha>
    ```
 
 ## Private repository fetch
@@ -512,11 +508,10 @@ fails before upload.
 
 **Solutions**:
 
-1. **Msgpack payloads**: Go/Orchestrion Bazel mode must write JSON payloads to
-   `TEST_UNDECLARED_OUTPUTS_DIR`. If the doctor finds `.msgpack` or
-   `.msgpack.gz`, verify that the target uses the Go test optimization macro or
-   wrapper and that the configured `dd-trace-go` version includes Bazel JSON
-   file-mode support.
+1. **Msgpack payloads**: Go tests built by `dd_topt_go_test` write JSON
+   payloads to `TEST_UNDECLARED_OUTPUTS_DIR`. If the doctor finds `.msgpack` or
+   `.msgpack.gz`, verify that the target uses `dd_topt_go_test` or the
+   repository's wrapper around it.
 
 2. **No JSON payloads**: Confirm the test target actually ran with Test
    Optimization enabled and inspect:
@@ -888,152 +883,192 @@ full bundle.
    dd_topt_go_test(
        name = "my_test",
        module_label_override = "my_expected_module",  # Matches :module_my_expected_module
-       orchestrion_mode = "test_optimization",
        ...
    )
    ```
 
-## Go tracer version drift
+## Go tests instrumented by ddtest
 
-**Symptom**: Go bootstrap or Bazel build fails with a message showing a
-configured tracer version map and a different resolved local `dd-trace-go`
-module version.
+`dd_topt_go_test` builds enabled tests with the Go SDK that `ddtest instrument`
+instruments and links Mini, ddtest's Test Optimization runtime. The SDK and
+Mini come from the ddtest release that
+[`modules/go/topt_go_ddtest_repository.bzl`](../modules/go/topt_go_ddtest_repository.bzl)
+pins. See [Go instrumentation SDK](Configuration_Reference.md#go-instrumentation-sdk)
+for the configuration and
+[ddtest's Bazel documentation](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md)
+for the ddtest side. To move a 1.x setup, see the
+[migration note](../CHANGELOG.md#unreleased).
 
-**Solutions**:
+### Instrumented test fails: no Go SDK to instrument
 
-1. **If you use guided bootstrap**, rerun it with the query you want:
-   ```bash
-   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-     --dd-trace-go-version <tag-or-sha>
-   ```
-   Bootstrap accepts tags, pseudo-versions, branches, and commit SHAs. It
-   rewrites the workspace to the exact resolved versions that Go actually uses.
-   By default it uses targeted module sync, not `go mod tidy`.
-
-2. **If targeted sync reports readonly module errors**, rerun bootstrap with
-   explicit targeted sync and the same Go SDK your repository expects:
-   ```bash
-   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-     --go-mod-sync=targeted \
-     --go-binary /path/to/go
-   ```
-   If the workspace uses checked-in `go_repository` declarations, refresh those
-   declarations after `go.mod` or `go.sum` changes so Bazel and the Go module
-   graph agree.
-
-3. **If you wire Orchestrion manually**, use the checked-in module as the
-   normal source of truth:
-   ```bzl
-   orchestrion.from_source(
-       dd_trace_go_pin_files = ["@//:go.mod", "@//:go.sum"],
-       go_sdk_root = "@test_optimization_go_sdk//:ROOT",
-       go_sdk_version = "<go-version>",
-       version = "<orchestrion-version>",
-   )
-   ```
-   Export both root files from their BUILD package. Bazel resolves all
-   supported direct and transitive tracer modules with hermetic Go and
-   `-mod=readonly`; it does not update `go.sum`.
-
-4. **If pin-file resolution reports an absent module, unsupported replacement,
-   or read-only failure**, fix the module with its normal dependency workflow.
-   If that graph intentionally cannot use pin-file mode, configure the exact
-   `dd_trace_go_versions` map as an escape hatch. Do not combine pin files with
-   either explicit version field.
-
-5. **If you omitted every selection mode**, remember the legacy default is
-   `v2.9.1`.
-
-The build fails on purpose here. It is preventing Bazel from injecting one
-set of tracer versions while the local Go module still resolves another.
-
-`orchestrion.tool.go` still matters, but as required import/config wiring for
-Orchestrion, not as the source of truth for tracer versions.
-
-## Enabled Orchestrion cannot find Go
-
-**Symptom**:
+**Symptom**: Building or testing a `dd_topt_go_test` target fails with:
 
 ```text
-Could not find 'go' binary. Please ensure Go is installed.
+Go tests instrumented by dd_topt_go_test need a Go SDK to instrument: add topt_go_ddtest.sdk(go_mod = "//:go.mod") to the root MODULE.bazel, or call topt_go_ddtest_repositories(go_version = ...) in WORKSPACE
 ```
 
-**Cause**: the workspace uses Orchestrion wiring generated before the
-Bazel-managed SDK contract was added, or a manual block omitted the SDK root
-and version. Disabled mode still avoids the real repository, but enabled mode
-must compile the patched Orchestrion binary on a cold cache miss.
-
-**Solution**:
-
-1. For Bzlmod, rerun guided bootstrap with the workspace's real Go toolchain
-   version:
-   ```bash
-   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-     --guided \
-     --service <datadog-service> \
-     --runtime-version <go-version> \
-     --write-bazelrc
-   ```
-2. For WORKSPACE, regenerate the reviewed snippet with
-   `--workspace-mode --print-workspace-snippet --runtime-version <go-version>`.
-3. Verify the generated SDK version equals the version passed to the
-   repository's central `go_register_toolchains(...)` call and the Test
-   Optimization sync repository.
-
-Do not install Go on the analysis host as the fix. The supported wiring uses
-the Bazel-managed SDK on a cache miss and can restore a compatible warm
-Orchestrion bootstrap before materializing that SDK.
-
-## WORKSPACE go_repository drift
-
-**Symptom**: `go.mod` and `go.sum` look correct, but Bazel still resolves an
-older `github.com/DataDog/orchestrion` or `dd-trace-go` module from a checked-in
-`repositories.bzl` file.
-
-**Cause**: WORKSPACE repositories often keep generated `go_repository(...)`
-declarations separate from `go.mod`. Updating the Go module graph is not enough
-if the generated repository file still pins old versions.
+**Cause**: The root module has no `topt_go_ddtest.sdk(...)` tag. The Go
+companion then registers a stand-in toolchain that only instrumented tests
+select, and it fails with this message. Builds without instrumented tests are
+not affected. Tags in modules other than the root module are ignored.
 
 **Solutions**:
 
-1. **Run bootstrap diagnostics after targeted sync**:
-   ```bash
-   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-     --workspace-mode \
-     --write-orchestrion-files \
-     --go-mod-sync=targeted \
-     --check-go-repositories \
-     --go-repositories-file repositories.bzl
+1. In Bzlmod, add the tag to the root `MODULE.bazel`:
+   ```bzl
+   topt_go_ddtest = use_extension(
+       "@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",
+       "topt_go_ddtest",
+   )
+   topt_go_ddtest.sdk(go_mod = "//:go.mod")  # or go_version = "1.25.0"
    ```
-   The checker compares only the modules bootstrap owns:
-   `github.com/DataDog/orchestrion`, `github.com/DataDog/dd-trace-go/v2`,
-   `github.com/DataDog/dd-trace-go/contrib/net/http/v2`, and
-   `github.com/DataDog/dd-trace-go/contrib/log/slog/v2`.
+   The directory of `go_mod` must be a Bazel package.
 
-2. **Let your repo-owned refresh command repair the file**:
-   ```bash
-   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-     --workspace-mode \
-     --write-orchestrion-files \
-     --go-mod-sync=targeted \
-     --check-go-repositories \
-     --go-repositories-file repositories.bzl \
-     --go-repositories-refresh-command './tools/update-go-repositories.sh'
-   ```
-   Bootstrap runs the refresh command only after targeted sync succeeds, then
-   validates `repositories.bzl` again. It never edits `repositories.bzl`
-   directly.
+2. In WORKSPACE, call `topt_go_ddtest_workspace_repositories` after
+   `go_rules_dependencies()`. The message names `topt_go_ddtest_repositories`,
+   which declares the repositories but does not register the toolchains:
+   ```bzl
+   load("@datadog-rules-test-optimization-go//:topt_go_ddtest_repository.bzl", "topt_go_ddtest_workspace_repositories")
 
-3. **Print expected versions for manual updates**:
-   ```bash
-   bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-     --workspace-mode \
-     --go-mod-sync=off \
-     --check-go-repositories \
-     --print-go-repository-updates
+   topt_go_ddtest_workspace_repositories(go_version = "1.25.0")
    ```
-   This is useful when the repository has a custom Gazelle/update-repos flow
-   that must be run manually or in a separate review step.
+   Without this call, WORKSPACE has neither the instrumented toolchains nor
+   the `@topt_go_ddtest_mini` repository, so analysis of an instrumented test
+   fails on the missing repository instead of this message. See
+   [Configure Go support in WORKSPACE](Installation_Reference.md#8-configure-go-support-in-workspace-with-the-public-helper).
+
+### Analysis fails: test would link Mini twice
+
+**Symptom**: Analysis of a `dd_topt_go_test` target fails with:
+
+```text
+//pkg:my_test would link Mini's packages twice: <labels> come from outside @topt_go_ddtest_mini. rules_go links one copy of each package without an error, so the test could run without Test Optimization. ...
+```
+
+**Cause**: A package of `github.com/DataDog/ddtest/ddto` reaches the test
+through `deps` or `embed` from a repository other than the generated Mini,
+usually go_deps' copy when the workspace's `go.mod` requires that module to use
+Mini's Go API in tests. The macro also adds the generated Mini, and rules_go
+would silently link only one of the two copies.
+
+**Solution**: In the root `MODULE.bazel`, replace go_deps' copy with the
+generated Mini. If the file already has a `topt_go_ddtest` extension proxy for
+the `sdk` tag, add the last two lines next to it:
+
+```bzl
+topt_go_ddtest = use_extension("@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl", "topt_go_ddtest")
+use_repo(topt_go_ddtest, "topt_go_ddtest_mini")
+override_repo(go_deps, com_github_datadog_ddtest_ddto = "topt_go_ddtest_mini")
+```
+
+After the override, a test whose `deps` name `testopt` keeps that dependency;
+the macro does not add it a second time. When `deps` is a `select()`, which
+the macro cannot inspect, it adds Mini through a private alias, so the same
+archive can appear under both labels. In WORKSPACE, depend on `@topt_go_ddtest_mini` labels rather than on another
+repository that provides the same module.
+
+### DDTEST_INSTRUMENT contract mismatch
+
+**Symptom**: Fetching `@topt_go_ddtest_mini` or an instrumented SDK fails with
+a message such as:
+
+```text
+Mini's repository: DDTEST_INSTRUMENT has version="<value>", want "v0.0.0-pre-release-f5df4db" (ddtest pre-release-f5df4db)
+```
+
+For an SDK, the message starts with `the instrumented SDK for <platform>`.
+
+**Cause**: After `ddtest instrument bazel` writes Mini or an SDK, the companion
+reads the `DDTEST_INSTRUMENT` file that ddtest wrote and compares its
+`contract`, `sdk_name`, and `version` with `DDTEST_RELEASE` in
+[`modules/go/topt_go_ddtest_repository.bzl`](../modules/go/topt_go_ddtest_repository.bzl).
+The downloaded executables are checked against the pinned SHA256 values, so
+a mismatch usually means that `DDTEST_RELEASE` itself is inconsistent: its tag
+and checksums name one ddtest release, and its `runtime_version`, `contract`,
+or `sdk_name` another.
+
+**Solution**: Use a released version of the Go companion without local edits
+to `DDTEST_RELEASE`. When you change the pin, take the tag, the runtime
+version, the contract, the SDK name, and the six checksums from the same ddtest
+release. A different `contract` means the companion's rules and that ddtest
+release do not agree on what ddtest writes; it needs a companion change, not a
+different expected value.
+
+### Instrumented test writes no payloads
+
+**Symptom**: A Go test passes, but `bazel-testlogs/<target>/test.outputs/`
+has no payloads or no `bazel_target_metadata.json`.
+
+**Causes and solutions**:
+
+1. **The export is disabled.** Without `--config=test-optimization`, or when
+   the sync repository is disabled, `dd_topt_go_test` creates a plain
+   `go_test` under the same name. Check the rule kind with the config you run
+   tests with:
+   ```bash
+   bazel query --config=test-optimization --output=label_kind //pkg:my_test
+   ```
+   An enabled test prints `ddtest_go_test rule`; `go_test rule` means the
+   export is disabled.
+
+2. **The hidden test ran instead of the public one.** Only the public
+   `<name>` target builds `<name>__raw_go_test` with the instrumented Go SDK
+   and copies `bazel_target_metadata.json`. Run `<name>`.
+
+3. **`ci_visibility_enabled = False`.** The macro then does not set
+   `DD_CIVISIBILITY_ENABLED=true`. Set it in the test's `env`, or remove the
+   attribute.
+
+4. **The result was cached.** A `(cached)` result reuses the outputs of an
+   earlier run, and BEP freshness skips them. Rerun the target with
+   `--nocache_test_results` when you need new payloads from it.
+
+5. **The outputs stayed remote.** With remote execution or a remote cache,
+   follow item 4 of
+   [Uploader not finding payloads](#uploader-not-finding-payloads).
+
+### Instrumented tests ignore sdk_version
+
+**Symptom**: A Go binary or library that a transition builds with a specific
+Go version, through `@io_bazel_rules_go//go/toolchain:sdk_version`, builds with
+the instrumented SDK when it is a dependency, `data`, or tool of an instrumented
+test, for example a binary that needs a FIPS Go SDK.
+
+**Cause**: The public test's transition sets
+`@io_bazel_rules_go//go/toolchain:sdk_name` to `ddto`, and the instrumented
+toolchains match only that setting. Every Go target in the test's
+configuration, including exec tools, then resolves to the instrumented SDK,
+whatever `sdk_version` a transition below the test sets. That SDK is the
+official Go release that `topt_go_ddtest.sdk(...)` configures, or the base SDK
+from `base_sdk_roots`.
+
+**Solution**: Keep targets that need another Go SDK out of instrumented tests'
+`deps`, `data` and tools, or configure the instrumented SDK with that SDK as
+its base through `base_sdk_roots` when every Go target of the test can use it.
+Targets outside instrumented tests are not affected.
+
+### Bootstrap stops on a rules_go fork override
+
+**Symptom**: `dd_topt_go_bootstrap` stops with:
+
+```text
+MODULE.bazel has a git_override of rules_go with the removed Datadog rules_go fork (strip_prefix = <fork path>); remove it so that rules_go comes from the Bazel Central Registry, then rerun the bootstrap
+```
+
+The same message names `archive_override` or `local_path_override` (with
+`path`) for those override kinds.
+
+**Cause**: `MODULE.bazel` overrides `rules_go` with the Datadog fork that 1.x
+used, outside the Go bootstrap block that 1.x wrote. Bootstrap replaces that
+block itself, but leaves other overrides to you.
+
+**Solution**: Delete the override so that `bazel_dep(name = "rules_go", ...)`
+resolves from the Bazel Central Registry (0.60.0 or newer), then rerun the
+bootstrap. If the workspace cannot load because the fork commit in the old block
+is no longer fetchable, run the bootstrap from another Bazel workspace that
+depends on the Go companion and pass `--workspace /path/to/your/workspace`, or
+delete the old block by hand and rerun. A `# BEGIN Datadog Go Pin Files` block
+that 1.x left in a `BUILD` file is not used anymore; you can delete it.
 
 ## Large monorepo validation is easy to run incorrectly
 

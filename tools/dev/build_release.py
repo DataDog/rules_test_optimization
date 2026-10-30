@@ -17,7 +17,7 @@ import argparse
 import gzip
 import hashlib
 import json
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 import re
 import shutil
 import subprocess
@@ -41,7 +41,7 @@ def module_version(text: str) -> str:
 
 
 def archive_metadata(archive: Path, prefix: str, version: str, commit: str) -> dict:
-    """Check every module/fork prefix against the actual packaged source."""
+    """Check every module prefix against the actual packaged source."""
     with tarfile.open(archive, "r:gz") as source:
         def read(path: str) -> str:
             handle = source.extractfile(f"{prefix}/{path}")
@@ -62,20 +62,6 @@ def archive_metadata(archive: Path, prefix: str, version: str, commit: str) -> d
                 raise ValueError(f"{path}/MODULE.bazel core dependency does not match {version}")
             modules[f"datadog-rules-test-optimization-{language}"] = f"{prefix}/{path}"
 
-        registry = json.loads(read("third_party/rules_go_orchestrion/registry.json"))
-        forks = {}
-        for upstream, entry in registry["upstreams"].items():
-            path = entry["variants"]["base"]["tree_path"]
-            if PurePosixPath(path).is_absolute() or ".." in PurePosixPath(path).parts:
-                raise ValueError(f"unsafe rules_go tree path: {path}")
-            read(f"{path}/MODULE.bazel")
-            forks[upstream] = {
-                "version": entry["rules_go_version"],
-                "strip_prefix": f"{prefix}/{path}",
-            }
-        if registry["default_upstream"] not in forks:
-            raise ValueError("default rules_go upstream has no packaged base fork")
-
     with archive.open("rb") as handle:
         digest = hashlib.file_digest(handle, "sha256").hexdigest()
     return {
@@ -87,8 +73,6 @@ def archive_metadata(archive: Path, prefix: str, version: str, commit: str) -> d
         "sha256": digest,
         "strip_prefix": prefix,
         "modules": modules,
-        "rules_go": forks,
-        "default_rules_go_upstream": registry["default_upstream"],
     }
 
 
@@ -96,7 +80,7 @@ def archive_call(metadata: dict, name: str, prefix: str, *, bzlmod: bool) -> str
     function, attribute = ("archive_override", "module_name") if bzlmod else ("http_archive", "name")
     repository_mapping = ""
     if not bzlmod and name == "datadog-rules-test-optimization-go":
-        repository_mapping = '    repo_mapping = {"@rules_go": "@io_bazel_rules_go"},\n'
+        repository_mapping = '    repo_mapping = {"@io_bazel_rules_go": "@io_bazel_rules_go"},\n'
     return (
         f"{function}(\n"
         f"    {attribute} = {json.dumps(name)},\n"
@@ -114,10 +98,10 @@ def installation_notes(metadata: dict) -> str:
         "",
         f"Source commit: `{metadata['commit']}`.",
         "",
-        "Use the same archive and checksum for core, companions, and the Go fork.",
+        "Use the same archive and checksum for core and companions.",
         "These snippets install dependencies; follow the README for runtime/toolchain setup.",
         "For Bzlmod, add the core block and only the companions you use.",
-        "For Go, also add one of the rules_go blocks below before running the bootstrap.",
+        "For Go, use upstream rules_go and configure the SDK that ddtest instruments as the README describes.",
         "WORKSPACE users should use the public language repository helpers after installing core.",
     ]
     for bzlmod in (True, False):
@@ -129,12 +113,6 @@ def installation_notes(metadata: dict) -> str:
             if bzlmod:
                 lines.append(f'bazel_dep(name = "{name}", version = "{metadata["version"]}")')
             lines.extend([archive_call(metadata, name, prefix, bzlmod=bzlmod).rstrip(), "```", ""])
-        lines.extend(["### Go fork (choose one supported upstream)", ""])
-        for upstream, fork in metadata["rules_go"].items():
-            lines.extend([f"#### {upstream}", "", "```bzl"])
-            if bzlmod:
-                lines.append(f'bazel_dep(name = "rules_go", version = "{fork["version"]}")')
-            lines.extend([archive_call(metadata, "rules_go" if bzlmod else "io_bazel_rules_go", fork["strip_prefix"], bzlmod=bzlmod).rstrip(), "```", ""])
     return "\n".join(lines) + "\n"
 
 

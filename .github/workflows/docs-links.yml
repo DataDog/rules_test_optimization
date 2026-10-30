@@ -62,7 +62,7 @@ jobs:
           filtered=()
           for file in "${files[@]}"; do
             case "$file" in
-              third_party/*|docs/superpowers/plans/*) continue ;;
+              docs/superpowers/plans/*) continue ;;
             esac
             filtered+=("$file")
           done

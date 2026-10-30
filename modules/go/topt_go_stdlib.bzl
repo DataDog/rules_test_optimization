@@ -4,22 +4,11 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Build target for warming the Test Optimization Go standard library."""
+"""Build target for warming the Go standard library of instrumented tests."""
 
-load("@rules_go//go/private:providers.bzl", "GoStdLib")
-load("@rules_go//go/private/rules:transition.bzl", "go_transition")
-
-_ORCHESTRION_ENABLED_SETTING = "@rules_go//go/private/orchestrion:enabled"
-_ORCHESTRION_MODE_SETTING = "@rules_go//go/private/orchestrion:mode"
-_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
-
-def _stdlib_warmup_transition_impl(_settings, _attr):
-    return {
-        _ORCHESTRION_ENABLED_SETTING: True,
-        _ORCHESTRION_MODE_SETTING: _ORCHESTRION_MODE_TEST_OPTIMIZATION,
-    }
-
-stdlib_warmup_transition_impl_for_tests = _stdlib_warmup_transition_impl
+load("@io_bazel_rules_go//go/private:providers.bzl", "GoStdLib")
+load("@io_bazel_rules_go//go/private/rules:transition.bzl", "go_transition")
+load(":topt_go_ddtest.bzl", "ddtest_transition")
 
 def _with_manual_tag(tags):
     tags = list(tags or [])
@@ -28,15 +17,6 @@ def _with_manual_tag(tags):
     return tags
 
 stdlib_warmup_tags_for_tests = _with_manual_tag
-
-_stdlib_warmup_transition = transition(
-    implementation = _stdlib_warmup_transition_impl,
-    inputs = [],
-    outputs = [
-        _ORCHESTRION_ENABLED_SETTING,
-        _ORCHESTRION_MODE_SETTING,
-    ],
-)
 
 def _first_target(dep):
     if type(dep) == "list":
@@ -47,17 +27,13 @@ def _first_target(dep):
 
 def _go_transition_stdlib_warmup_impl(ctx):
     stdlib = ctx.attr._stdlib[GoStdLib]
-    direct = []
-    shared_helpers = getattr(stdlib, "_synthetic_testmain_helpers", None)
-    if shared_helpers:
-        direct.append(shared_helpers)
-    return [DefaultInfo(files = depset(direct = direct, transitive = [stdlib.libs, stdlib.cache_dir]))]
+    return [DefaultInfo(files = depset(transitive = [stdlib.libs, stdlib.cache_dir]))]
 
 _go_transition_stdlib_warmup = rule(
     implementation = _go_transition_stdlib_warmup_impl,
     attrs = {
         "_stdlib": attr.label(
-            default = "@rules_go//:stdlib",
+            default = "@io_bazel_rules_go//:stdlib",
             providers = [GoStdLib],
         ),
         "_allowlist_function_transition": attr.label(
@@ -75,17 +51,22 @@ _dd_topt_go_stdlib_warmup = rule(
     attrs = {
         "actual": attr.label(
             mandatory = True,
-            cfg = _stdlib_warmup_transition,
+            cfg = ddtest_transition,
         ),
         "_allowlist_function_transition": attr.label(
             default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
         ),
     },
-    doc = "Builds the Orchestrion-instrumented Go standard library used by Test Optimization.",
+    doc = "Builds the Go standard library with the SDK that ddtest instruments.",
 )
 
 def dd_topt_go_stdlib_warmup(name, **kwargs):
-    """Creates a warmup target with the same Go transitions as a real go_test."""
+    """Creates a warmup target with the same Go transitions as a real go_test.
+
+    Args:
+      name: Target name.
+      **kwargs: Common rule attributes such as tags and visibility.
+    """
     transitioned_name = name + "__go_transition"
     _go_transition_stdlib_warmup(
         name = transitioned_name,

@@ -18,8 +18,10 @@ small repositories.
 
 1. Tests write payloads to
    `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests/*.json` and
-   `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`; tracers may also
-   write `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/telemetry/*.json`
+   `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`; test runtimes may
+   also write `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/telemetry/*.json`. For Go,
+   the runtime is Mini, ddtest's Test Optimization runtime, which
+   `dd_topt_go_test` links into the test
 2. Bazel automatically collects these to
    `bazel-testlogs/<package>/<target>/test.outputs/`
 3. After tests complete, run the doctor via `bazel run` to validate local
@@ -49,14 +51,14 @@ same config:
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 ```
 
-Optimized Go targets enable Orchestrion through their own transition. Removing
-`--config=test-optimization` disables metadata resolution; no global
-Orchestrion setting or second user-facing bool is required.
+Instrumented Go tests select the Go SDK that `ddtest instrument` instruments
+through their own transition. Removing `--config=test-optimization` disables
+metadata resolution; no other build setting or second user-facing bool is
+required.
 
-Config-gated Python consumers use only the
-`DD_TEST_OPTIMIZATION_ENABLED=1` entry and omit the Go-specific Orchestrion
-line. Java, NodeJS, .NET, and Ruby retain their existing enablement contract in
-this release.
+Config-gated Python consumers use the same
+`DD_TEST_OPTIMIZATION_ENABLED=1` entry. Java, NodeJS, .NET, and Ruby retain
+their existing enablement contract in this release.
 
 ```bash
 # Vendor the full tools/test_optimization/ helper directory, or set
@@ -136,15 +138,15 @@ Enrichment validation:
 - Default required enriched tags are `git.repository_url`, `git.commit.sha`,
   `bazel.target`, and `bazel.package`. Use repeatable
   `--expected-enriched-tag=<tag>` flags to validate additional runtime-specific
-  tags such as `bazel.go.payload_selection` during Go/Orchestrion rollouts.
+  tags such as `bazel.go.payload_selection` during Go rollouts.
 
 Credential handling:
 
 - Pass `DD_API_KEY`, `DD_SITE`, and `DD_TEST_OPTIMIZATION_AGENT_URL` at uploader
   runtime via environment variables only.
 - Do not pass `DD_TEST_OPTIMIZATION_AGENT_URL`,
-  `DD_TEST_OPTIMIZATION_AGENTLESS_URL`, or `DD_GIT_*` to Go/Orchestrion tests
-  with `--test_env`.
+  `DD_TEST_OPTIMIZATION_AGENTLESS_URL`, or `DD_GIT_*` to Go tests with
+  `--test_env`.
 - Do not hardcode secrets in `BUILD.bazel`, scripts committed to git, or CI
   logs.
 - The generated uploader scripts read env vars directly (no shell `eval`
@@ -825,7 +827,7 @@ result.
 - Bazel metadata is included as stable tags:
   `bazel.rule_name`, `bazel.rule_version`, `bazel.os`, and `bazel.arch`.
 - When enrichment is active, those Bazel keys are merged into each test event
-  alongside the existing CI, Git, OS, and runtime tags. This includes Go tracer
+  alongside the existing CI, Git, OS, and runtime tags. This includes Go
   payloads that encode CI Visibility data as `span` events; those events still
   need the same Git and Bazel tags before upload.
 - CODEOWNERS enrichment remains limited to non-span CI Visibility lifecycle and

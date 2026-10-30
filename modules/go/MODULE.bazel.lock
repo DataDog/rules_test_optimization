@@ -10,6 +10,7 @@
     "https://bcr.bazel.build/modules/abseil-cpp/20230802.1/MODULE.bazel": "fa92e2eb41a04df73cdabeec37107316f7e5272650f81d6cc096418fe647b915",
     "https://bcr.bazel.build/modules/abseil-cpp/20240116.1/MODULE.bazel": "37bcdb4440fbb61df6a1c296ae01b327f19e9bb521f9b8e26ec854b6f97309ed",
     "https://bcr.bazel.build/modules/abseil-cpp/20240116.1/source.json": "9be551b8d4e3ef76875c0d744b5d6a504a27e3ae67bc6b28f46415fd2d2957da",
+    "https://bcr.bazel.build/modules/bazel_features/1.1.0/MODULE.bazel": "cfd42ff3b815a5f39554d97182657f8c4b9719568eb7fded2b9135f084bf760b",
     "https://bcr.bazel.build/modules/bazel_features/1.1.1/MODULE.bazel": "27b8c79ef57efe08efccbd9dd6ef70d61b4798320b8d3c134fd571f78963dbcd",
     "https://bcr.bazel.build/modules/bazel_features/1.11.0/MODULE.bazel": "f9382337dd5a474c3b7d334c2f83e50b6eaedc284253334cf823044a26de03e8",
     "https://bcr.bazel.build/modules/bazel_features/1.15.0/MODULE.bazel": "d38ff6e517149dc509406aca0db3ad1efdd890a85e049585b7234d04238e2a4d",
@@ -37,6 +38,9 @@
     "https://bcr.bazel.build/modules/bazel_skylib/1.8.2/source.json": "34a3c8bcf233b835eb74be9d628899bb32999d3e0eadef1947a0a562a2b16ffb",
     "https://bcr.bazel.build/modules/buildozer/7.1.2/MODULE.bazel": "2e8dd40ede9c454042645fd8d8d0cd1527966aa5c919de86661e62953cd73d84",
     "https://bcr.bazel.build/modules/buildozer/7.1.2/source.json": "c9028a501d2db85793a6996205c8de120944f50a0d570438fcae0457a5f9d1f8",
+    "https://bcr.bazel.build/modules/gazelle/0.32.0/MODULE.bazel": "b499f58a5d0d3537f3cf5b76d8ada18242f64ec474d8391247438bf04f58c7b8",
+    "https://bcr.bazel.build/modules/gazelle/0.33.0/MODULE.bazel": "a13a0f279b462b784fb8dd52a4074526c4a2afe70e114c7d09066097a46b3350",
+    "https://bcr.bazel.build/modules/gazelle/0.34.0/MODULE.bazel": "abdd8ce4d70978933209db92e436deb3a8b737859e9354fb5fd11fb5c2004c8a",
     "https://bcr.bazel.build/modules/gazelle/0.36.0/MODULE.bazel": "e375d5d6e9a6ca59b0cb38b0540bc9a05b6aa926d322f2de268ad267a2ee74c0",
     "https://bcr.bazel.build/modules/gazelle/0.36.0/source.json": "0823f097b127e0201ae55d85647c94095edfe27db0431a7ae880dcab08dfaa04",
     "https://bcr.bazel.build/modules/google_benchmark/1.8.2/MODULE.bazel": "a70cf1bba851000ba93b58ae2f6d76490a9feb74192e57ab8e8ff13c34ec50cb",
@@ -63,6 +67,7 @@
     "https://bcr.bazel.build/modules/protobuf/29.0/MODULE.bazel": "319dc8bf4c679ff87e71b1ccfb5a6e90a6dbc4693501d471f48662ac46d04e4e",
     "https://bcr.bazel.build/modules/protobuf/29.0/source.json": "b857f93c796750eef95f0d61ee378f3420d00ee1dd38627b27193aa482f4f981",
     "https://bcr.bazel.build/modules/protobuf/3.19.0/MODULE.bazel": "6b5fbb433f760a99a22b18b6850ed5784ef0e9928a72668b66e4d7ccd47db9b0",
+    "https://bcr.bazel.build/modules/protobuf/3.19.2/MODULE.bazel": "532ffe5f2186b69fdde039efe6df13ba726ff338c6bc82275ad433013fa10573",
     "https://bcr.bazel.build/modules/protobuf/3.19.6/MODULE.bazel": "9233edc5e1f2ee276a60de3eaa47ac4132302ef9643238f23128fea53ea12858",
     "https://bcr.bazel.build/modules/pybind11_bazel/2.11.1/MODULE.bazel": "88af1c246226d87e65be78ed49ecd1e6f5e98648558c14ce99176da041dc378e",
     "https://bcr.bazel.build/modules/pybind11_bazel/2.11.1/source.json": "be4789e951dd5301282729fe3d4938995dc4c1a81c2ff150afc9f1b0504c6022",
@@ -86,6 +91,11 @@
     "https://bcr.bazel.build/modules/rules_foreign_cc/0.9.0/MODULE.bazel": "c9e8c682bf75b0e7c704166d79b599f93b72cfca5ad7477df596947891feeef6",
     "https://bcr.bazel.build/modules/rules_fuzzing/0.5.2/MODULE.bazel": "40c97d1144356f52905566c55811f13b299453a14ac7769dfba2ac38192337a8",
     "https://bcr.bazel.build/modules/rules_fuzzing/0.5.2/source.json": "c8b1e2c717646f1702290959a3302a178fb639d987ab61d548105019f11e527e",
+    "https://bcr.bazel.build/modules/rules_go/0.41.0/MODULE.bazel": "55861d8e8bb0e62cbd2896f60ff303f62ffcb0eddb74ecb0e5c0cbe36fc292c8",
+    "https://bcr.bazel.build/modules/rules_go/0.42.0/MODULE.bazel": "8cfa875b9aa8c6fce2b2e5925e73c1388173ea3c32a0db4d2b4804b453c14270",
+    "https://bcr.bazel.build/modules/rules_go/0.46.0/MODULE.bazel": "3477df8bdcc49e698b9d25f734c4f3a9f5931ff34ee48a2c662be168f5f2d3fd",
+    "https://bcr.bazel.build/modules/rules_go/0.60.0/MODULE.bazel": "4a57ff2ffc2a3570e3c5646575c5a4b07287e91bcdac5d1f72383d51502b48cb",
+    "https://bcr.bazel.build/modules/rules_go/0.60.0/source.json": "1e21368c5e0c3013a110bd79a8fcff8ca46b5bcb2b561713a7273cbfcff7c464",
     "https://bcr.bazel.build/modules/rules_java/4.0.0/MODULE.bazel": "5a78a7ae82cd1a33cef56dc578c7d2a46ed0dca12643ee45edbb8417899e6f74",
     "https://bcr.bazel.build/modules/rules_java/5.3.5/MODULE.bazel": "a4ec4f2db570171e3e5eb753276ee4b389bae16b96207e9d3230895c99644b86",
     "https://bcr.bazel.build/modules/rules_java/6.0.0/MODULE.bazel": "8a43b7df601a7ec1af61d79345c17b31ea1fedc6711fd4abfd013ea612978e39",
@@ -146,6 +156,468 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//:topt_go_ddtest_extension.bzl%topt_go_ddtest": {
+      "general": {
+        "bzlTransitiveDigest": "zjt44nTQ00sc0adtjE0+8BawpnnuyT4NufAABsdyG3Q=",
+        "usagesDigest": "knXMhHmkFPKsLmtLoM/dWhXgjvYrk5CfvOyFIQiOj2M=",
+        "recordedInputs": [
+          "REPO_MAPPING:,io_bazel_rules_go rules_go+",
+          "REPO_MAPPING:rules_go+,bazel_tools bazel_tools",
+          "REPO_MAPPING:rules_go+,io_bazel_rules_go rules_go+"
+        ],
+        "generatedRepoSpecs": {
+          "topt_go_ddtest_host": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_host",
+            "attributes": {}
+          },
+          "topt_go_ddtest_mini": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_mini",
+            "attributes": {
+              "host": "@@+topt_go_ddtest+topt_go_ddtest_host//:PLATFORM"
+            }
+          },
+          "topt_go_ddtest_base_darwin_amd64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_download_sdk_rule",
+            "attributes": {
+              "version": "1.26.3",
+              "goos": "darwin",
+              "goarch": "amd64",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_base_darwin_amd64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                "darwin"
+              ],
+              "goarchs": [
+                "amd64"
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_base_darwin_amd64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                "1.26.3"
+              ]
+            }
+          },
+          "topt_go_ddtest_sdk_files_darwin_amd64": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_sdk_files",
+            "attributes": {
+              "base_sdk_root": "@@+topt_go_ddtest+topt_go_ddtest_base_darwin_amd64//:ROOT",
+              "exec_platform": "darwin_amd64",
+              "panic_hook": false,
+              "host": "@@+topt_go_ddtest+topt_go_ddtest_host//:PLATFORM"
+            }
+          },
+          "topt_go_ddtest_sdk_darwin_amd64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_wrap_sdk_rule",
+            "attributes": {
+              "root_file": "@@+topt_go_ddtest+topt_go_ddtest_sdk_files_darwin_amd64//:sdk/DDTEST_INSTRUMENT",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_sdk_darwin_amd64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                ""
+              ],
+              "goarchs": [
+                ""
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_sdk_darwin_amd64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                ""
+              ]
+            }
+          },
+          "topt_go_ddtest_base_darwin_arm64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_download_sdk_rule",
+            "attributes": {
+              "version": "1.26.3",
+              "goos": "darwin",
+              "goarch": "arm64",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_base_darwin_arm64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                "darwin"
+              ],
+              "goarchs": [
+                "arm64"
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_base_darwin_arm64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                "1.26.3"
+              ]
+            }
+          },
+          "topt_go_ddtest_sdk_files_darwin_arm64": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_sdk_files",
+            "attributes": {
+              "base_sdk_root": "@@+topt_go_ddtest+topt_go_ddtest_base_darwin_arm64//:ROOT",
+              "exec_platform": "darwin_arm64",
+              "panic_hook": false,
+              "host": "@@+topt_go_ddtest+topt_go_ddtest_host//:PLATFORM"
+            }
+          },
+          "topt_go_ddtest_sdk_darwin_arm64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_wrap_sdk_rule",
+            "attributes": {
+              "root_file": "@@+topt_go_ddtest+topt_go_ddtest_sdk_files_darwin_arm64//:sdk/DDTEST_INSTRUMENT",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_sdk_darwin_arm64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                ""
+              ],
+              "goarchs": [
+                ""
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_sdk_darwin_arm64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                ""
+              ]
+            }
+          },
+          "topt_go_ddtest_base_linux_amd64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_download_sdk_rule",
+            "attributes": {
+              "version": "1.26.3",
+              "goos": "linux",
+              "goarch": "amd64",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_base_linux_amd64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                "linux"
+              ],
+              "goarchs": [
+                "amd64"
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_base_linux_amd64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                "1.26.3"
+              ]
+            }
+          },
+          "topt_go_ddtest_sdk_files_linux_amd64": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_sdk_files",
+            "attributes": {
+              "base_sdk_root": "@@+topt_go_ddtest+topt_go_ddtest_base_linux_amd64//:ROOT",
+              "exec_platform": "linux_amd64",
+              "panic_hook": false,
+              "host": "@@+topt_go_ddtest+topt_go_ddtest_host//:PLATFORM"
+            }
+          },
+          "topt_go_ddtest_sdk_linux_amd64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_wrap_sdk_rule",
+            "attributes": {
+              "root_file": "@@+topt_go_ddtest+topt_go_ddtest_sdk_files_linux_amd64//:sdk/DDTEST_INSTRUMENT",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_sdk_linux_amd64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                ""
+              ],
+              "goarchs": [
+                ""
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_sdk_linux_amd64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                ""
+              ]
+            }
+          },
+          "topt_go_ddtest_base_linux_arm64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_download_sdk_rule",
+            "attributes": {
+              "version": "1.26.3",
+              "goos": "linux",
+              "goarch": "arm64",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_base_linux_arm64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                "linux"
+              ],
+              "goarchs": [
+                "arm64"
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_base_linux_arm64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                "1.26.3"
+              ]
+            }
+          },
+          "topt_go_ddtest_sdk_files_linux_arm64": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_sdk_files",
+            "attributes": {
+              "base_sdk_root": "@@+topt_go_ddtest+topt_go_ddtest_base_linux_arm64//:ROOT",
+              "exec_platform": "linux_arm64",
+              "panic_hook": false,
+              "host": "@@+topt_go_ddtest+topt_go_ddtest_host//:PLATFORM"
+            }
+          },
+          "topt_go_ddtest_sdk_linux_arm64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_wrap_sdk_rule",
+            "attributes": {
+              "root_file": "@@+topt_go_ddtest+topt_go_ddtest_sdk_files_linux_arm64//:sdk/DDTEST_INSTRUMENT",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_sdk_linux_arm64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                ""
+              ],
+              "goarchs": [
+                ""
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_sdk_linux_arm64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                ""
+              ]
+            }
+          },
+          "topt_go_ddtest_base_windows_amd64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_download_sdk_rule",
+            "attributes": {
+              "version": "1.26.3",
+              "goos": "windows",
+              "goarch": "amd64",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_base_windows_amd64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                "windows"
+              ],
+              "goarchs": [
+                "amd64"
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_base_windows_amd64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                "1.26.3"
+              ]
+            }
+          },
+          "topt_go_ddtest_sdk_files_windows_amd64": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_sdk_files",
+            "attributes": {
+              "base_sdk_root": "@@+topt_go_ddtest+topt_go_ddtest_base_windows_amd64//:ROOT",
+              "exec_platform": "windows_amd64",
+              "panic_hook": false,
+              "host": "@@+topt_go_ddtest+topt_go_ddtest_host//:PLATFORM"
+            }
+          },
+          "topt_go_ddtest_sdk_windows_amd64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_wrap_sdk_rule",
+            "attributes": {
+              "root_file": "@@+topt_go_ddtest+topt_go_ddtest_sdk_files_windows_amd64//:sdk/DDTEST_INSTRUMENT",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_sdk_windows_amd64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                ""
+              ],
+              "goarchs": [
+                ""
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_sdk_windows_amd64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                ""
+              ]
+            }
+          },
+          "topt_go_ddtest_base_windows_arm64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_download_sdk_rule",
+            "attributes": {
+              "version": "1.26.3",
+              "goos": "windows",
+              "goarch": "arm64",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_base_windows_arm64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                "windows"
+              ],
+              "goarchs": [
+                "arm64"
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_base_windows_arm64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                "1.26.3"
+              ]
+            }
+          },
+          "topt_go_ddtest_sdk_files_windows_arm64": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_sdk_files",
+            "attributes": {
+              "base_sdk_root": "@@+topt_go_ddtest+topt_go_ddtest_base_windows_arm64//:ROOT",
+              "exec_platform": "windows_arm64",
+              "panic_hook": false,
+              "host": "@@+topt_go_ddtest+topt_go_ddtest_host//:PLATFORM"
+            }
+          },
+          "topt_go_ddtest_sdk_windows_arm64": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_wrap_sdk_rule",
+            "attributes": {
+              "root_file": "@@+topt_go_ddtest+topt_go_ddtest_sdk_files_windows_arm64//:sdk/DDTEST_INSTRUMENT",
+              "experiments": []
+            }
+          },
+          "topt_go_ddtest_sdk_windows_arm64_toolchains": {
+            "repoRuleId": "@@rules_go+//go/private:sdk.bzl%go_multiple_toolchains",
+            "attributes": {
+              "prefixes": [
+                ""
+              ],
+              "geese": [
+                ""
+              ],
+              "goarchs": [
+                ""
+              ],
+              "sdk_repos": [
+                "topt_go_ddtest_sdk_windows_arm64"
+              ],
+              "sdk_types": [
+                "remote"
+              ],
+              "sdk_versions": [
+                ""
+              ]
+            }
+          },
+          "topt_go_ddtest_toolchains": {
+            "repoRuleId": "@@//:topt_go_ddtest_repository.bzl%_toolchains",
+            "attributes": {
+              "exec_platforms": [
+                "darwin_amd64",
+                "darwin_arm64",
+                "linux_amd64",
+                "linux_arm64",
+                "windows_amd64",
+                "windows_arm64"
+              ]
+            }
+          }
+        }
+      }
+    },
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "qE9S3HNMfKVJtD4XMT5WNvc3sgOOqqdVoBns0egnuPE=",
@@ -324,25 +796,6 @@
               "sha256": "f5a60242bc408f7fa20fccf10d6c5c5ea1fcb3c6f44642fec5af88373ae7aa1b",
               "url": "https://repo1.maven.org/maven2/com/code-intelligence/jazzer-api/0.20.1/jazzer-api-0.20.1.jar"
             }
-          }
-        }
-      }
-    },
-    "@@rules_go+//go:extensions.bzl%orchestrion": {
-      "general": {
-        "bzlTransitiveDigest": "D5LBsjRKekTF19YV7Jqf9N14osuZYJjSaa+XKj00RlI=",
-        "usagesDigest": "9kKEG/hjK4fnk42l4jAKDLhx9xExyCYAS8r8NlbPLMw=",
-        "recordedInputs": [
-          "REPO_MAPPING:bazel_features+,bazel_features_globals bazel_features++version_extension+bazel_features_globals",
-          "REPO_MAPPING:bazel_features+,bazel_features_version bazel_features++version_extension+bazel_features_version",
-          "REPO_MAPPING:rules_go+,bazel_tools bazel_tools",
-          "REPO_MAPPING:rules_go+,io_bazel_rules_go rules_go+",
-          "REPO_MAPPING:rules_go+,io_bazel_rules_go_bazel_features bazel_features+"
-        ],
-        "generatedRepoSpecs": {
-          "rules_go_orchestrion_tool": {
-            "repoRuleId": "@@rules_go+//go/private/orchestrion:extensions.bzl%_orchestrion_empty",
-            "attributes": {}
           }
         }
       }

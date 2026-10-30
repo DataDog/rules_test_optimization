@@ -4063,7 +4063,7 @@ select_context_json_for_payload() {
   echo "$matched_context"
 }
 
-# Merge flat sidecar metadata into every captured test event. Go/Orchestrion
+# Merge flat sidecar metadata into every captured test event. Go test
 # payloads can encode CI Visibility test data as span events, and those events
 # still need Git and Bazel tags before upload.
 merge_flat_metadata_file() {

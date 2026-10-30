@@ -1,5 +1,4 @@
 Component,Origin,License,Copyright
-Bazel rules_go fork,https://github.com/bazel-contrib/rules_go.git,Apache-2.0,"The Bazel Authors and rules_go contributors"
 Bazel module abseil-cpp,https://github.com/abseil/abseil-cpp,Apache-2.0,"The Abseil Authors"
 Bazel module aspect_bazel_lib,https://github.com/aspect-build/bazel-lib,Apache-2.0,"Aspect Build and contributors"
 Bazel module aspect_rules_js,https://github.com/aspect-build/rules_js,Apache-2.0,"Aspect Build and contributors"

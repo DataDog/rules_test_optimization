@@ -38,13 +38,7 @@ LOG_FILE="$TMP_WS/mock.log"
 SERVER_OUT="$TMP_WS/server.out"
 SNAPSHOT_DIR="$REPO_ROOT/tools/tests/integration/snapshots"
 PYTHON="${PYTHON:-python3}"
-# Keep the mock-server harness aligned with the supported Orchestrion version
-# under test instead of relying on the old hardcoded bootstrap tag.
-ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
-export ORCHESTRION_VERSION
 GO_VERSION="${GO_VERSION:-1.25.0}"
-RULES_GO_UPSTREAM="${RULES_GO_UPSTREAM:-default}"
-RULES_GO_VARIANT="${RULES_GO_VARIANT:-base}"
 if ! command -v "$PYTHON" >/dev/null 2>&1; then
   if command -v python >/dev/null 2>&1; then
     PYTHON=python
@@ -62,29 +56,6 @@ export SNAPSHOT_DIR
 # filtering. Dedicated scenarios below assert the CI default and execution-log
 # cache-safety behavior.
 export DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE="${DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE:-optional}"
-
-resolve_rules_go_fork_path() {
-  "$PYTHON" "$REPO_ROOT/tools/dev/materialize_rules_go_fork.py" resolve \
-    --upstream "$RULES_GO_UPSTREAM" \
-    --variant "$RULES_GO_VARIANT"
-}
-
-REAL_GO_BIN_HOST="${REAL_GO_BIN_HOST:-$(command -v go || true)}"
-if [[ -z "$REAL_GO_BIN_HOST" ]]; then
-  echo "error: go binary not found for bootstrap integration harness"
-  exit 1
-fi
-
-if [[ -z "${RULES_GO_OVERRIDE_REMOTE:-}" ]]; then
-  RULES_GO_OVERRIDE_REMOTE="$("$PYTHON" - <<'PY' "$REPO_ROOT"
-from pathlib import Path
-import sys
-
-print(Path(sys.argv[1]).resolve().as_uri())
-PY
-  )"
-fi
-RULES_GO_OVERRIDE_COMMIT="${RULES_GO_OVERRIDE_COMMIT:-$(git -C "$REPO_ROOT" rev-parse HEAD)}"
 
 if [[ "${KEEP_TMP:-0}" == "1" ]]; then
   echo "KEEP_TMP=1: temp workspace at $TMP_WS"
@@ -194,15 +165,6 @@ ESCAPED_MODULES_GO=$("$PYTHON" - <<'PY'
 import json
 import os
 path = os.path.normpath(os.path.join(os.environ["REPO_ROOT"], "modules", "go"))
-print(json.dumps(path.replace("\\\\", "/")))
-PY
-)
-RULES_GO_FORK_REL="$(resolve_rules_go_fork_path)"
-export RULES_GO_FORK_REL
-ESCAPED_RULES_GO_VENDOR=$("$PYTHON" - <<'PY'
-import json
-import os
-path = os.path.normpath(os.path.join(os.environ["REPO_ROOT"], os.environ["RULES_GO_FORK_REL"]))
 print(json.dumps(path.replace("\\\\", "/")))
 PY
 )
@@ -3052,13 +3014,12 @@ run_retry_sync_case \
 # This block verifies both repository-rule fanout and macro-level service key
 # resolution semantics (including collision-safe explicit key selection).
 # Maintainers: keep these go-macro scenarios explicitly dual-module aware:
-# - core module + go companion module + rules_go
+# - core module + go companion module + upstream rules_go from the BCR
 # - dual local_path_override (repo root + modules/go)
 MULTI_WS="$TMP_WS/ws_multi"
 mkdir -p "$MULTI_WS"
 cat > "$MULTI_WS/.bazelrc" <<'MULTI_BAZELRC_EOF'
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
-build:test-optimization --@rules_go//go/private/orchestrion:enabled=true
 MULTI_BAZELRC_EOF
 cat > "$MULTI_WS/MODULE.bazel" <<MODULE_MULTI_EOF
 module(name = "topt-multi-integration", version = "0.0.0")
@@ -3068,11 +3029,6 @@ bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 local_path_override(
-    module_name = "rules_go",
-    path = ${ESCAPED_RULES_GO_VENDOR},
-)
-
-local_path_override(
     module_name = "datadog-rules-test-optimization",
     path = ${ESCAPED_REPO_ROOT},
 )
@@ -3080,9 +3036,6 @@ local_path_override(
     module_name = "datadog-rules-test-optimization-go",
     path = ${ESCAPED_MODULES_GO},
 )
-
-orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
-orchestrion.from_source(version = "${ORCHESTRION_VERSION}")
 
 go_topt = use_extension(
     "@datadog-rules-test-optimization-go//:topt_go_extension.bzl",
@@ -3095,11 +3048,6 @@ go_topt.test_optimization_go(
     out_dir = "custom_topt",
     runtime_version = "1.2.3",
     enabled_by_env = True,
-)
-
-use_repo(
-    orchestrion,
-    "rules_go_orchestrion_tool",
 )
 
 use_repo(
@@ -3157,10 +3105,14 @@ _fake_go_test = rule(
     implementation = _fake_go_test_impl,
     attrs = {
         "data": attr.label_list(allow_files = True),
+        # The macro adds Mini's testopt library and the registration source.
+        "deps": attr.label_list(),
         "embed": attr.label_list(),
         "env": attr.string_dict(),
+        "gc_linkopts": attr.string_list(),
         "importpath": attr.string(),
         "rundir": attr.string(),
+        "srcs": attr.label_list(allow_files = True),
     },
     executable = True,
     test = True,
@@ -3190,10 +3142,12 @@ dd_topt_go_test(
 BUILD_MULTI_INVALID_EOF
 
 MULTI_LOG_START="$(log_line_count)"
+# Build the hidden raw targets: the public ddtest_go_test wrappers build them
+# with the instrumented SDK, which this workspace does not configure.
 (
   cd "$MULTI_WS"
   "$BAZEL" "${BAZEL_FLAGS[@]}" build --config=test-optimization \
-    //:multi_sync_smoke //:macro_service_probe //:macro_data_none_probe \
+    //:multi_sync_smoke //:macro_service_probe__raw_go_test //:macro_data_none_probe__raw_go_test \
     "${REPO_ENVS[@]}"
 )
 
@@ -3202,9 +3156,8 @@ MULTI_MACRO_CQUERY=$(
   "$BAZEL" "${BAZEL_FLAGS[@]}" cquery --config=test-optimization \
     //:macro_service_probe__raw_go_test --output=build "${REPO_ENVS[@]}"
 )
-# The manifest/data wiring lives on the hidden raw go_test target. Querying the
-# wrapper target only verifies the public wrapper exists, not which payload set
-# the macro selected underneath it.
+# The manifest/data wiring lives on the hidden raw go_test target, which shows
+# which payload set the macro selected.
 if ! printf '%s\n' "$MULTI_MACRO_CQUERY" | grep -q "_go_service_2//:custom_topt/manifest.txt"; then
   echo "error: dd_topt_go_test multi-service probe did not resolve to go_service_2 custom out_dir manifest"
   echo "$MULTI_MACRO_CQUERY"
@@ -3249,10 +3202,11 @@ if ! grep -q "go_service_2" "$MULTI_INVALID_LOG"; then
   exit 1
 fi
 
-# Scenario: bootstrap helper patches MODULE.bazel and runs an idempotent
-# Orchestrion pin flow without requiring a second extension in consumer setup.
+# Scenario: bootstrap helper configures the ddtest-instrumented Go SDK in
+# MODULE.bazel without touching go.mod, and a rerun migrates the managed block
+# that the Orchestrion bootstrap wrote.
 BOOT_WS="$TMP_WS/ws_bootstrap"
-mkdir -p "$BOOT_WS/bin"
+mkdir -p "$BOOT_WS"
 cat > "$BOOT_WS/MODULE.bazel" <<MODULE_BOOT_EOF
 module(name = "topt-bootstrap-integration", version = "0.0.0")
 
@@ -3288,318 +3242,105 @@ module example.com/bootstrap-go
 
 go 1.24.0
 GOMOD_BOOT_EOF
-
-cat > "$BOOT_WS/bin/go" <<'FAKE_GO_EOF'
-#!/bin/sh
-set -eu
-
-ORCH_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
-
-# The plain bootstrap scenario still validates file edits, but deterministic
-# proxy generation now resolves real modules during repository bootstrap. Keep
-# the orchestration paths stubbed while delegating the module-resolution work to
-# the host Go binary through scenario-local caches.
-ensure_require() {
-  module_path="$1"
-  version="$2"
-  require_line="require ${module_path} ${version}"
-  if ! grep -Fqx "$require_line" go.mod; then
-    printf '%s\n' "$require_line" >> go.mod
-  fi
-}
-
-runtime_root() {
-  printf '%s/%s\n' "$PWD" ".fake_go_runtime"
-}
-
-run_real_go() {
-  if [ -z "${REAL_GO_BIN:-}" ] || [ ! -x "${REAL_GO_BIN}" ]; then
-    echo "missing REAL_GO_BIN for bootstrap integration harness" >&2
-    exit 1
-  fi
-  runtime_dir="$(runtime_root)"
-  go_path="${GOPATH:-${runtime_dir}/gopath}"
-  go_mod_cache="${GOMODCACHE:-${go_path}/pkg/mod}"
-  go_build_cache="${GOCACHE:-${go_path}/cache}"
-  home_dir="${runtime_dir}/home"
-  xdg_cache_home="${runtime_dir}/xdg-cache"
-  go_proxy="${GOPROXY:-https://proxy.golang.org,direct}"
-  go_sumdb="${GOSUMDB:-sum.golang.org}"
-  mkdir -p "$go_mod_cache" "$go_build_cache" "$home_dir" "$xdg_cache_home"
-  GO111MODULE=on \
-  GOWORK=off \
-  GOPATH="$go_path" \
-  GOMODCACHE="$go_mod_cache" \
-  GOCACHE="$go_build_cache" \
-  HOME="$home_dir" \
-  XDG_CACHE_HOME="$xdg_cache_home" \
-  GOPROXY="$go_proxy" \
-  GOSUMDB="$go_sumdb" \
-  "$REAL_GO_BIN" "$@"
-}
-
-if [ "${1:-}" = "-C" ] && [ "$#" -ge 3 ]; then
-  cd "$2"
-  shift 2
-fi
-
-if [ "${1:-}" = "run" ] && [ "${3:-}" = "pin" ]; then
-  case "${2:-}" in
-    github.com/DataDog/orchestrion@v*)
-      cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
-//go:build tools
-
-package tools
-
-import (
-  _ "github.com/DataDog/orchestrion" // integration
-  _ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
-  _ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
-  _ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
-)
-PIN_TOOL_EOF
-      : > go.sum
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "all" ]; then
-  run_real_go "$@"
-  exit 0
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com/DataDog/dd-trace-go/v2" ]; then
-  run_real_go "$@"
-  exit 0
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
-  case "${3:-}" in
-    github.com/DataDog/orchestrion@${ORCH_VERSION}|\
-    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
-      run_real_go "$@"
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
-  exit 1
-fi
-
-if [ "${1:-}" = "run" ]; then
-  exit 1
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
-  case "${3:-}" in
-    -require=github.com/DataDog/orchestrion@${ORCH_VERSION})
-      ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
-      exit 0
-      ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.1|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
-      module_and_version="${3#-require=}"
-      module_path="${module_and_version%@*}"
-      version="${module_and_version##*@}"
-      ensure_require "$module_path" "$version"
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.1" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.1"
-  exit 0
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "tidy" ]; then
-  : > go.sum
-  exit 0
-fi
-
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4:-}" = "{{.Version}}" ]; then
-  case "${5:-}" in
-    github.com/DataDog/dd-trace-go/v2|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.1\n'
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
-  case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
-      printf '{"Version":"v2.9.1"}\n'
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ]; then
-  case "${5:-}" in
-    github.com/DataDog/orchestrion)
-      printf '{"Version":"%s"}\n' "$ORCH_VERSION"
-      exit 0
-      ;;
-    github.com/DataDog/dd-trace-go/v2|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.1"}\n'
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "build" ]; then
-  out=""
-  shift
-  while [ "$#" -gt 0 ]; do
-    if [ "$1" = "-o" ] && [ "$#" -ge 2 ]; then
-      out="$2"
-      break
-    fi
-    shift
-  done
-  if [ -n "$out" ]; then
-    cat > "$out" <<'ORCH_STUB_EOF'
-#!/bin/sh
-set -eu
-
-if [ "${1:-}" = "server" ]; then
-  for arg in "$@"; do
-    case "$arg" in
-      -url-file=*)
-        url_file="${arg#-url-file=}"
-        printf 'http://127.0.0.1:43123\n' > "$url_file"
-        while :; do sleep 3600; done
-        ;;
-    esac
-  done
-  exit 0
-fi
-
-if [ "${1:-}" = "pin" ]; then
-  cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
-//go:build tools
-
-package tools
-
-import (
-  _ "github.com/DataDog/orchestrion" // integration
-  _ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
-  _ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
-  _ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
-)
-PIN_TOOL_EOF
-  : > go.sum
-  exit 0
-fi
-
-if [ "${1:-}" = "toolexec" ]; then
-  shift
-  exec "$@"
-fi
-
-exit 0
-ORCH_STUB_EOF
-    chmod +x "$out"
-    exit 0
-  fi
-fi
-
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ] && [ "${5:-}" = "all" ]; then
-  run_real_go "$@"
-  exit 0
-fi
-
-if [ "${1:-}" = "list" ] && { [ "${2:-}" = "-mod=mod" ] || [ "${2:-}" = "-mod=readonly" ]; }; then
-  matched=0
-  for arg in "$@"; do
-    case "$arg" in
-      github.com/DataDog/orchestrion|\
-      github.com/DataDog/dd-trace-go/v2/orchestrion|\
-      github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
-      github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
-      github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
-      github.com/DataDog/dd-trace-go/v2/profiler|\
-      github.com/DataDog/dd-trace-go/v2/instrumentation/env)
-        printf '%s\n' "$arg"
-        matched=1
-        ;;
-    esac
-  done
-  if [ "$matched" -eq 1 ]; then
-    exit 0
-  fi
-fi
-
-echo "unexpected go invocation: $*" >&2
-exit 1
-FAKE_GO_EOF
-chmod +x "$BOOT_WS/bin/go"
+cp "$BOOT_WS/go.mod" "$TMP_WS/bootstrap-go.mod.before"
+# Without --runtime-version, the SDK version comes from the //:go.mod label,
+# which needs a root package.
+: > "$BOOT_WS/BUILD.bazel"
 
 (
   cd "$BOOT_WS"
-  REAL_GO_BIN="$REAL_GO_BIN_HOST" PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
-    --workspace "$BOOT_WS" \
-    --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
-    --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT" \
-    --rules-go-upstream "$RULES_GO_UPSTREAM" \
-    --rules-go-variant "$RULES_GO_VARIANT"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+    --workspace "$BOOT_WS"
 )
 
-if ! grep -q 'git_override(' "$BOOT_WS/MODULE.bazel"; then
-  echo "error: bootstrap helper did not add rules_go git_override"
+if ! grep -q '# BEGIN Datadog Go Test Optimization bootstrap' "$BOOT_WS/MODULE.bazel" ||
+  ! grep -q '"@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",' "$BOOT_WS/MODULE.bazel"; then
+  echo "error: bootstrap helper did not add the ddtest managed block"
   cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
-if ! grep -q "strip_prefix = \"${RULES_GO_FORK_REL}\"" "$BOOT_WS/MODULE.bazel"; then
-  echo "error: bootstrap helper did not add vendored rules_go strip_prefix"
+if ! grep -q 'topt_go_ddtest.sdk(go_mod = "//:go.mod")' "$BOOT_WS/MODULE.bazel"; then
+  echo "error: bootstrap helper did not read the Go version from go.mod without --runtime-version"
   cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
-if ! grep -q '@rules_go//go:extensions.bzl", "orchestrion"' "$BOOT_WS/MODULE.bazel"; then
-  echo "error: bootstrap helper did not add rules_go orchestrion extension"
+if ! grep -q 'bazel_dep(name = "rules_go", version = "0.60.0")' "$BOOT_WS/MODULE.bazel"; then
+  echo "error: bootstrap helper did not add the rules_go bazel_dep"
   cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
-if [ ! -f "$BOOT_WS/orchestrion.tool.go" ]; then
-  echo "error: bootstrap helper did not create orchestrion.tool.go"
+if grep -q -e 'module_name = "rules_go"' -e 'orchestrion' -e 'third_party/rgo' "$BOOT_WS/MODULE.bazel"; then
+  echo "error: bootstrap helper still wrote Orchestrion or rules_go fork wiring"
+  cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
-if [ ! -f "$BOOT_WS/orchestrion.yml" ]; then
-  echo "error: bootstrap helper did not create orchestrion.yml"
+if [ -e "$BOOT_WS/orchestrion.tool.go" ] || [ -e "$BOOT_WS/orchestrion.yml" ]; then
+  echo "error: bootstrap helper wrote Orchestrion files"
+  exit 1
+fi
+if ! cmp -s "$TMP_WS/bootstrap-go.mod.before" "$BOOT_WS/go.mod"; then
+  echo "error: bootstrap helper changed go.mod"
+  cat "$BOOT_WS/go.mod" || true
   exit 1
 fi
 
-printf 'custom: true\n' > "$BOOT_WS/orchestrion.yml"
+# A workspace that the Orchestrion bootstrap set up keeps that block until a
+# rerun replaces it.
+"$PYTHON" - "$BOOT_WS/MODULE.bazel" <<'PY'
+import re
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as handle:
+    content = handle.read()
+legacy = """# BEGIN Datadog Go Orchestrion bootstrap
+git_override(
+    module_name = "rules_go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "0123456789abcdef0123456789abcdef01234567",
+    strip_prefix = "third_party/rgo/v0_60_0/base",
+)
+
+orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
+orchestrion.from_source(
+    version = "v1.12.0",
+    dd_trace_go_version = "v2.9.1",
+)
+use_repo(orchestrion, "rules_go_orchestrion_tool")
+# END Datadog Go Orchestrion bootstrap
+"""
+content, count = re.subn(
+    r"# BEGIN Datadog Go Test Optimization bootstrap\n.*?# END Datadog Go Test Optimization bootstrap\n",
+    lambda _: legacy,
+    content,
+    flags=re.S,
+)
+if count != 1:
+    sys.exit("error: could not swap in the Orchestrion managed block")
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(content)
+PY
+# Bazel cannot load that MODULE.bazel (its fork commit is made up), so run the
+# bootstrap from the multi-service workspace.
 (
-  cd "$BOOT_WS"
-  REAL_GO_BIN="$REAL_GO_BIN_HOST" PATH="$BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  cd "$MULTI_WS"
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
     --workspace "$BOOT_WS" \
-    --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
-    --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT"
+    --runtime-version "$GO_VERSION"
 )
 
-if ! grep -q 'custom: true' "$BOOT_WS/orchestrion.yml"; then
-  echo "error: bootstrap helper overwrote an existing orchestrion.yml without --force"
-  cat "$BOOT_WS/orchestrion.yml" || true
+if grep -q -e 'Datadog Go Orchestrion bootstrap' -e 'orchestrion' -e 'third_party/rgo' "$BOOT_WS/MODULE.bazel" ||
+  [ "$(grep -c '# BEGIN Datadog Go Test Optimization bootstrap' "$BOOT_WS/MODULE.bazel")" != "1" ] ||
+  ! grep -q "topt_go_ddtest.sdk(go_version = \"$GO_VERSION\")" "$BOOT_WS/MODULE.bazel"; then
+  echo "error: bootstrap rerun did not replace the Orchestrion managed block with the ddtest block"
+  cat "$BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
 
 # Scenario: guided bootstrap creates the Go sync wiring, root uploader target,
 # and local dd_go_test wrapper for a fresh single-service Go workspace.
 GUIDED_BOOT_WS="$TMP_WS/ws_bootstrap_guided"
-mkdir -p "$GUIDED_BOOT_WS/bin" "$GUIDED_BOOT_WS/src/go-project"
+mkdir -p "$GUIDED_BOOT_WS/src/go-project"
 cat > "$GUIDED_BOOT_WS/MODULE.bazel" <<MODULE_GUIDED_BOOT_EOF
 module(name = "topt-guided-bootstrap-integration", version = "0.0.0")
 
@@ -3622,258 +3363,6 @@ module example.com/guided-bootstrap-go
 go 1.24.0
 GOMOD_GUIDED_BOOT_EOF
 : > "$GUIDED_BOOT_WS/go.sum"
-
-cat > "$GUIDED_BOOT_WS/bin/go" <<'FAKE_GO_GUIDED_EOF'
-#!/bin/sh
-set -eu
-
-ORCH_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
-
-# The guided bootstrap scenario later builds a real Go test, so the fake Go
-# tool delegates the download-heavy paths to the host Go binary using temporary
-# scenario-local caches instead of any persistent host cache.
-ensure_require() {
-  module_path="$1"
-  version="$2"
-  require_line="require ${module_path} ${version}"
-  if ! grep -Fqx "$require_line" go.mod; then
-    printf '%s\n' "$require_line" >> go.mod
-  fi
-}
-
-runtime_root() {
-  printf '%s/%s\n' "$PWD" ".fake_go_runtime"
-}
-
-run_real_go() {
-  if [ -z "${REAL_GO_BIN:-}" ] || [ ! -x "${REAL_GO_BIN}" ]; then
-    echo "missing REAL_GO_BIN for bootstrap integration harness" >&2
-    exit 1
-  fi
-  runtime_dir="$(runtime_root)"
-  go_path="${GOPATH:-${runtime_dir}/gopath}"
-  go_mod_cache="${GOMODCACHE:-${go_path}/pkg/mod}"
-  go_build_cache="${GOCACHE:-${go_path}/cache}"
-  home_dir="${runtime_dir}/home"
-  xdg_cache_home="${runtime_dir}/xdg-cache"
-  go_proxy="${GOPROXY:-https://proxy.golang.org,direct}"
-  go_sumdb="${GOSUMDB:-sum.golang.org}"
-  mkdir -p "$go_mod_cache" "$go_build_cache" "$home_dir" "$xdg_cache_home"
-  GO111MODULE=on \
-  GOWORK=off \
-  GOPATH="$go_path" \
-  GOMODCACHE="$go_mod_cache" \
-  GOCACHE="$go_build_cache" \
-  HOME="$home_dir" \
-  XDG_CACHE_HOME="$xdg_cache_home" \
-  GOPROXY="$go_proxy" \
-  GOSUMDB="$go_sumdb" \
-  "$REAL_GO_BIN" "$@"
-}
-
-if [ "${1:-}" = "-C" ] && [ "$#" -ge 3 ]; then
-  cd "$2"
-  shift 2
-fi
-
-if [ "${1:-}" = "run" ] && [ "${3:-}" = "pin" ]; then
-  case "${2:-}" in
-    github.com/DataDog/orchestrion@v*)
-      cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
-//go:build tools
-
-package tools
-
-import (
-  _ "github.com/DataDog/orchestrion" // integration
-  _ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
-  _ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
-  _ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
-)
-PIN_TOOL_EOF
-      : > go.sum
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "all" ]; then
-  run_real_go "$@"
-  exit 0
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ] && [ "${3:-}" = "github.com/DataDog/dd-trace-go/v2" ]; then
-  run_real_go "$@"
-  exit 0
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "download" ]; then
-  case "${3:-}" in
-    github.com/DataDog/orchestrion@${ORCH_VERSION}|\
-    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
-      run_real_go "$@"
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "edit" ]; then
-  case "${3:-}" in
-    -require=github.com/DataDog/orchestrion@${ORCH_VERSION})
-      ensure_require "github.com/DataDog/orchestrion" "${ORCH_VERSION}"
-      exit 0
-      ;;
-    -require=github.com/DataDog/dd-trace-go/v2@v2.9.1|\
-    -require=github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
-    -require=github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
-      module_and_version="${3#-require=}"
-      module_path="${module_and_version%@*}"
-      version="${module_and_version##*@}"
-      ensure_require "$module_path" "$version"
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "get" ] && [ "${2:-}" = "github.com/DataDog/dd-trace-go/v2/orchestrion@v2.9.1" ]; then
-  ensure_require "github.com/DataDog/dd-trace-go/v2" "v2.9.1"
-  exit 0
-fi
-
-if [ "${1:-}" = "mod" ] && [ "${2:-}" = "tidy" ]; then
-  : > go.sum
-  exit 0
-fi
-
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-f" ] && [ "${4:-}" = "{{.Version}}" ]; then
-  case "${5:-}" in
-    github.com/DataDog/dd-trace-go/v2|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf 'v2.9.1\n'
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-m" ] && [ "${3:-}" = "-json" ]; then
-  case "${4:-}" in
-    github.com/DataDog/dd-trace-go/v2@v2.9.1|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2@v2.9.1|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2@v2.9.1)
-      printf '{"Version":"v2.9.1"}\n'
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ]; then
-  case "${5:-}" in
-    github.com/DataDog/orchestrion)
-      printf '{"Version":"%s"}\n' "$ORCH_VERSION"
-      exit 0
-      ;;
-    github.com/DataDog/dd-trace-go/v2|\
-    github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
-    github.com/DataDog/dd-trace-go/contrib/log/slog/v2)
-      printf '{"Version":"v2.9.1"}\n'
-      exit 0
-      ;;
-  esac
-fi
-
-if [ "${1:-}" = "build" ]; then
-  out=""
-  shift
-  while [ "$#" -gt 0 ]; do
-    if [ "$1" = "-o" ] && [ "$#" -ge 2 ]; then
-      out="$2"
-      break
-    fi
-    shift
-  done
-  if [ -n "$out" ]; then
-    cat > "$out" <<'ORCH_STUB_EOF'
-#!/bin/sh
-set -eu
-
-if [ "${1:-}" = "server" ]; then
-  for arg in "$@"; do
-    case "$arg" in
-      -url-file=*)
-        url_file="${arg#-url-file=}"
-        printf 'http://127.0.0.1:43123\n' > "$url_file"
-        while :; do sleep 3600; done
-        ;;
-    esac
-  done
-  exit 0
-fi
-
-if [ "${1:-}" = "pin" ]; then
-  cat > orchestrion.tool.go <<'PIN_TOOL_EOF'
-//go:build tools
-
-package tools
-
-import (
-  _ "github.com/DataDog/orchestrion" // integration
-  _ "github.com/DataDog/dd-trace-go/contrib/log/slog/v2" // integration
-  _ "github.com/DataDog/dd-trace-go/contrib/net/http/v2" // integration
-  _ "github.com/DataDog/dd-trace-go/v2/orchestrion" // integration
-)
-PIN_TOOL_EOF
-  : > go.sum
-  exit 0
-fi
-
-if [ "${1:-}" = "toolexec" ]; then
-  shift
-  exec "$@"
-fi
-
-exit 0
-ORCH_STUB_EOF
-    chmod +x "$out"
-    exit 0
-  fi
-fi
-
-if [ "${1:-}" = "list" ] && [ "${2:-}" = "-mod=mod" ] && [ "${3:-}" = "-m" ] && [ "${4:-}" = "-json" ] && [ "${5:-}" = "all" ]; then
-  run_real_go "$@"
-  exit 0
-fi
-
-if [ "${1:-}" = "list" ] && { [ "${2:-}" = "-mod=mod" ] || [ "${2:-}" = "-mod=readonly" ]; }; then
-  # The guided bootstrap path passes extra flags such as -tags=tools before the
-  # package arguments. Scan the full argv instead of assuming the first package
-  # is always the third argument.
-  matched=0
-  for arg in "$@"; do
-    case "$arg" in
-      github.com/DataDog/orchestrion|\
-      github.com/DataDog/dd-trace-go/v2/orchestrion|\
-      github.com/DataDog/dd-trace-go/contrib/net/http/v2|\
-      github.com/DataDog/dd-trace-go/contrib/log/slog/v2|\
-      github.com/DataDog/dd-trace-go/v2/ddtrace/tracer|\
-      github.com/DataDog/dd-trace-go/v2/profiler|\
-      github.com/DataDog/dd-trace-go/v2/instrumentation/env)
-        printf '%s\n' "$arg"
-        matched=1
-        ;;
-    esac
-  done
-  if [ "$matched" -eq 1 ]; then
-    exit 0
-  fi
-fi
-
-echo "unexpected go invocation: $*" >&2
-exit 1
-FAKE_GO_GUIDED_EOF
-chmod +x "$GUIDED_BOOT_WS/bin/go"
 
 cat > "$GUIDED_BOOT_WS/src/go-project/main.go" <<'GO_MAIN_GUIDED_EOF'
 package main
@@ -3998,16 +3487,16 @@ func TestGuidedGoRuntimeWiring(t *testing.T) {
 		if !os.IsNotExist(err) {
 			t.Fatalf("read bazel_target_metadata.json: %v", err)
 		}
-		// The raw target smoke below bypasses the public Orchestrion launcher, which
-		// normally copies this metadata file. Keep the doctor path representative by
-		// writing the same public target identity the generated metadata rule uses.
+		// Running the hidden raw target bypasses the public ddtest_go_test launcher,
+		// which normally copies this metadata file. Keep the doctor path representative
+		// by writing the same public target identity the generated metadata rule uses.
 		metadataContent = []byte(`{
   "bazel.package": "src/go-project",
   "bazel.target": "//src/go-project:hello_test",
   "bazel.go.importpath": "example.com/guided-bootstrap-go",
   "bazel.go.importpath_source": "inferred",
   "bazel.go.payload_selection": "module",
-  "bazel.go.orchestrion.enabled": true,
+  "bazel.go.instrumentation.backend": "ddtest",
   "bazel.go.attr.cgo": false,
   "bazel.go.attr.pure": "auto",
   "bazel.go.attr.race": "auto",
@@ -4050,12 +3539,8 @@ BUILD_GUIDED_EOF
 
 (
   cd "$GUIDED_BOOT_WS"
-  REAL_GO_BIN="$REAL_GO_BIN_HOST" PATH="$GUIDED_BOOT_WS/bin:$PATH" "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
+  "$BAZEL" "${BAZEL_FLAGS[@]}" run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
     --workspace "$GUIDED_BOOT_WS" \
-    --rules-go-remote "$RULES_GO_OVERRIDE_REMOTE" \
-    --rules-go-commit "$RULES_GO_OVERRIDE_COMMIT" \
-    --rules-go-upstream "$RULES_GO_UPSTREAM" \
-    --rules-go-variant "$RULES_GO_VARIANT" \
     --guided \
     --service "go-service" \
     --runtime-version "$GO_VERSION" \
@@ -4077,10 +3562,14 @@ if ! grep -q 'module_path = "example.com/guided-bootstrap-go"' "$GUIDED_BOOT_WS/
   cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
-if ! grep -q 'test_optimization_go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")' "$GUIDED_BOOT_WS/MODULE.bazel" ||
-  ! grep -q 'go_sdk_root = "@test_optimization_go_sdk//:ROOT"' "$GUIDED_BOOT_WS/MODULE.bazel" ||
-  ! grep -q "go_sdk_version = \"$GO_VERSION\"" "$GUIDED_BOOT_WS/MODULE.bazel"; then
-  echo "error: guided bootstrap did not wire the Bazel-managed Go SDK into Orchestrion"
+if ! grep -q '# BEGIN Datadog Go Test Optimization bootstrap' "$GUIDED_BOOT_WS/MODULE.bazel" ||
+  ! grep -q "topt_go_ddtest.sdk(go_version = \"$GO_VERSION\")" "$GUIDED_BOOT_WS/MODULE.bazel"; then
+  echo "error: guided bootstrap did not configure the Go SDK that ddtest instruments"
+  cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
+  exit 1
+fi
+if grep -q -e 'module_name = "rules_go"' -e 'orchestrion' "$GUIDED_BOOT_WS/MODULE.bazel"; then
+  echo "error: guided bootstrap still wrote Orchestrion or rules_go fork wiring"
   cat "$GUIDED_BOOT_WS/MODULE.bazel" || true
   exit 1
 fi
@@ -4131,8 +3620,8 @@ if ! grep -q '# BEGIN Datadog Go Wrapper' "$GUIDED_BOOT_WS/tools/build/dd_go_tes
   cat "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl" || true
   exit 1
 fi
-if ! grep -q 'orchestrion_mode = "test_optimization"' "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl"; then
-  echo "error: guided bootstrap wrapper did not default to test_optimization Orchestrion mode"
+if grep -q 'orchestrion' "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl"; then
+  echo "error: guided bootstrap wrapper still passes Orchestrion attributes"
   cat "$GUIDED_BOOT_WS/tools/build/dd_go_test.bzl" || true
   exit 1
 fi
@@ -4205,7 +3694,7 @@ required_keys = [
     "bazel.go.importpath",
     "bazel.go.importpath_source",
     "bazel.go.payload_selection",
-    "bazel.go.orchestrion.enabled",
+    "bazel.go.instrumentation.backend",
     "bazel.go.attr.cgo",
     "bazel.go.attr.pure",
     "bazel.go.attr.race",
@@ -4496,7 +3985,7 @@ cat > "$BAZEL_TARGET_METADATA_PATH" <<'JSON_EOF'
   "bazel.go.importpath": "example.com/sidecar/pkg",
   "bazel.go.importpath_source": "inferred",
   "bazel.go.payload_selection": "module",
-  "bazel.go.orchestrion.enabled": true,
+  "bazel.go.instrumentation.backend": "ddtest",
   "bazel.go.attr.cgo": false,
   "bazel.go.attr.pure": "auto",
   "bazel.go.attr.race": "auto",
@@ -4599,7 +4088,7 @@ expected_tags = {
     "bazel.go.importpath": "example.com/sidecar/pkg",
     "bazel.go.importpath_source": "inferred",
     "bazel.go.payload_selection": "module",
-    "bazel.go.orchestrion.enabled": "true",
+    "bazel.go.instrumentation.backend": "ddtest",
     "bazel.go.attr.cgo": "false",
     "bazel.go.attr.pure": "auto",
     "bazel.go.attr.race": "auto",
