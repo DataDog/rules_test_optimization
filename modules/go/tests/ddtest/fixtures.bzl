@@ -6,7 +6,8 @@
 
 """Fixtures and analysis tests of the ddtest instrumentation."""
 
-load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts")
+load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
+load("//:topt_go_ddtest.bzl", "ddtest_transition_impl_for_tests")
 
 # The stub sync repository's export, as the macro tests use it.
 TOPT_DATA = {
@@ -35,3 +36,14 @@ foreign_mini_failure_test = analysistest.make(
     _foreign_mini_failure_test_impl,
     expect_failure = True,
 )
+
+def _ddtest_transition_test_impl(ctx):
+    env = unittest.begin(ctx)
+    asserts.equals(
+        env,
+        {"@io_bazel_rules_go//go/toolchain:sdk_name": "ddto"},
+        ddtest_transition_impl_for_tests(None, None),
+    )
+    return unittest.end(env)
+
+ddtest_transition_test = unittest.make(_ddtest_transition_test_impl)

@@ -4,8 +4,10 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+load("//:topt_go_stdlib.bzl", "dd_topt_go_stdlib_warmup")
 load("//:topt_go_test.bzl", "dd_topt_go_test")
-load(":fixtures.bzl", "TOPT_DATA", "foreign_mini_failure_test")
+load("//tests:test_macro.bzl", "stdlib_warmup_target_has_outputs_test")
+load(":fixtures.bzl", "TOPT_DATA", "ddtest_transition_test", "foreign_mini_failure_test")
 
 # Runs instrumented: it fails unless Mini set its context's trace. Its deps
 # name testopt, which the macro then adds only once; its external test
@@ -39,4 +41,17 @@ dd_topt_go_test(
 foreign_mini_failure_test(
     name = "foreign_mini_failure_test",
     target_under_test = ":foreign_mini_test",
+)
+
+ddtest_transition_test(name = "ddtest_transition_test")
+
+# The standard library that instrumented tests build, warmed on its own.
+dd_topt_go_stdlib_warmup(
+    name = "stdlib_warmup",
+    instrumentation = "ddtest",
+)
+
+stdlib_warmup_target_has_outputs_test(
+    name = "stdlib_warmup_has_outputs_test",
+    target_under_test = ":stdlib_warmup",
 )

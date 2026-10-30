@@ -8,6 +8,7 @@
 
 load("@io_bazel_rules_go//go/private:providers.bzl", "GoStdLib")
 load("@io_bazel_rules_go//go/private/rules:transition.bzl", "go_transition")
+load(":topt_go_ddtest.bzl", "ddtest_transition")
 
 _ORCHESTRION_ENABLED_SETTING = "@io_bazel_rules_go//go/private/orchestrion:enabled"
 _ORCHESTRION_MODE_SETTING = "@io_bazel_rules_go//go/private/orchestrion:mode"
@@ -84,8 +85,31 @@ _dd_topt_go_stdlib_warmup = rule(
     doc = "Builds the Orchestrion-instrumented Go standard library used by Test Optimization.",
 )
 
-def dd_topt_go_stdlib_warmup(name, **kwargs):
-    """Creates a warmup target with the same Go transitions as a real go_test."""
+_dd_topt_go_ddtest_stdlib_warmup = rule(
+    implementation = _dd_topt_go_stdlib_warmup_impl,
+    attrs = {
+        "actual": attr.label(
+            mandatory = True,
+            cfg = ddtest_transition,
+        ),
+        "_allowlist_function_transition": attr.label(
+            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+        ),
+    },
+    doc = "Builds the Go standard library with the SDK that ddtest instruments.",
+)
+
+def dd_topt_go_stdlib_warmup(name, instrumentation = "orchestrion", **kwargs):
+    """Creates a warmup target with the same Go transitions as a real go_test.
+
+    Args:
+      name: Target name.
+      instrumentation: The instrumentation of the tests to warm up for:
+        "orchestrion" or "ddtest", as in dd_topt_go_test.
+      **kwargs: Common rule attributes such as tags and visibility.
+    """
+    if instrumentation not in ("orchestrion", "ddtest"):
+        fail("dd_topt_go_stdlib_warmup: instrumentation must be one of ddtest, orchestrion")
     transitioned_name = name + "__go_transition"
     _go_transition_stdlib_warmup(
         name = transitioned_name,
@@ -93,7 +117,8 @@ def dd_topt_go_stdlib_warmup(name, **kwargs):
         visibility = ["//visibility:private"],
     )
     kwargs["tags"] = _with_manual_tag(kwargs.get("tags"))
-    _dd_topt_go_stdlib_warmup(
+    warmup = _dd_topt_go_ddtest_stdlib_warmup if instrumentation == "ddtest" else _dd_topt_go_stdlib_warmup
+    warmup(
         name = name,
         actual = ":" + transitioned_name,
         **kwargs
