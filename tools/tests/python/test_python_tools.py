@@ -18,6 +18,7 @@ import functools
 import gzip
 import http.server
 import importlib.util
+import itertools
 import io
 import json
 import os
@@ -9070,7 +9071,7 @@ echo blocked
 
 class GoWorkspaceIntegrationTests(unittest.TestCase):
     def test_generated_consumers_register_shell_toolchains(self) -> None:
-        """Both fetch paths initialize the shell rules used by collect_coverage."""
+        """Both fetch paths and instrumentations initialize the shell rules used by collect_coverage."""
         bash = _require_functional_bash(self)
         source = _runfile("tools/tests/integration/run_workspace_go_integration.sh").read_text(
             encoding="utf-8"
@@ -9096,15 +9097,18 @@ class GoWorkspaceIntegrationTests(unittest.TestCase):
             "MODULE_IMPORTPATH": "example.com/fixture",
             "OUT_DIR": "custom_topt",
         }
-        for fetch_mode in ("local", "archive"):
-            with self.subTest(fetch_mode=fetch_mode), tempfile.TemporaryDirectory() as tmp:
+        for fetch_mode, instrumentation in itertools.product(("local", "archive"), ("orchestrion", "ddtest")):
+            with (
+                self.subTest(fetch_mode=fetch_mode, instrumentation=instrumentation),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 subprocess.run(
                     [
                         bash, "-eu", "-c",
                         quote + writer + '\nwrite_positive_workspace "$1" "$2"',
                         "fixture", tmp, fetch_mode,
                     ],
-                    env=env,
+                    env={**env, "INSTRUMENTATION": instrumentation},
                     check=True,
                     capture_output=True,
                     text=True,
@@ -9132,6 +9136,18 @@ class GoWorkspaceIntegrationTests(unittest.TestCase):
                 self.assertLess(shell_load, names.index("rules_shell_dependencies"))
                 self.assertLess(names.index("rules_shell_dependencies"), names.index("rules_shell_toolchains"))
                 self.assertEqual(1, names.count("rules_shell_toolchains"))
+                if instrumentation == "ddtest":
+                    self.assertNotIn("dd_topt_go_orchestrion_tool_repo", names)
+                    self.assertLess(
+                        names.index("go_register_toolchains"),
+                        names.index("topt_go_ddtest_workspace_repositories"),
+                    )
+                else:
+                    self.assertNotIn("topt_go_ddtest_workspace_repositories", names)
+                    self.assertLess(
+                        names.index("dd_topt_go_orchestrion_tool_repo"),
+                        names.index("go_rules_dependencies"),
+                    )
 
 
 class MockDdServerTests(unittest.TestCase):

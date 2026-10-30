@@ -18,6 +18,11 @@ set -euo pipefail
 # - Orchestrion extension wiring in the consumer root module
 # - module-selected payload wiring through the example stub extension
 #
+# INSTRUMENTATION=ddtest runs the positive fixture with tests instrumented by
+# `ddtest instrument` instead of Orchestrion: the companion's topt_go_ddtest
+# extension replaces the Orchestrion extension, and the hermetic lane checks
+# the action graph with assert_ddtest_aquery.py.
+#
 # Debugging tips:
 # - Set KEEP_TMP=1 to inspect the generated workspaces after a failure.
 # - Override BAZEL=<path> to run with a different Bazel launcher locally.
@@ -43,6 +48,7 @@ BAZEL_OUTPUT_USER_ROOT="${BAZEL_OUTPUT_USER_ROOT:-$TMP_ROOT/bazel_output_user_ro
 GO_VERSION="${GO_VERSION:-1.25.0}"
 ORCHESTRION_VERSION="${ORCHESTRION_VERSION:-v1.12.0}"
 ORCHESTRION_MODE="${ORCHESTRION_MODE:-general}"
+INSTRUMENTATION="${INSTRUMENTATION:-orchestrion}"
 ORCHESTRION_DISABLED_SENTINEL="${ORCHESTRION_DISABLED_SENTINEL:-0}"
 ORCHESTRION_DISABLED_SENTINEL_VERSION="v0.0.0-rto-disabled-fetch-sentinel"
 WINDOWS_DISABLED_SMOKE_ONLY="${WINDOWS_DISABLED_SMOKE_ONLY:-0}"
@@ -663,12 +669,29 @@ write_fixture_bazelrc() {
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 common --incompatible_allow_tags_propagation
 common --incompatible_disallow_empty_glob=false
-build:test-optimization --@${rules_go_repo}//go/private/orchestrion:enabled=true
 EOF
+  if [[ "$INSTRUMENTATION" == "orchestrion" ]]; then
+    echo "build:test-optimization --@${rules_go_repo}//go/private/orchestrion:enabled=true" >> "$ws_dir/.bazelrc"
+  fi
 }
 
 write_shared_fixture_sources() {
   local ws_dir="$1"
+  local hello_test_instrumentation_attrs
+
+  if [[ "$INSTRUMENTATION" == "ddtest" ]]; then
+    hello_test_instrumentation_attrs='    tags = ["no-remote-exec"],
+    instrumentation = "ddtest",'
+  else
+    hello_test_instrumentation_attrs="    tags = [\"no-remote-exec\"] if \"${ORCHESTRION_MODE}\" == \"test_optimization\" else [],
+    orchestrion_pin_files = [
+        \"//:go.mod\",
+        \"//:go.sum\",
+        \"//:orchestrion.tool.go\",
+        \"//:orchestrion.yml\",
+    ],
+    orchestrion_mode = \"${ORCHESTRION_MODE}\","
+  fi
 
   mkdir -p "$ws_dir/app" "$ws_dir/tools/build"
 
@@ -746,14 +769,7 @@ dd_go_test(
         ":fixture_tool_reset",
     ],
     embed = [":hello_lib"],
-    tags = ["no-remote-exec"] if "${ORCHESTRION_MODE}" == "test_optimization" else [],
-    orchestrion_pin_files = [
-        "//:go.mod",
-        "//:go.sum",
-        "//:orchestrion.tool.go",
-        "//:orchestrion.yml",
-    ],
-    orchestrion_mode = "${ORCHESTRION_MODE}",
+${hello_test_instrumentation_attrs}
 )
 
 genquery(
@@ -816,6 +832,7 @@ const (
 	wantModuleImportpath = "${MODULE_IMPORTPATH}"
 	wantOrchestrionEnabled = true
 	wantOrchestrionMode = "${ORCHESTRION_MODE}"
+	wantInstrumentation = "${INSTRUMENTATION}"
 )
 
 func resolveRlocation(p string) (string, bool) {
@@ -973,11 +990,30 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 	if selection != "module" {
 		t.Fatalf("bazel.go.payload_selection = %v with deterministic module metadata, want module", selection)
 	}
-	if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
-		t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
-	}
-	if got, _ := metadata["bazel.go.orchestrion.mode"].(string); got != wantOrchestrionMode {
-		t.Fatalf("bazel.go.orchestrion.mode = %v, want %q", metadata["bazel.go.orchestrion.mode"], wantOrchestrionMode)
+	if wantInstrumentation == "ddtest" {
+		if got, _ := metadata["bazel.go.instrumentation.backend"].(string); got != "ddtest" {
+			t.Fatalf("bazel.go.instrumentation.backend = %v, want ddtest", metadata["bazel.go.instrumentation.backend"])
+		}
+		for _, key := range []string{
+			"bazel.go.instrumentation.version",
+			"bazel.go.instrumentation.release",
+			"bazel.go.sdk.name",
+			"bazel.go.sdk.version",
+		} {
+			if got, _ := metadata[key].(string); got == "" {
+				t.Fatalf("%s = %v, want a non-empty string", key, metadata[key])
+			}
+		}
+		if _, ok := metadata["bazel.go.orchestrion.enabled"]; ok {
+			t.Fatalf("bazel.go.orchestrion.enabled = %v, want no Orchestrion metadata", metadata["bazel.go.orchestrion.enabled"])
+		}
+	} else {
+		if got, _ := metadata["bazel.go.orchestrion.enabled"].(bool); got != wantOrchestrionEnabled {
+			t.Fatalf("bazel.go.orchestrion.enabled = %v, want %v", metadata["bazel.go.orchestrion.enabled"], wantOrchestrionEnabled)
+		}
+		if got, _ := metadata["bazel.go.orchestrion.mode"].(string); got != wantOrchestrionMode {
+			t.Fatalf("bazel.go.orchestrion.mode = %v, want %q", metadata["bazel.go.orchestrion.mode"], wantOrchestrionMode)
+		}
 	}
 	// This runtime lane uses Bazel's default fastbuild/strip=sometimes
 	// configuration, where the macro does not add its own test-only linker flags.
@@ -1077,6 +1113,19 @@ test_optimization.test_optimization_go(
     require_git_metadata = True,
 )
 use_repo(test_optimization, "test_optimization_data")
+EOF
+  if [[ "$INSTRUMENTATION" == "ddtest" ]]; then
+    cat >> "$ws_dir/MODULE.bazel" <<EOF
+
+topt_go_ddtest = use_extension(
+    "@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl",
+    "topt_go_ddtest",
+)
+topt_go_ddtest.sdk(go_version = "${GO_VERSION}")
+EOF
+    return
+  fi
+  cat >> "$ws_dir/MODULE.bazel" <<EOF
 
 orchestrion = use_extension("@rules_go//go:extensions.bzl", "orchestrion")
 orchestrion.from_source(
@@ -1143,6 +1192,48 @@ run_fixture() {
   fi
   run_fixture_subscenario "$ws_dir" "standard"
   run_fixture_subscenario "$ws_dir" "hermetic"
+}
+
+# assert_ddtest_action_graph checks with aquery that the test is built by
+# ddtest instrument, in the default, opt and no-strip modes, whose linker flag
+# counts differ.
+assert_ddtest_action_graph() {
+  local ws_dir="$1"
+  local hermetic_home="$2"
+  local hermetic_xdg="$3"
+  shift 3
+  local -a bzlmod_flags=("$@")
+  local -a modes=("default:2" "opt:1" "no_strip:0")
+  local entry name count aquery_output
+  local -a mode_flags
+
+  for entry in "${modes[@]}"; do
+    name="${entry%%:*}"
+    count="${entry##*:}"
+    mode_flags=()
+    case "$name" in
+      opt) mode_flags=(--compilation_mode=opt) ;;
+      no_strip) mode_flags=(--strip=never) ;;
+    esac
+    aquery_output="$ws_dir/.hermetic/hello_test_${name}_aquery.json"
+    (
+      cd "$ws_dir"
+      HOME="$hermetic_home" \
+      XDG_CACHE_HOME="$hermetic_xdg" \
+      USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" aquery \
+        ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+        "${bzlmod_flags[@]}" \
+        "${HERMETIC_BUILD_FLAGS[@]}" \
+        ${mode_flags[@]+"${mode_flags[@]}"} \
+        "deps(${HELLO_TEST_TARGET})" \
+        --output=jsonproto > "$aquery_output"
+    )
+    "$PYTHON" "$REPO_ROOT/tools/tests/integration/assert_ddtest_aquery.py" \
+      --test-label "$HELLO_TEST_TARGET" \
+      --expected-linker-flag-count "$count" \
+      --require-test-runner-only-no-remote-exec \
+      "$aquery_output"
+  done
 }
 
 # run_fixture_subscenario executes the positive Bzlmod fixture in standard or
@@ -1237,6 +1328,11 @@ PY
       "$HELLO_TEST_TARGET"
   )
   assert_json_test_payloads "$ws_dir" "$mode"
+
+  if [[ "$INSTRUMENTATION" == "ddtest" ]]; then
+    assert_ddtest_action_graph "$ws_dir" "$hermetic_home" "$hermetic_xdg" "${bzlmod_flags[@]}"
+    return
+  fi
 
   (
     cd "$ws_dir"
@@ -1611,6 +1707,20 @@ run_windows_enabled_smoke() {
 
 mkdir -p "$WORKSPACE_ROOT"
 
+case "$INSTRUMENTATION" in
+  orchestrion) ;;
+  ddtest)
+    if [[ "$WINDOWS_DISABLED_SMOKE_ONLY" == "1" || "$ORCHESTRION_DISABLED_SENTINEL" == "1" || "$WINDOWS_ENABLED_SMOKE_ONLY" == "1" || "$CONFIG_TRANSITION_ONLY" == "1" ]]; then
+      echo "error: INSTRUMENTATION=ddtest runs only the positive fixture" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "error: unsupported INSTRUMENTATION=$INSTRUMENTATION; want orchestrion or ddtest" >&2
+    exit 1
+    ;;
+esac
+
 if [[ "$WINDOWS_DISABLED_SMOKE_ONLY" == "1" || "$ORCHESTRION_DISABLED_SENTINEL" == "1" ]]; then
   ORCHESTRION_VERSION="$ORCHESTRION_DISABLED_SENTINEL_VERSION"
   ORCHESTRION_MODE="test_optimization"
@@ -1666,5 +1776,7 @@ if [[ "$INTEGRATION_SCENARIO_MODE" != "full" ]]; then
 fi
 
 run_fixture
-run_conflicting_pin_mode_failure
+if [[ "$INSTRUMENTATION" == "orchestrion" ]]; then
+  run_conflicting_pin_mode_failure
+fi
 assert_go_integration_metadata_requests

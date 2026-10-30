@@ -549,6 +549,30 @@ jobs:
               ;;
           esac
 
+      # ddtest instrument builds the SDK and Mini without the host's Go.
+      - name: Validate ddtest instrument Go companion consumer path
+        shell: bash
+        env:
+          FORBID_HOST_GO: "1"
+          INSTRUMENTATION: ddtest
+          MODULE_SYSTEM: ${{ matrix.module_system }}
+          RULES_GO_UPSTREAM: ${{ matrix.upstream }}
+          RULES_GO_VARIANT: base
+          USE_BAZEL_VERSION: "8.8.2"
+        run: |
+          case "${MODULE_SYSTEM}" in
+            workspace)
+              ./tools/tests/integration/run_workspace_go_integration.sh
+              ;;
+            bzlmod)
+              ./tools/tests/integration/run_bzlmod_go_integration.sh
+              ;;
+            *)
+              echo "Unsupported module system: ${MODULE_SYSTEM}" >&2
+              exit 1
+              ;;
+          esac
+
   workspace-compat:
     needs:
       - changes
