@@ -1443,7 +1443,7 @@ Notes for the helpers:
   `rto_archive_url`, `rto_archive_sha256`, and `rto_archive_prefix`;
   `rto_archive_type` defaults to `tar.gz`. Use values generated from one
   published commit; see [Generate published Go pins](#generate-published-go-pins).
-- `rules_go_repo_name` defaults to `io_bazel_rules_go`. Keep that default.
+- `rules_go_repo_name` must be `io_bazel_rules_go`, its default; the helper fails with any other name.
 - `topt_go_ddtest_workspace_repositories` declares the ddtest executable,
   Mini's repository, and one instrumented SDK per exec platform, and registers
   their toolchains. It takes the same arguments as the Bzlmod

@@ -4,6 +4,7 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
 load("//:topt_go_stdlib.bzl", "dd_topt_go_stdlib_warmup")
 load("//:topt_go_test.bzl", "dd_topt_go_test")
 load("//tests:test_macro.bzl", "stdlib_warmup_target_has_outputs_test")
@@ -24,6 +25,27 @@ dd_topt_go_test(
         "@topt_go_ddtest_mini//propagation",
         "@topt_go_ddtest_mini//testopt",
     ],
+)
+
+# Its only source comes through embed, which the registration also reads.
+go_library(
+    name = "widget",
+    srcs = ["widget.go"],
+    importpath = "example.com/widget",
+)
+
+dd_topt_go_test(
+    name = "embed_only_test",
+    embed = [":widget"],
+    topt_data = TOPT_DATA,
+)
+
+# Every source has a negated build constraint, which holds on this platform.
+dd_topt_go_test(
+    name = "constrained_test",
+    srcs = ["constrained_test.go"],
+    importpath = "example.com/constrained",
+    topt_data = TOPT_DATA,
 )
 
 # A copy of Mini's packages from another repository stops analysis.

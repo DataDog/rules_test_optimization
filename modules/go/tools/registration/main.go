@@ -86,8 +86,10 @@ func testPackage(files []string) (string, error) {
 	return "", fmt.Errorf("sources declare packages %s", strings.Join(append(internal, external...), ", "))
 }
 
-// ignored reports whether a //go:build ignore constraint excludes the file,
-// as the go command does for generators kept next to tests.
+// ignored reports whether a //go:build constraint excludes the file on every
+// platform, such as //go:build ignore on generators kept next to tests: the
+// go command never sets the ignore tag. Other constraints, such as !windows,
+// hold for some platform, and rules_go applies them itself.
 func ignored(groups []*ast.CommentGroup) bool {
 	for _, group := range groups {
 		for _, comment := range group.List {
@@ -95,8 +97,49 @@ func ignored(groups []*ast.CommentGroup) bool {
 				continue
 			}
 			expr, err := constraint.Parse(comment.Text)
-			return err == nil && !expr.Eval(func(tag string) bool { return tag != "ignore" })
+			return err == nil && !satisfiable(expr)
 		}
 	}
 	return false
+}
+
+// satisfiable reports whether some set of tags other than ignore satisfies
+// expr. A constraint with too many tags to enumerate counts as satisfiable.
+func satisfiable(expr constraint.Expr) bool {
+	var tags []string
+	collect(expr, map[string]bool{"ignore": true}, &tags)
+	if len(tags) > 16 {
+		return true
+	}
+	for set := 0; set < 1<<len(tags); set++ {
+		if expr.Eval(func(tag string) bool {
+			for i, name := range tags {
+				if name == tag {
+					return set&(1<<i) != 0
+				}
+			}
+			return false
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+func collect(expr constraint.Expr, seen map[string]bool, tags *[]string) {
+	switch expr := expr.(type) {
+	case *constraint.TagExpr:
+		if !seen[expr.Tag] {
+			seen[expr.Tag] = true
+			*tags = append(*tags, expr.Tag)
+		}
+	case *constraint.NotExpr:
+		collect(expr.X, seen, tags)
+	case *constraint.AndExpr:
+		collect(expr.X, seen, tags)
+		collect(expr.Y, seen, tags)
+	case *constraint.OrExpr:
+		collect(expr.X, seen, tags)
+		collect(expr.Y, seen, tags)
+	}
 }

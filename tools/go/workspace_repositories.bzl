@@ -53,14 +53,7 @@ def _fail_existing_repo(name):
         _OWNER,
         (
             "repository '%s' is already declared. Remove the manual declaration " +
-            "for '%s', or stop calling this helper for the Go companion repository. " +
-            "If the collision is with a consumer-owned rules_go repository, keep " +
-            "that repository and pass its name through rules_go_repo_name. " +
-            "Example:\n\n" +
-            "datadog_go_test_optimization_workspace_repositories(\n" +
-            "    rto_commit = \"<published-sha>\",\n" +
-            "    rules_go_repo_name = \"io_bazel_rules_go\",\n" +
-            ")\n"
+            "for '%s', or stop calling this helper for the Go companion repository."
         ) % (name, name),
     )
 
@@ -69,18 +62,16 @@ def _fail_missing_rules_go_repo(name):
     fail_with_prefix(
         _OWNER,
         (
-            "rules_go repository '%s' is not declared. Declare rules_go " +
-            "before calling this helper, or pass rules_go_repo_name with the " +
-            "consumer-owned repository name. Example:\n\n" +
+            "rules_go repository '%s' is not declared. Declare upstream rules_go " +
+            "before calling this helper. Example:\n\n" +
             "http_archive(\n" +
             "    name = \"%s\",\n" +
             "    ...\n" +
             ")\n\n" +
             "datadog_go_test_optimization_workspace_repositories(\n" +
             "    rto_commit = \"<published-sha>\",\n" +
-            "    rules_go_repo_name = \"%s\",\n" +
             ")\n"
-        ) % (name, name, name),
+        ) % (name, name),
     )
 
 def _validate_fetch_mode(value):
@@ -121,7 +112,8 @@ def _build_workspace_repository_specs(
       rto_commit: Published commit to use for git_repository fetches.
       rto_remote: Git remote for Datadog repositories.
       datadog_fetch: Fetch mode for the Go companion repository.
-      rules_go_repo_name: Repository name used by the consumer for rules_go.
+      rules_go_repo_name: Repository name used by the consumer for rules_go;
+        it must be io_bazel_rules_go.
       rto_archive_url: Archive URL used by archive fetch mode.
       rto_archive_sha256: Archive SHA256 used by archive fetch mode.
       rto_archive_prefix: Archive root prefix used by archive fetch mode.
@@ -133,8 +125,15 @@ def _build_workspace_repository_specs(
     """
     _validate_fetch_mode(datadog_fetch)
 
-    if not rules_go_repo_name:
-        fail_with_prefix(_OWNER, "rules_go_repo_name must be non-empty")
+    if rules_go_repo_name != "io_bazel_rules_go":
+        fail_with_prefix(
+            _OWNER,
+            (
+                "rules_go_repo_name must be \"io_bazel_rules_go\", got %r: the Go SDK " +
+                "repositories that ddtest instrument writes load rules_go under that name. " +
+                "Declare upstream rules_go as io_bazel_rules_go."
+            ) % rules_go_repo_name,
+        )
     if datadog_fetch == "git" and not rto_commit:
         fail_with_prefix(_OWNER, "rto_commit is required when datadog_fetch is 'git'")
     if datadog_fetch == "git" and not rto_remote:

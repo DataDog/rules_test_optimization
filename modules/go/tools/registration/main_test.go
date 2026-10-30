@@ -25,6 +25,8 @@ func TestTestPackage(t *testing.T) {
 	external := write("b_test.go", "// Copyright\n\npackage widget_test\n")
 	library := write("widget.go", "package widget\n")
 	generator := write("gen.go", "//go:build ignore\n\npackage main\n")
+	linuxGenerator := write("gen_linux.go", "//go:build ignore && linux\n\npackage main\n")
+	notWindows := write("c_test.go", "//go:build !windows\n\npackage widget_test\n")
 	other := write("other_test.go", "package gadget_test\n")
 	asm := write("x.s", "TEXT ·f(SB),0,$0\n")
 	for _, c := range []struct {
@@ -34,6 +36,9 @@ func TestTestPackage(t *testing.T) {
 		{[]string{internal, library}, "widget"},
 		{[]string{internal, external, library}, "widget_test"},
 		{[]string{internal, generator, asm}, "widget"},
+		{[]string{internal, linuxGenerator}, "widget"},
+		{[]string{notWindows}, "widget_test"},
+		{[]string{internal, notWindows}, "widget_test"},
 		{[]string{internal, external, other}, ""},
 		{[]string{asm}, ""},
 	} {

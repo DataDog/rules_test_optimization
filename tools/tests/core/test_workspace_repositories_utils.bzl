@@ -48,17 +48,15 @@ def _go_archive_specs_test(ctx):
 
 go_archive_specs_test = unittest.make(_go_archive_specs_test)
 
-def _go_custom_rules_go_repo_name_test(ctx):
-    """Validate custom rules_go repo names are reflected in repo_mapping."""
-    env = unittest.begin(ctx)
-    specs = build_workspace_repository_specs_for_tests(
+def _go_custom_rules_go_repo_name_target_impl(_ctx):
+    """Create a target that fails during analysis for another rules_go name."""
+    build_workspace_repository_specs_for_tests(
         rto_commit = "abc123",
         rules_go_repo_name = "custom_rules_go",
     )
-    asserts.equals(env, {"@io_bazel_rules_go": "@custom_rules_go"}, specs[0]["attrs"]["repo_mapping"])
-    return unittest.end(env)
+    return []
 
-go_custom_rules_go_repo_name_test = unittest.make(_go_custom_rules_go_repo_name_test)
+go_custom_rules_go_repo_name_target_rule = rule(implementation = _go_custom_rules_go_repo_name_target_impl)
 
 def _go_invalid_fetch_mode_target_impl(_ctx):
     """Create a target that fails during analysis for an invalid fetch mode."""
@@ -149,7 +147,7 @@ def _go_existing_repo_failure_test_impl(ctx):
     """Assert repository collision failures include a correction snippet."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "repository 'datadog-rules-test-optimization-go' is already declared")
-    asserts.expect_failure(env, "rules_go_repo_name")
+    asserts.expect_failure(env, "stop calling this helper for the Go companion repository")
     return analysistest.end(env)
 
 go_existing_repo_failure_test = analysistest.make(
@@ -161,10 +159,21 @@ def _go_missing_rules_go_repo_failure_test_impl(ctx):
     """Assert missing rules_go failures explain declaration ordering."""
     env = analysistest.begin(ctx)
     asserts.expect_failure(env, "rules_go repository 'io_bazel_rules_go' is not declared")
-    asserts.expect_failure(env, "Declare rules_go before calling this helper")
+    asserts.expect_failure(env, "Declare upstream rules_go before calling this helper")
     return analysistest.end(env)
 
 go_missing_rules_go_repo_failure_test = analysistest.make(
     _go_missing_rules_go_repo_failure_test_impl,
+    expect_failure = True,
+)
+
+def _go_custom_rules_go_repo_name_failure_test_impl(ctx):
+    """Assert that another rules_go name fails: the SDK repositories need io_bazel_rules_go."""
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "rules_go_repo_name must be \"io_bazel_rules_go\", got \"custom_rules_go\"")
+    return analysistest.end(env)
+
+go_custom_rules_go_repo_name_failure_test = analysistest.make(
+    _go_custom_rules_go_repo_name_failure_test_impl,
     expect_failure = True,
 )

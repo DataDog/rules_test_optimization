@@ -13,7 +13,7 @@ library and the registration file that `ddtest instrument` writes, and an
 aspect stops a test that would link a second copy of Mini.
 """
 
-load("@io_bazel_rules_go//go:def.bzl", "GoArchive")
+load("@io_bazel_rules_go//go:def.bzl", "GoArchive", "GoInfo")
 load(":topt_go_ddtest_repository.bzl", "DDTEST_RELEASE", "MINI_REPO")
 
 _BAZEL_TARGET_METADATA_OUTPUT = "bazel_target_metadata.json"
@@ -83,7 +83,11 @@ def foreign_mini_error(test_label, labels):
 
 def _registration_impl(ctx):
     out = ctx.actions.declare_file(ctx.label.name + "_zz_dd_ci_visibility_test.go")
-    go_srcs = [src for src in ctx.files.srcs if src.extension == "go"]
+
+    # rules_go compiles the test with the sources of the libraries it embeds
+    # too, so a test whose sources all come through embed still has a package.
+    embedded = [src for lib in ctx.attr.embed for src in lib[GoInfo].srcs]
+    go_srcs = [src for src in ctx.files.srcs + embedded if src.extension == "go"]
     args = ctx.actions.args()
     args.add("-o", out)
     args.add_all(go_srcs)
@@ -101,6 +105,7 @@ topt_go_ddtest_registration = rule(
     implementation = _registration_impl,
     attrs = {
         "srcs": attr.label_list(allow_files = True, doc = "The test's sources."),
+        "embed": attr.label_list(providers = [GoInfo], doc = "The libraries that the test embeds."),
         "_tool": attr.label(
             default = "//tools/registration",
             executable = True,

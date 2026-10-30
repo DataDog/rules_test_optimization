@@ -625,6 +625,7 @@ def dd_topt_go_test(
     topt_go_ddtest_registration(
         name = registration_name,
         srcs = kwargs.get("srcs") or [],
+        embed = kwargs.get("embed") or [],
         tags = ["manual"],
         target_compatible_with = wrapper_kwargs.get("target_compatible_with", []),
         visibility = ["//visibility:private"],

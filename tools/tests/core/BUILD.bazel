@@ -280,7 +280,8 @@ load(
 load(
     "//tools/tests/core:test_workspace_repositories_utils.bzl",
     "go_archive_specs_test",
-    "go_custom_rules_go_repo_name_test",
+    "go_custom_rules_go_repo_name_failure_test",
+    "go_custom_rules_go_repo_name_target_rule",
     "go_existing_repo_failure_test",
     "go_existing_repo_target_rule",
     "go_git_specs_test",
@@ -546,10 +547,14 @@ go_archive_specs_test(
     timeout = "short",
 )
 
-go_custom_rules_go_repo_name_test(
-    name = "go_custom_rules_go_repo_name_test",
-    size = "small",
-    timeout = "short",
+go_custom_rules_go_repo_name_target_rule(
+    name = "go_custom_rules_go_repo_name_target",
+    tags = ["manual"],
+)
+
+go_custom_rules_go_repo_name_failure_test(
+    name = "go_custom_rules_go_repo_name_failure_test",
+    target_under_test = ":go_custom_rules_go_repo_name_target",
 )
 
 python_git_specs_test(
@@ -1836,7 +1841,7 @@ test_suite(
         ":first_env_from_environ_test",
         ":fnv1a_symbol_distinguishes_common_symbols_test",
         ":go_archive_specs_test",
-        ":go_custom_rules_go_repo_name_test",
+        ":go_custom_rules_go_repo_name_failure_test",
         ":go_existing_repo_failure_test",
         ":go_git_specs_test",
         ":go_grouped_payload_split_test",
