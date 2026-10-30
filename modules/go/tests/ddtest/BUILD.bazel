@@ -1,0 +1,42 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+load("//:topt_go_test.bzl", "dd_topt_go_test")
+load(":fixtures.bzl", "TOPT_DATA", "foreign_mini_failure_test")
+
+# Runs instrumented: it fails unless Mini set its context's trace. Its deps
+# name testopt, which the macro then adds only once; its external test
+# package receives the registration.
+dd_topt_go_test(
+    name = "instrumented_test",
+    srcs = [
+        "external_test.go",
+        "instrumented_test.go",
+    ],
+    importpath = "example.com/ddtestfixture",
+    instrumentation = "ddtest",
+    topt_data = TOPT_DATA,
+    deps = [
+        "@topt_go_ddtest_mini//propagation",
+        "@topt_go_ddtest_mini//testopt",
+    ],
+)
+
+# A copy of Mini's packages from another repository stops analysis.
+dd_topt_go_test(
+    name = "foreign_mini_test",
+    srcs = ["foreign_test.go"],
+    importpath = "example.com/foreign",
+    instrumentation = "ddtest",
+    tags = ["manual"],
+    topt_data = TOPT_DATA,
+    deps = ["//tests/ddtest/fake_mini"],
+)
+
+foreign_mini_failure_test(
+    name = "foreign_mini_failure_test",
+    target_under_test = ":foreign_mini_test",
+)

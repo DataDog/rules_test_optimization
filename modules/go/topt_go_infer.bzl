@@ -48,6 +48,7 @@ load(
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
 # GoArchive still exists separately.
 load("@io_bazel_rules_go//go:def.bzl", "GoArchive", "GoInfo")
+load(":topt_go_ddtest_repository.bzl", "DDTEST_RELEASE")
 
 _select_module_group_name = select_module_group_name
 _selected_payload_runfiles = selected_payload_runfiles
@@ -317,8 +318,6 @@ def _topt_go_bazel_metadata_impl(ctx):
         "bazel.go.importpath": selection.importpath,
         "bazel.go.importpath_source": selection.importpath_source,
         "bazel.go.payload_selection": selection.selection,
-        "bazel.go.orchestrion.enabled": orchestrion_configured,
-        "bazel.go.orchestrion.mode": ctx.attr.orchestrion_mode,
         "bazel.go.attr.cgo": ctx.attr.cgo,
         "bazel.go.attr.pure": ctx.attr.pure,
         "bazel.go.attr.race": ctx.attr.race,
@@ -326,6 +325,20 @@ def _topt_go_bazel_metadata_impl(ctx):
         "bazel.go.attr.linkmode": ctx.attr.linkmode,
         "bazel.go.test_binary_linker_optimization": ctx.attr.test_binary_linker_optimization,
     }
+    if ctx.attr.instrumentation == "ddtest":
+        # The instrumentation that built this test: the pinned ddtest release and
+        # the SDK that the transition selected.
+        metadata["bazel.go.instrumentation.backend"] = "ddtest"
+        metadata["bazel.go.instrumentation.version"] = DDTEST_RELEASE.runtime_version
+        metadata["bazel.go.instrumentation.release"] = DDTEST_RELEASE.tag
+        metadata["bazel.go.instrumentation.contract"] = int(DDTEST_RELEASE.contract)
+        metadata["bazel.go.sdk.name"] = DDTEST_RELEASE.sdk_name
+        sdk = ctx.toolchains["@io_bazel_rules_go//go:toolchain"].sdk
+        if getattr(sdk, "version", None):
+            metadata["bazel.go.sdk.version"] = sdk.version
+    else:
+        metadata["bazel.go.orchestrion.enabled"] = orchestrion_configured
+        metadata["bazel.go.orchestrion.mode"] = ctx.attr.orchestrion_mode
     if ctx.attr.goos:
         metadata["bazel.go.attr.goos"] = ctx.attr.goos
     if ctx.attr.goarch:
@@ -408,6 +421,7 @@ topt_go_bazel_metadata = rule(
         "repo_name": attr.string(mandatory = True),
         "service_name": attr.string(mandatory = True),
         "orchestrion_requested": attr.bool(default = True),
+        "instrumentation": attr.string(default = "orchestrion", values = ["orchestrion", "ddtest"]),
         "cgo": attr.bool(default = False),
         "pure": attr.string(default = "auto"),
         "race": attr.string(default = "auto"),
@@ -421,4 +435,5 @@ topt_go_bazel_metadata = rule(
             default = "@io_bazel_rules_go//go/private/orchestrion:tool_binary",
         ),
     },
+    toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )

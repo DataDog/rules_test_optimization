@@ -10,6 +10,7 @@ exports_files(
     [
         "topt_go_test.bzl",
         "topt_go_infer.bzl",
+        "topt_go_ddtest.bzl",
         "topt_go_ddtest_extension.bzl",
         "topt_go_ddtest_repository.bzl",
         "topt_go_extension.bzl",
