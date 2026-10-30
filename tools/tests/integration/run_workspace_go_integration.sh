@@ -1206,6 +1206,8 @@ ddtest_host_platform() {
     Linux/aarch64 | Linux/arm64) echo "linux_arm64" ;;
     Darwin/x86_64) echo "darwin_amd64" ;;
     Darwin/arm64) echo "darwin_arm64" ;;
+    MINGW*/x86_64 | MSYS*/x86_64 | CYGWIN*/x86_64) echo "windows_amd64" ;;
+    MINGW*/aarch64 | MINGW*/arm64 | MSYS*/aarch64 | MSYS*/arm64 | CYGWIN*/aarch64 | CYGWIN*/arm64) echo "windows_arm64" ;;
     *)
       echo "error: no ddtest exec platform for $(uname -s)/$(uname -m)" >&2
       return 1
