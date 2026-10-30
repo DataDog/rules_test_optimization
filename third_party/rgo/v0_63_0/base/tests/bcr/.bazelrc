@@ -1,5 +1,0 @@
-common --enable_bzlmod
-build --@my_rules_go//go/toolchain:sdk_version=1.23.1
-
-# Preserve Bazel 7 behavior for optional file globs under Bazel 8.
-common --incompatible_disallow_empty_glob=false

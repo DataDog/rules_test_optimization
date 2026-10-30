@@ -8,6 +8,7 @@
 
 import ast
 import hashlib
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -16,13 +17,59 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import types
 import unittest
 
 
-try:
-    from test_rules_go_variant_tools import _load_module, _runfile
-except ModuleNotFoundError:
-    from tools.tests.python.test_rules_go_variant_tools import _load_module, _runfile
+def _runfile(rel_path: str) -> Path:
+    """Resolve a Bazel runfile, with a direct-checkout fallback."""
+    test_srcdir = os.environ.get("TEST_SRCDIR", "")
+    test_workspace = os.environ.get("TEST_WORKSPACE", "")
+    workspace_dir = os.environ.get("BUILD_WORKSPACE_DIRECTORY", "")
+    candidates = []
+    if test_srcdir and test_workspace:
+        candidates.append(Path(test_srcdir) / test_workspace / rel_path)
+    if test_srcdir:
+        candidates.append(Path(test_srcdir) / rel_path)
+    if workspace_dir:
+        candidates.append(Path(workspace_dir) / rel_path)
+    here = Path(__file__).resolve().parent
+    for candidate in [here] + list(here.parents):
+        if (candidate / "MODULE.bazel").exists() or (candidate / ".git").exists():
+            candidates.append(candidate / rel_path)
+            break
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+
+    # Windows commonly executes Bazel tests in manifest mode without a populated
+    # runfiles tree, so resolve declared data dependencies from the manifest too.
+    manifest_path = os.environ.get("RUNFILES_MANIFEST_FILE", "")
+    if manifest_path:
+        manifest = Path(manifest_path)
+        if manifest.exists():
+            keys = [rel_path]
+            if test_workspace:
+                keys.insert(0, f"{test_workspace}/{rel_path}")
+            with manifest.open("r", encoding="utf-8") as handle:
+                for line in handle:
+                    key, sep, value = line.rstrip("\n").partition(" ")
+                    if sep and key in keys and value:
+                        return Path(value)
+
+    raise FileNotFoundError(f"runfile not found: {rel_path} (checked: {candidates})")
+
+
+def _load_module(name: str, rel_path: str) -> types.ModuleType:
+    """Load a Python tool module from runfiles."""
+    path = _runfile(rel_path)
+    spec = importlib.util.spec_from_file_location(name, str(path))
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"failed to load module spec for {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
 
 RELEASE = _load_module("build_release", "tools/dev/build_release.py")
 
@@ -93,12 +140,6 @@ class ReleaseBundleTests(unittest.TestCase):
         self.write("MODULE.bazel", 'module(name = "datadog-rules-test-optimization", version = "1.3.0")\n')
         for language in RELEASE.LANGUAGES:
             self.write(f"modules/{language}/MODULE.bazel", f'module(name = "datadog-rules-test-optimization-{language}", version = "1.3.0")\nbazel_dep(name = "datadog-rules-test-optimization", version = "1.3.0")\n')
-        registry = {"default_upstream": "v0_60_0", "upstreams": {}}
-        for upstream in ("v0_60_0", "v0_61_1", "v0_62_0", "v0_63_0"):
-            path = f"third_party/rgo/{upstream}/base"
-            registry["upstreams"][upstream] = {"rules_go_version": upstream[1:].replace("_", "."), "variants": {"base": {"tree_path": path}}}
-            self.write(f"{path}/MODULE.bazel", 'module(name = "rules_go", version = "0.60.0")\n')
-        self.write("third_party/rules_go_orchestrion/registry.json", json.dumps(registry))
         self.write("CHANGELOG.md", "## [Unreleased]\n\nNot part of this release.\n\n## [1.3.0] - 2026-10-21\n\n### Fixed\n\n- The actual changelog.\n\n## [1.2.0]\n\nOld notes.\n")
         self.write("bazelw", "#!/bin/sh\nexit 0\n")
         (self.repo / "bazelw").chmod(0o755)
@@ -135,15 +176,13 @@ class ReleaseBundleTests(unittest.TestCase):
                 self.assertTrue(launcher.mode & 0o111)
             self.assertEqual(archive.extractfile(launcher).read(), b"#!/bin/sh\nexit 0\n")
 
-    def test_all_module_and_supported_fork_prefixes_exist_in_archive(self):
+    def test_all_module_prefixes_exist_in_archive(self):
         metadata = self.build()
         self.assertEqual(len(metadata["modules"]), 7)
-        self.assertEqual(len(metadata["rules_go"]), 4)
+        self.assertNotIn("rules_go", metadata)
         with tarfile.open(self.root / "dist" / metadata["archive"]) as archive:
             for prefix in metadata["modules"].values():
                 archive.getmember(f"{prefix}/MODULE.bazel")
-            for fork in metadata["rules_go"].values():
-                archive.getmember(f'{fork["strip_prefix"]}/MODULE.bazel')
 
     def test_archive_ignores_host_line_ending_preferences(self):
         original = self.build("original")
@@ -222,7 +261,7 @@ class ReleaseBundleTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "does not match"):
                 self.build(f"bad-{index}")
 
-    def test_missing_companion_or_fork_is_not_a_valid_bundle(self):
+    def test_missing_companion_is_not_a_valid_bundle(self):
         self.git("rm", "modules/ruby/MODULE.bazel")
         self.git("commit", "--quiet", "-m", "Remove companion")
         with self.assertRaises(KeyError):
