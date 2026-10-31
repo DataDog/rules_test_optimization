@@ -63,6 +63,11 @@ instruments. Set it once, in the root module:
 - `experiments`: `GOEXPERIMENT` values of the base SDKs.
 - `panic_hook`: record an unrecovered panic as the running test's failure.
 
+More `sdk` tags with `sdk_version` add SDK variants, for Go targets that a
+transition below an instrumented test moves to another SDK, such as
+`go_cross_binary(sdk_version = "1.26.3fips")`. Without one, those targets fail
+with "No instrumented Go SDK matches sdk_version".
+
 The Go companion registers the instrumented toolchains, so the root module
 registers none. Only instrumented tests select them: a build without
 instrumented tests fetches neither the instrumented SDKs nor Mini, ddtest's

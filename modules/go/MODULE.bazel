@@ -33,6 +33,14 @@ topt_go_ddtest_dev = use_extension(
 )
 topt_go_ddtest_dev.sdk(go_version = "1.26.3")
 
+# A FIPS-like SDK variant on another Go version, which tests/ddtest's
+# go_cross_binary selects below an instrumented test.
+topt_go_ddtest_dev.sdk(
+    experiments = ["boringcrypto"],
+    go_version = "1.25.9",
+    sdk_version = "1.25.9fips",
+)
+
 # Dev-only stub repository so companion-module tests can resolve
 # @test_optimization_data labels without network access.
 example_stub_repo = use_extension(

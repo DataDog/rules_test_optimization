@@ -1448,7 +1448,8 @@ Notes for the helpers:
   Mini's repository, and one instrumented SDK per exec platform, and registers
   their toolchains. It takes the same arguments as the Bzlmod
   `topt_go_ddtest.sdk` tag except `go_mod`: `go_version`, `base_sdk_roots`,
-  `exec_platforms`, `experiments`, and `panic_hook`. See
+  `exec_platforms`, `experiments`, and `panic_hook`, plus `sdk_variants` for
+  SDK variants that an `sdk_version` selects. See
   [`Configuration_Reference.md`](./Configuration_Reference.md#go-instrumentation-sdk).
 - To instrument the SDK that `go_register_toolchains` registered instead of
   downloading the official one, name its root file per exec platform:

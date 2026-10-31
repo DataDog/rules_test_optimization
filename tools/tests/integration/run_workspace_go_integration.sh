@@ -559,7 +559,7 @@ def dd_go_test(name, **kwargs):
 EOF
 
   cat > "$ws_dir/app/BUILD.bazel" <<EOF
-load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library")
 load("@io_bazel_rules_go//go/private/rules:transition.bzl", "go_reset_target")
 load("//tools/build:dd_go_test.bzl", "dd_go_test")
 
@@ -586,6 +586,30 @@ go_reset_target(
     dep = ":fixture_tool",
 )
 
+# The SDK variant of the WORKSPACE's sdk_variants serves this sdk_version.
+go_cross_binary(
+    name = "fixture_tool_variant",
+    sdk_version = "${GO_VERSION}-variant",
+    tags = ["manual"],
+    target = ":fixture_tool",
+)
+
+# This variant's base SDK is not its go_version, so the test cannot build.
+go_cross_binary(
+    name = "fixture_tool_stale",
+    sdk_version = "${GO_VERSION}-stale",
+    tags = ["manual"],
+    target = ":fixture_tool",
+)
+
+dd_go_test(
+    name = "stale_base_sdk_test",
+    srcs = ["hello_external_test.go"],
+    data = [":fixture_tool_stale"],
+    embed = [":hello_lib"],
+    tags = ["manual"],
+)
+
 dd_go_test(
     name = "hello_test",
     srcs = [
@@ -595,6 +619,7 @@ dd_go_test(
     data = [
         ":fixture_testing_tool",
         ":fixture_tool_reset",
+        ":fixture_tool_variant",
     ],
     embed = [":hello_lib"],
     tags = ["no-remote-exec"],
@@ -936,6 +961,21 @@ load("@datadog-rules-test-optimization-go//:topt_go_ddtest_repository.bzl", "top
 topt_go_ddtest_workspace_repositories(
     base_sdk_roots = {"${ddtest_platform}": "@go_sdk//:ROOT"},
     exec_platforms = ["${ddtest_platform}"],
+    sdk_variants = [
+        {
+            "sdk_version": "${GO_VERSION}-variant",
+            "base_sdk_roots": {"${ddtest_platform}": "@go_sdk//:ROOT"},
+            "exec_platforms": ["${ddtest_platform}"],
+        },
+        {
+            # A base SDK that is not its go_version, which only
+            # stale_base_sdk_test selects.
+            "sdk_version": "${GO_VERSION}-stale",
+            "go_version": "0.0.1",
+            "base_sdk_roots": {"${ddtest_platform}": "@go_sdk//:ROOT"},
+            "exec_platforms": ["${ddtest_platform}"],
+        },
+    ],
 )
 
 dd_topt_go_workspace_sync_repositories(
@@ -982,6 +1022,28 @@ rules_go_integrity() {
   esac
 }
 
+# assert_stale_base_sdk_fails builds a test whose data selects an SDK variant
+# whose base SDK is not its go_version: the build must stop and say so instead
+# of using that SDK.
+assert_stale_base_sdk_fails() {
+  local ws_dir="$1"
+  local log="$ws_dir/stale_base_sdk.log"
+
+  if (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" build \
+      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+      --noenable_bzlmod \
+      --enable_workspace \
+      --config=test-optimization \
+      //app:stale_base_sdk_test
+  ) >"$log" 2>&1; then
+    echo "error: a test whose data selects a stale base SDK built" >&2
+    exit 1
+  fi
+  assert_log_contains "$log" "base SDK for .* is Go ${GO_VERSION}, but its go_version is 0.0.1" "stale base SDK error"
+}
+
 run_positive_fixture() {
   local repo_mode="$1"
   local ws_dir="$WORKSPACE_ROOT/${repo_mode}"
@@ -992,6 +1054,7 @@ run_positive_fixture() {
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir"
   run_positive_subscenario "$ws_dir" "standard"
+  assert_stale_base_sdk_fails "$ws_dir"
   run_positive_subscenario "$ws_dir" "hermetic"
 }
 

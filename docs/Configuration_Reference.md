@@ -145,8 +145,9 @@ topt_go_ddtest.sdk(go_mod = "//:go.mod")  # or go_version = "1.25.0"
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `sdk_version` | string | none | Value of `@io_bazel_rules_go//go/toolchain:sdk_version` that selects this SDK, for an SDK variant, for example `1.26.3fips`. The tag without it configures the default SDK |
 | `go_mod` | label | none | `go.mod` whose `toolchain` directive, then `go` directive, gives the Go version, as rules_go's `go_sdk.from_file` reads it. The file's directory must be a Bazel package. A `go.mod` with neither directive fails |
-| `go_version` | string | none | Go version of the official SDK to instrument, for example `1.25.0`. Overrides `go_mod` |
+| `go_version` | string | none | Go version of the SDK, for example `1.25.0`: the official SDK that exec platforms without `base_sdk_roots` download, and for the default SDK the version whose `sdk_version` requests it serves. Overrides `go_mod`. A base SDK from `base_sdk_roots` must have this version in its `VERSION` file, or its fetch fails |
 | `base_sdk_roots` | string-keyed label dict | `{}` | Exec platform to a file at the root of the Go SDK to instrument there, for example `{"linux_amd64": "@go_sdk//:ROOT"}`. Other exec platforms download the official SDK of `go_version` |
 | `exec_platforms` | string list | all six | Exec platforms to instrument: `darwin_amd64`, `darwin_arm64`, `linux_amd64`, `linux_arm64`, `windows_amd64`, `windows_arm64`. Other values fail |
 | `experiments` | string list | `[]` | `GOEXPERIMENT` values of the base SDKs |
@@ -154,8 +155,15 @@ topt_go_ddtest.sdk(go_mod = "//:go.mod")  # or go_version = "1.25.0"
 
 Notes:
 
-- Only the root module's tags count, and it may set one `sdk` tag.
+- Only the root module's tags count. It sets one `sdk` tag without
+  `sdk_version`, the default SDK, and one per SDK variant.
 - Every selected exec platform needs `go_version` or a `base_sdk_roots` entry.
+- The toolchains honor `@io_bazel_rules_go//go/toolchain:sdk_version` like
+  rules_go's own: the default SDK serves an unset value and the values that
+  rules_go matches for its `go_version` (`1`, `1.26` and `1.26.3` for
+  `1.26.3`); a variant serves only its `sdk_version`. Any other value fails;
+  see
+  [Instrumented test fails: no SDK for an sdk_version](Troubleshooting.md#instrumented-test-fails-no-sdk-for-an-sdk_version).
 - Without an `sdk` tag, a stand-in toolchain fails instrumented tests with what
   to configure; see
   [Instrumented test fails: no Go SDK to instrument](Troubleshooting.md#instrumented-test-fails-no-go-sdk-to-instrument).
@@ -164,6 +172,26 @@ Notes:
   require. Other builds fetch neither the instrumented SDKs nor Mini, and
   Bazel fetches only the SDKs of the exec platforms it selects.
 - `ddtest instrument` writes the SDKs and Mini without the host's Go.
+- Every Go target below an instrumented test, exec tools included, builds with
+  an instrumented SDK. Its hooks do nothing in programs that do not link Mini.
+
+A Go target below an instrumented test that a transition moves to another SDK,
+such as `go_cross_binary(sdk_version = "1.26.3fips")` for a FIPS build, needs
+an SDK variant with that `sdk_version`:
+
+```bzl
+topt_go_ddtest.sdk(go_mod = "//:go.mod")
+topt_go_ddtest.sdk(
+    experiments = ["boringcrypto"],
+    go_version = "1.26.3",
+    sdk_version = "1.26.3fips",
+)
+```
+
+A variant takes the other attributes of the default SDK's tag, except that
+`go_version` does not add the version's prefixes; with `base_sdk_roots` it
+instruments an SDK that the workspace already declares for each exec
+platform.
 - Mini's repository is `@topt_go_ddtest_mini`. A workspace whose `go.mod`
   requires `github.com/DataDog/ddtest/ddto` must replace go_deps' copy with
   it; see
@@ -182,7 +210,8 @@ topt_go_ddtest_workspace_repositories(go_version = "1.25.0")
 
 It accepts `go_version`, `base_sdk_roots` (a dict of exec platform to label
 string), `exec_platforms`, `experiments`, and `panic_hook`, with the meaning of
-the `sdk` tag attributes above. It has no `go_mod`. See
+the `sdk` tag attributes above, and `sdk_variants`, a list of dicts with
+`sdk_version` and those keys, one per SDK variant. It has no `go_mod`. See
 [Configure Go support in WORKSPACE](Installation_Reference.md#8-configure-go-support-in-workspace-with-the-public-helper).
 
 ## dd_topt_go_test attributes

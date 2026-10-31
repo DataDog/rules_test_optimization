@@ -10,10 +10,12 @@ load(
 )
 load(
     ":test_ddtest_repository.bzl",
+    "base_sdk_version_test",
     "contract_test",
     "go_version_from_go_mod_test",
     "platforms_test",
     "sdk_config_test",
+    "sdk_versions_test",
     "toolchains_build_content_test",
 )
 load(
@@ -188,6 +190,10 @@ go_version_from_go_mod_test(name = "ddtest_go_version_from_go_mod_test")
 platforms_test(name = "ddtest_platforms_test")
 
 sdk_config_test(name = "ddtest_sdk_config_test")
+
+sdk_versions_test(name = "ddtest_sdk_versions_test")
+
+base_sdk_version_test(name = "ddtest_base_sdk_version_test")
 
 toolchains_build_content_test(name = "ddtest_toolchains_build_content_test")
 
@@ -901,10 +907,12 @@ test_suite(
         ":build_module_labels_invalid_shape_failure_test",
         ":build_module_labels_unsanitized_entry_failure_test",
         ":build_module_labels_valid_test",
+        ":ddtest_base_sdk_version_test",
         ":ddtest_contract_test",
         ":ddtest_go_version_from_go_mod_test",
         ":ddtest_platforms_test",
         ":ddtest_sdk_config_test",
+        ":ddtest_sdk_versions_test",
         ":ddtest_toolchains_build_content_test",
         ":ddtest_wrapper_materialized_actual_non_windows_test",
         ":ddtest_wrapper_materialized_actual_windows_test",

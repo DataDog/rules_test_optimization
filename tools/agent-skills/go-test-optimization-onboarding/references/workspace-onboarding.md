@@ -103,7 +103,8 @@ its `rules_go_repo_name` at the default `io_bazel_rules_go`.
 and registers the instrumented toolchains. Call it after
 `go_rules_dependencies()`. It takes the same arguments as the Bzlmod `sdk` tag
 except `go_mod`: `go_version`, `base_sdk_roots`, `exec_platforms`,
-`experiments`, and `panic_hook`. To instrument the SDK that
+`experiments`, and `panic_hook`, plus `sdk_variants`, one dict per SDK variant
+with its `sdk_version`. To instrument the SDK that
 `go_register_toolchains(...)` registered instead of downloading one, map the
 exec platform to its root:
 

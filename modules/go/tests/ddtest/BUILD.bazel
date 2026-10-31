@@ -4,11 +4,16 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-load("@io_bazel_rules_go//go:def.bzl", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library")
 load("//:topt_go_stdlib.bzl", "dd_topt_go_stdlib_warmup")
 load("//:topt_go_test.bzl", "dd_topt_go_test")
 load("//tests:test_macro.bzl", "stdlib_warmup_target_has_outputs_test")
-load(":fixtures.bzl", "TOPT_DATA", "ddtest_transition_test", "foreign_mini_failure_test")
+load(
+    ":fixtures.bzl",
+    "TOPT_DATA",
+    "ddtest_transition_test",
+    "foreign_mini_failure_test",
+)
 
 # Runs instrumented: it fails unless Mini set its context's trace. Its deps
 # name testopt, which the macro then adds only once; its external test
@@ -82,6 +87,75 @@ foreign_mini_failure_test(
 )
 
 ddtest_transition_test(name = "ddtest_transition_test")
+
+# Go binaries below an instrumented test build with the SDK that their
+# sdk_version selects: unset or a prefix of the default SDK's version, or an
+# SDK variant that the companion's MODULE.bazel configures. Each case has its
+# own go_binary, whose runfiles path the other configurations would share.
+# The cross binaries are manual because outside the test no regular SDK
+# serves their sdk_version.
+go_binary(
+    name = "go_version_tool",
+    srcs = ["go_version_tool.go"],
+)
+
+go_binary(
+    name = "go_version_tool_for_1_26",
+    srcs = ["go_version_tool.go"],
+    tags = ["manual"],
+)
+
+go_cross_binary(
+    name = "go_version_tool_1_26",
+    sdk_version = "1.26",
+    tags = ["manual"],
+    target = ":go_version_tool_for_1_26",
+)
+
+go_binary(
+    name = "go_version_tool_for_fips",
+    srcs = ["go_version_tool.go"],
+    tags = ["manual"],
+)
+
+go_cross_binary(
+    name = "go_version_tool_fips",
+    sdk_version = "1.25.9fips",
+    tags = ["manual"],
+    target = ":go_version_tool_for_fips",
+)
+
+# An exec tool that imports testing builds with the instrumented SDK too.
+go_binary(
+    name = "testing_tool",
+    srcs = ["testing_tool.go"],
+)
+
+genrule(
+    name = "testing_tool_output",
+    outs = ["testing_tool_output.txt"],
+    cmd = "$(execpath :testing_tool) > $@",
+    tools = [":testing_tool"],
+)
+
+dd_topt_go_test(
+    name = "sdk_variants_test",
+    srcs = ["sdk_variants_test.go"],
+    data = [
+        ":go_version_tool",
+        ":go_version_tool_1_26",
+        ":go_version_tool_fips",
+        ":testing_tool_output",
+    ],
+    env = {
+        "GO_VERSION_TOOL": "$(rlocationpath :go_version_tool)",
+        "GO_VERSION_TOOL_1_26": "$(rlocationpath :go_version_tool_1_26)",
+        "GO_VERSION_TOOL_FIPS": "$(rlocationpath :go_version_tool_fips)",
+        "TESTING_TOOL_OUTPUT": "$(rlocationpath :testing_tool_output)",
+    },
+    topt_data = TOPT_DATA,
+    deps = ["@io_bazel_rules_go//go/runfiles"],
+)
 
 # The standard library that instrumented tests build, warmed on its own.
 dd_topt_go_stdlib_warmup(name = "stdlib_warmup")

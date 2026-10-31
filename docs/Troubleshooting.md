@@ -54,7 +54,8 @@ in this release.
 | Instrumented Go test fails with "need a Go SDK to instrument" | `topt_go_ddtest.sdk(...)` in the root `MODULE.bazel`, or `topt_go_ddtest_workspace_repositories(...)` in WORKSPACE | Instrumented test fails: no Go SDK to instrument |
 | Go test analysis fails with "would link Mini's packages twice" | `override_repo` of go_deps' `github.com/DataDog/ddtest/ddto` | Analysis fails: test would link Mini twice |
 | Repository rule fails with "DDTEST_INSTRUMENT has" | the pinned ddtest release | DDTEST_INSTRUMENT contract mismatch |
-| A Go target under an instrumented test builds with the wrong Go version | an `sdk_version` transition below the test | Instrumented tests ignore sdk_version |
+| Instrumented Go test fails with "No instrumented Go SDK matches sdk_version" | an `sdk_version` transition below the test, and the SDK variants | Instrumented test fails: no SDK for an sdk_version |
+| Repository rule fails with "base SDK for ... is Go ..., but its go_version is" | `go_version` or `go_mod` against the SDK in `base_sdk_roots` | Instrumented SDK fails: base SDK is not its go_version |
 | Go bootstrap stops on a `rules_go` override | override that points at the removed Datadog fork | Bootstrap stops on a rules_go fork override |
 | WORKSPACE archive pins fail after a PR was squash-merged | generated pins commit reachability and archive SHA | Published Go pins |
 | Private/internal WORKSPACE fetch returns 404 | SSH git or authenticated archive access | Private repository fetch |
@@ -904,7 +905,7 @@ for the ddtest side. To move a 1.x setup, see the
 **Symptom**: Building or testing a `dd_topt_go_test` target fails with:
 
 ```text
-Go tests instrumented by dd_topt_go_test need a Go SDK to instrument: add topt_go_ddtest.sdk(go_mod = "//:go.mod") to the root MODULE.bazel, or call topt_go_ddtest_repositories(go_version = ...) in WORKSPACE
+Go tests instrumented by dd_topt_go_test need a Go SDK to instrument: add topt_go_ddtest.sdk(go_mod = "//:go.mod") to the root MODULE.bazel, or call topt_go_ddtest_workspace_repositories(go_version = ...) in WORKSPACE
 ```
 
 **Cause**: The root module has no `topt_go_ddtest.sdk(...)` tag. The Go
@@ -1027,25 +1028,52 @@ has no payloads or no `bazel_target_metadata.json`.
    follow item 4 of
    [Uploader not finding payloads](#uploader-not-finding-payloads).
 
-### Instrumented tests ignore sdk_version
+### Instrumented test fails: no SDK for an sdk_version
 
-**Symptom**: A Go binary or library that a transition builds with a specific
-Go version, through `@io_bazel_rules_go//go/toolchain:sdk_version`, builds with
-the instrumented SDK when it is a dependency, `data`, or tool of an instrumented
-test, for example a binary that needs a FIPS Go SDK.
+**Symptom**: Building or testing a `dd_topt_go_test` target fails with:
+
+```text
+No instrumented Go SDK matches sdk_version "<value>". Configured: <SDKs>. Add an SDK variant with that sdk_version: topt_go_ddtest.sdk(sdk_version = ...) in MODULE.bazel, or sdk_variants in topt_go_ddtest_workspace_repositories(...) in WORKSPACE
+```
 
 **Cause**: The public test's transition sets
-`@io_bazel_rules_go//go/toolchain:sdk_name` to `ddto`, and the instrumented
-toolchains match only that setting. Every Go target in the test's
-configuration, including exec tools, then resolves to the instrumented SDK,
-whatever `sdk_version` a transition below the test sets. That SDK is the
-official Go release that `topt_go_ddtest.sdk(...)` configures, or the base SDK
-from `base_sdk_roots`.
+`@io_bazel_rules_go//go/toolchain:sdk_name` to `ddto`, so every Go target in
+its configuration, exec tools included, builds with an instrumented SDK. A
+transition below the test, such as `go_cross_binary(sdk_version = ...)` for a
+FIPS binary in `data`, asked for an `sdk_version` that no instrumented SDK
+serves: the default SDK serves an unset value and the values that rules_go
+matches for its `go_version`, and each SDK variant its own `sdk_version`.
 
-**Solution**: Keep targets that need another Go SDK out of instrumented tests'
-`deps`, `data` and tools, or configure the instrumented SDK with that SDK as
-its base through `base_sdk_roots` when every Go target of the test can use it.
+**Solution**: Add an SDK variant with that `sdk_version`, built from the same
+Go release and `experiments`, or from the SDK the workspace already declares
+through `base_sdk_roots`; see
+[Go instrumentation SDK](Configuration_Reference.md#go-instrumentation-sdk).
 Targets outside instrumented tests are not affected.
+
+When an SDK serves the `sdk_version` but not the build's exec platform, Bazel
+reports its own `No matching toolchains found` error for
+`@io_bazel_rules_go//go:toolchain`, as it does when no exec platform has an
+instrumented SDK. Add the exec platform to that SDK's `exec_platforms`. Target
+platforms are ddtest's six (`linux`, `darwin` and `windows` on `amd64` and
+`arm64`) for every SDK.
+
+### Instrumented SDK fails: base SDK is not its go_version
+
+**Symptom**: Fetching an instrumented SDK fails with:
+
+```text
+topt_go_ddtest: the default SDK's base SDK for linux_amd64 is Go 1.25.9, but its go_version is 1.26.3; set go_version to the base SDK's version, or point base_sdk_roots at a Go 1.26.3 SDK
+```
+
+**Cause**: The SDK's `go_version`, set directly or read from `go_mod`, says
+which `sdk_version` requests it serves, but the SDK that `base_sdk_roots` names
+for that exec platform has another version in its `VERSION` file. A `go.mod`
+whose `go` directive moved while the base SDK stayed behind is a common case.
+
+**Solution**: Make them agree: set `go_version` (or the `go.mod` `toolchain`
+directive) to the base SDK's version, or point `base_sdk_roots` at an SDK of
+that version. Without `go_version`, the base SDK's version is not checked and
+the default SDK serves only an unset `sdk_version`.
 
 ### Bootstrap stops on a rules_go fork override
 

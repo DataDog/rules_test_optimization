@@ -29,7 +29,11 @@ versioning.
 - Bzlmod root modules configure the SDK to instrument with
   `topt_go_ddtest.sdk(...)` (`go_mod`, `go_version`, `base_sdk_roots`,
   `exec_platforms`, `experiments`, `panic_hook`); the Go companion registers
-  the toolchains. WORKSPACE consumers call
+  the toolchains. The instrumented toolchains honor
+  `@io_bazel_rules_go//go/toolchain:sdk_version`; more `sdk` tags with
+  `sdk_version` add SDK variants, such as a FIPS SDK, for Go targets that a
+  transition below an instrumented test moves to another SDK, and any other
+  value fails with what to configure. WORKSPACE consumers call
   `topt_go_ddtest_workspace_repositories(...)` after `go_rules_dependencies()`.
 - The Go companion uses upstream `rules_go` from the Bazel Central Registry,
   `0.60.0` or newer, under the repository name `io_bazel_rules_go`. CI covers

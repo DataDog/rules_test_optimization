@@ -576,7 +576,7 @@ def dd_go_test(name, **kwargs):
 EOF
 
   cat > "$ws_dir/app/BUILD.bazel" <<EOF
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library")
 load("@rules_go//go/private/rules:transition.bzl", "go_reset_target")
 load("//tools/build:dd_go_test.bzl", "dd_go_test")
 
@@ -615,6 +615,22 @@ dd_go_test(
     ],
     embed = [":hello_lib"],
     tags = ["no-remote-exec"],
+)
+
+# No instrumented SDK serves this sdk_version, so the test cannot build.
+go_cross_binary(
+    name = "fixture_tool_unconfigured",
+    sdk_version = "0.0.1-unconfigured",
+    tags = ["manual"],
+    target = ":fixture_tool",
+)
+
+dd_go_test(
+    name = "unconfigured_sdk_version_test",
+    srcs = ["hello_external_test.go"],
+    data = [":fixture_tool_unconfigured"],
+    embed = [":hello_lib"],
+    tags = ["manual"],
 )
 
 genquery(
@@ -917,7 +933,29 @@ run_fixture() {
   write_fixture_bazelrc "$ws_dir"
   assert_plain_build_fetches_no_instrumentation "$ws_dir"
   run_fixture_subscenario "$ws_dir" "standard"
+  assert_unconfigured_sdk_version_fails "$ws_dir"
   run_fixture_subscenario "$ws_dir" "hermetic"
+}
+
+# assert_unconfigured_sdk_version_fails builds a test whose data asks for an
+# sdk_version that no instrumented SDK serves: the build must stop with what
+# to configure instead of using another SDK.
+assert_unconfigured_sdk_version_fails() {
+  local ws_dir="$1"
+  local log="$ws_dir/unconfigured_sdk_version.log"
+
+  if (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" build \
+      ${BAZEL_EXTRA_ARGS[@]+"${BAZEL_EXTRA_ARGS[@]}"} \
+      --enable_bzlmod \
+      --config=test-optimization \
+      //app:unconfigured_sdk_version_test
+  ) >"$log" 2>&1; then
+    echo "error: a test whose data asks for an unconfigured sdk_version built" >&2
+    exit 1
+  fi
+  assert_log_contains "$log" 'No instrumented Go SDK matches sdk_version "0.0.1-unconfigured"' "unconfigured sdk_version error"
 }
 
 # assert_plain_build_fetches_no_instrumentation builds the fixture's library
