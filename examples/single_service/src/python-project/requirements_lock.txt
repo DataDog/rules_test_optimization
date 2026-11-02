@@ -12,7 +12,7 @@ colorama==0.4.6 ; sys_platform == 'win32' \
     --hash=sha256:08695f5cb7ed6e0531a20572697297273c47b8cae5a63ffc6d6ed5c201be6e44 \
     --hash=sha256:4f1d9991f5acc0ca119f9d443620b77f9d6b33703e51011c16baf57afb285fc6
     # via pytest
-ddtrace==4.10.1 \
+ddtrace==4.16.1 \
     --hash=sha256:004f3e2477c35b41cb407f6ef94853aff7249a6ef5099805b36c513e38927b49 \
     --hash=sha256:0e1bf5d98e01384280f1e63d30d1a0e00b1541a78b4eb03c647ade820c029299 \
     --hash=sha256:0fb7db7756a2a7a4ef9431a6677486746efd30874aba6bda30efddcd1dab862b \
