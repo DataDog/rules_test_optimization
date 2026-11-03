@@ -63,10 +63,20 @@ dd_topt_go_test(
     topt_data = TOPT_DATA,
 )
 
-# Every source has a negated build constraint, which holds on this platform.
+# Keep legacy-only syntax in a generated file so gofmt cannot add //go:build.
+genrule(
+    name = "legacy_ignored_generator",
+    outs = ["legacy_ignored_generator.go"],
+    cmd = "printf '// +build ignore\\n\\npackage main\\n' > $@",
+)
+
+# The active source has a negated constraint; the generator is always excluded.
 dd_topt_go_test(
     name = "constrained_test",
-    srcs = ["constrained_test.go"],
+    srcs = [
+        "constrained_test.go",
+        ":legacy_ignored_generator",
+    ],
     importpath = "example.com/constrained",
     topt_data = TOPT_DATA,
 )

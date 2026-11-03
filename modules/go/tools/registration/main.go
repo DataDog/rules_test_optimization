@@ -99,7 +99,7 @@ func choose(names map[string]bool) (string, error) {
 	return "", fmt.Errorf("sources declare packages %s", strings.Join(append(internal, external...), ", "))
 }
 
-// buildConstraint returns the file's //go:build expression, or nil.
+// buildConstraint returns the file's build constraint, preferring //go:build.
 func buildConstraint(groups []*ast.CommentGroup) constraint.Expr {
 	for _, group := range groups {
 		for _, comment := range group.List {
@@ -113,7 +113,24 @@ func buildConstraint(groups []*ast.CommentGroup) constraint.Expr {
 			return expr
 		}
 	}
-	return nil
+	var legacy constraint.Expr
+	for _, group := range groups {
+		for _, comment := range group.List {
+			if !constraint.IsPlusBuild(comment.Text) {
+				continue
+			}
+			expr, err := constraint.Parse(comment.Text)
+			if err != nil {
+				return nil
+			}
+			if legacy == nil {
+				legacy = expr
+			} else {
+				legacy = &constraint.AndExpr{X: legacy, Y: expr}
+			}
+		}
+	}
+	return legacy
 }
 
 // satisfiable reports whether some set of tags other than ignore satisfies

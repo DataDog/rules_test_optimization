@@ -25,6 +25,10 @@ func TestTestPackage(t *testing.T) {
 	external := write("b_test.go", "// Copyright\n\npackage widget_test\n")
 	library := write("widget.go", "package widget\n")
 	generator := write("gen.go", "//go:build ignore\n\npackage main\n")
+	legacyGenerator := write("legacy_gen.go", "// +build ignore\n\npackage main\n")
+	legacyLinuxGenerator := write("legacy_gen_linux.go", "// +build ignore\n// +build linux\n\npackage main\n")
+	legacyEither := write("legacy_either_test.go", "// +build ignore linux\n\npackage widget_test\n")
+	modernPreferred := write("modern_preferred_test.go", "//go:build !windows\n// +build ignore\n\npackage widget_test\n")
 	linuxGenerator := write("gen_linux.go", "//go:build ignore && linux\n\npackage main\n")
 	notWindows := write("c_test.go", "//go:build !windows\n\npackage widget_test\n")
 	tools := write("tools.go", "//go:build tools\n\npackage main\n")
@@ -37,6 +41,11 @@ func TestTestPackage(t *testing.T) {
 		{[]string{internal, library}, "widget"},
 		{[]string{internal, external, library}, "widget_test"},
 		{[]string{internal, generator, asm}, "widget"},
+		{[]string{internal, legacyGenerator}, "widget"},
+		{[]string{legacyGenerator}, ""},
+		{[]string{legacyLinuxGenerator}, ""},
+		{[]string{legacyEither}, "widget_test"},
+		{[]string{modernPreferred}, "widget_test"},
 		{[]string{internal, linuxGenerator}, "widget"},
 		{[]string{notWindows}, "widget_test"},
 		{[]string{internal, notWindows}, "widget"},
