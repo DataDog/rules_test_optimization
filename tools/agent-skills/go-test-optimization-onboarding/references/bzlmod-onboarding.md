@@ -13,26 +13,27 @@ Go companion module through Bzlmod.
 
 ## Module Wiring
 
-Copy core and Go companion dependencies from the release's `INSTALL.md`.
-Replace the archive placeholders below with that tuple and match the Datadog
-module versions to the release. For releases without bundle assets or for
-development commits, use the Git alternative in `docs/Installation_Reference.md`.
+These instructions target the unreleased ddtest backend. Replace
+`<ddtest-rule-commit>` with one full commit containing that backend for both
+modules. The `1.4.0` module version matches this branch; the published
+`v1.4.0` release still uses Orchestrion. After the next major release, use its
+`INSTALL.md` archive tuple instead. See the
+[installation reference](../../../../docs/Installation_Reference.md#option-b-install-from-a-git-commit).
 
 ```bzl
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
-archive_override(
+git_override(
     module_name = "datadog-rules-test-optimization",
-    urls = ["<release-archive-url>"],
-    sha256 = "<release-archive-sha256>",
-    strip_prefix = "<archive-prefix>",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<ddtest-rule-commit>",
 )
 
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
-archive_override(
+git_override(
     module_name = "datadog-rules-test-optimization-go",
-    urls = ["<release-archive-url>"],
-    sha256 = "<release-archive-sha256>",
-    strip_prefix = "<archive-prefix>/modules/go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<ddtest-rule-commit>",
+    strip_prefix = "modules/go",
 )
 
 bazel_dep(name = "rules_go", version = "0.60.0")
@@ -45,8 +46,9 @@ topt_go_ddtest.sdk(go_mod = "//:go.mod")
 ```
 
 `rules_go` is plain upstream `rules_go` from the Bazel Central Registry,
-`0.60.0` or newer. CI covers `0.60.0` through `0.65.0`; `0.65.0` requires Go
-`1.26`. Do not add a `rules_go` override.
+`0.59.0` or newer. CI covers `0.59.0` through `0.65.0`; `0.65.0` requires Go
+`1.26`. Do not add an override to the removed Datadog fork. Keep any existing
+consumer-owned upstream patch stack under the consumer's control.
 
 `topt_go_ddtest.sdk(...)` selects the Go SDK that `ddtest instrument`
 instruments. Set it once, in the root module:

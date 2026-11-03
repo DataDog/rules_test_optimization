@@ -16,6 +16,30 @@ version from the release's `INSTALL.md`. The Bzlmod examples use placeholders
 for that tuple. Releases without this asset and development snapshots can use
 the [Git alternative](Installation_Reference.md#option-b-install-from-a-git-commit).
 
+The Go section targets the unreleased ddtest backend and pins a development
+commit. The published `v1.4.0` Go setup still uses Orchestrion; use its
+[versioned guide](https://github.com/DataDog/rules_test_optimization/blob/v1.4.0/README.md)
+when installing that release.
+
+## Runtime prerequisites
+
+Doctor and uploader require Python 3.10+ on the machine running `bazel run`,
+including Go-only and Java-only projects. Each test also needs its runtime:
+
+| Language | Instrumentation provided by the companion | What the project must supply |
+| --- | --- | --- |
+| Go | Instrumented Go SDK, Mini, and test-package registration | Upstream `rules_go` 0.59.0+ and the SDK configuration below. This backend reports tests and telemetry; it does not report coverage yet. |
+| Python | Managed pytest runner, or wiring for a consumer-owned runner | `pytest` and a `ddtrace` build supporting manifest input and JSON file output in the test's dependencies |
+| Java | `-javaagent` injection and runtime files | A compatible dd-java-agent JAR, the Java toolchain, and the test framework |
+| NodeJS | Metadata, runfiles, and file-output environment | A NodeJS test rule and an initialized Datadog test integration that supports this file-output contract |
+| .NET | Metadata, runfiles, and file-output environment | A .NET test rule, its `env`/`envs` adapter, and Datadog test instrumentation that supports this file-output contract |
+| Ruby | Metadata, runfiles, and file-output environment | A Ruby test rule and Datadog test instrumentation that supports this file-output contract |
+
+The NodeJS, .NET, and Ruby macros do not install a tracer, enable a test-framework
+integration, or turn arbitrary test output into payloads. Confirm that the
+chosen runtime writes JSON under `TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests`
+before accepting an onboarding. A passing test alone does not prove this.
+
 Terminology used here:
 
 - Single-service: one Datadog service for the workspace or runtime slice
@@ -124,8 +148,9 @@ This command starts one cross-platform Python 3.10+ uploader. Its coordinator
 prepares shared CODEOWNERS and context data once, then gives each source file to
 one of eight workers by default. A worker handles enrichment, validation,
 preventive splitting, retries, and cleanup for test, coverage, or telemetry
-data. The command without `--upload` uses dry-run enrichment, makes no backend
-requests, deletes no payloads, and still prints the final statistics.
+data. Without `--upload`, the uploader validates the enriched bodies and prints
+statistics without sending or deleting payloads. The test phase still fetches
+metadata from Datadog when sync is enabled, so it still needs sync credentials.
 
 ## Automatic managed Go/Python monorepos
 
@@ -210,19 +235,18 @@ workspaces.
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
-archive_override(
+git_override(
     module_name = "datadog-rules-test-optimization",
-    urls = ["<release-archive-url>"],
-    sha256 = "<release-archive-sha256>",
-    strip_prefix = "<archive-prefix>",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<ddtest-rule-commit>",
 )
 
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
-archive_override(
+git_override(
     module_name = "datadog-rules-test-optimization-go",
-    urls = ["<release-archive-url>"],
-    sha256 = "<release-archive-sha256>",
-    strip_prefix = "<archive-prefix>/modules/go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<ddtest-rule-commit>",
+    strip_prefix = "modules/go",
 )
 
 bazel_dep(name = "rules_go", version = "0.60.0")
@@ -518,19 +542,18 @@ service with `runtime_name = "go"`.
 ```bzl
 # MODULE.bazel
 bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
-archive_override(
+git_override(
     module_name = "datadog-rules-test-optimization",
-    urls = ["<release-archive-url>"],
-    sha256 = "<release-archive-sha256>",
-    strip_prefix = "<archive-prefix>",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<ddtest-rule-commit>",
 )
 
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
-archive_override(
+git_override(
     module_name = "datadog-rules-test-optimization-go",
-    urls = ["<release-archive-url>"],
-    sha256 = "<release-archive-sha256>",
-    strip_prefix = "<archive-prefix>/modules/go",
+    remote = "https://github.com/DataDog/rules_test_optimization.git",
+    commit = "<ddtest-rule-commit>",
+    strip_prefix = "modules/go",
 )
 
 bazel_dep(name = "rules_go", version = "0.60.0")
@@ -596,6 +619,11 @@ dd_test_optimization_targets(
 
 ## Python
 
+Keep your existing `rules_python` toolchain and pip dependency setup. The
+examples assume they expose `@rules_python` and `@python_deps`; adjust these
+repository names to your project. Include pytest and a compatible ddtrace build
+in the test runner dependencies.
+
 ### Single-service
 
 ```bzl
@@ -652,6 +680,7 @@ the doctor or uploader. Root-package targets remain valid for small
 repositories.
 
 ```bzl
+load("@rules_python//python:defs.bzl", "py_library")
 # package BUILD.bazel
 load("@python_deps//:requirements.bzl", "requirement")
 load("@datadog-rules-test-optimization-python//:topt_py_test.bzl", "dd_topt_py_test")
@@ -941,6 +970,14 @@ dd_test_optimization_targets(
 
 ## Java
 
+Keep your existing `rules_java` toolchain and test framework dependencies. The
+examples assume Java rules are available as `@rules_java`.
+
+Supply a dd-java-agent build that supports the manifest and JSON file-output
+contract. Replace the agent URL and SHA256 below with the artifact approved
+for your project; an arbitrary Maven version is not proof of file-mode support.
+The companion injects that agent but does not download it for you.
+
 ### Single-service
 
 ```bzl
@@ -980,7 +1017,8 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
 http_file(
     name = "dd_java_agent",
     downloaded_file_path = "dd-java-agent.jar",
-    urls = ["https://repo1.maven.org/maven2/com/datadoghq/dd-java-agent/1.60.0/dd-java-agent-1.60.0.jar"],
+    sha256 = "<dd-java-agent-sha256>",
+    urls = ["<dd-java-agent-url>"],
 )
 ```
 
@@ -1001,6 +1039,7 @@ dd_payload_uploader(
 ```
 
 ```bzl
+load("@rules_java//java:defs.bzl", "java_library")
 # package BUILD.bazel
 load("@datadog-rules-test-optimization-java//:topt_java_test.bzl", "dd_topt_java_test")
 load("@test_optimization_data//:export.bzl", "topt_data")
@@ -1016,6 +1055,7 @@ dd_topt_java_test(
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.HelloTest",
     topt_data = topt_data,
+    stage_sources = True,
     agent_jar = "@dd_java_agent//file",
 )
 ```
@@ -1064,7 +1104,8 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
 http_file(
     name = "dd_java_agent",
     downloaded_file_path = "dd-java-agent.jar",
-    urls = ["https://repo1.maven.org/maven2/com/datadoghq/dd-java-agent/1.60.0/dd-java-agent-1.60.0.jar"],
+    sha256 = "<dd-java-agent-sha256>",
+    urls = ["<dd-java-agent-url>"],
 )
 ```
 
@@ -1079,6 +1120,7 @@ dd_topt_java_test(
     test_class = "com.example.pkg.HelloTest",
     topt_data = topt_data_by_service,
     topt_service = "java_service_a",
+    stage_sources = True,
     agent_jar = "@dd_java_agent//file",
 )
 ```

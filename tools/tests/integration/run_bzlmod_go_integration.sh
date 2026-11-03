@@ -923,6 +923,30 @@ topt_go_ddtest.sdk(go_version = "${GO_VERSION}")
 EOF
 }
 
+# A companion dependency can raise the requested version through Bzlmod's
+# minimal version selection. Reject that upgrade rather than test another shard.
+assert_resolved_rules_go_version() {
+  local ws_dir="$1"
+  local graph="$ws_dir/module_graph.json"
+
+  (
+    cd "$ws_dir"
+    USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" mod graph \
+      --enable_bzlmod --depth=1 --output=json > "$graph"
+  )
+  "$PYTHON" - "$graph" "$RULES_GO_VERSION" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as graph_file:
+    graph = json.load(graph_file)
+versions = {dep["version"] for dep in graph["dependencies"] if dep["name"] == "rules_go"}
+if versions != {sys.argv[2]}:
+    raise SystemExit(f"expected rules_go {sys.argv[2]}, resolved {sorted(versions)}")
+print(f"Verified resolved rules_go {sys.argv[2]}")
+PY
+}
+
 run_fixture() {
   local ws_dir="$WORKSPACE_ROOT/main"
 
@@ -931,6 +955,7 @@ run_fixture() {
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir"
+  assert_resolved_rules_go_version "$ws_dir"
   assert_plain_build_fetches_no_instrumentation "$ws_dir"
   run_fixture_subscenario "$ws_dir" "standard"
   assert_unconfigured_sdk_version_fails "$ws_dir"
@@ -1096,6 +1121,7 @@ run_windows_smoke() {
   write_module_file "$ws_dir"
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir"
+  assert_resolved_rules_go_version "$ws_dir"
   if ! (
     cd "$ws_dir/$test_package"
     USE_BAZEL_VERSION="$BAZEL_VERSION" "$BAZEL" --output_user_root="$BAZEL_OUTPUT_USER_ROOT" test \

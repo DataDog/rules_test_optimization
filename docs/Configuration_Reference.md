@@ -172,6 +172,8 @@ Notes:
   require. Other builds fetch neither the instrumented SDKs nor Mini, and
   Bazel fetches only the SDKs of the exec platforms it selects.
 - `ddtest instrument` writes the SDKs and Mini without the host's Go.
+- The pinned Go backend reports test and telemetry payloads, but not coverage.
+  See [ddtest's Bazel guide](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md#tests).
 - Every Go target below an instrumented test, exec tools included, builds with
   an instrumented SDK. Its hooks do nothing in programs that do not link Mini.
 
@@ -706,7 +708,8 @@ changes can invalidate fetch cache entries as expected.
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `DD_API_KEY` | Yes | Datadog API key for metadata fetches |
+| `DD_API_KEY` | When sync is enabled | Datadog API key for metadata fetches; disabled repositories need no key |
+| `DD_TEST_OPTIMIZATION_ENABLED` | When `enabled_by_env = True` | Enables metadata sync when `enabled_by_env = True`; set it through the named config with `--repo_env=DD_TEST_OPTIMIZATION_ENABLED=1` |
 | `DD_SITE` | No | Site domain (`datadoghq.com`, `datadoghq.eu`, etc.). Leading/trailing ASCII whitespace is trimmed; values like `app.<site>` normalize to `api.<site>` |
 | `DD_TEST_OPTIMIZATION_AGENTLESS_URL` | No | Override sync API base URL (test/dev and mock-server scenarios) |
 | `FETCH_SALT` | No | Manual refetch trigger (example: `--repo_env=FETCH_SALT=<timestamp>`) |
@@ -992,7 +995,7 @@ sync repository rule or uploader runtime paths above):
 
   | Variable | Default | Purpose |
   |----------|---------|---------|
-  | `RULES_GO_VERSION` | `0.60.0` | Upstream rules_go version: a BCR `bazel_dep` in Bzlmod, the release zip in WORKSPACE (the WORKSPACE script knows the integrity of 0.60.0, 0.61.1, 0.62.0, 0.63.0, 0.64.2, and 0.65.0) |
+  | `RULES_GO_VERSION` | `0.60.0` | Upstream rules_go version: a BCR `bazel_dep` in Bzlmod, the release zip in WORKSPACE (the WORKSPACE script knows the integrity of 0.59.0, 0.60.0, 0.61.1, 0.62.0, 0.63.0, 0.64.2, and 0.65.0) |
   | `GO_VERSION` | `1.25.0` | Go version of the instrumented SDK and the sync `runtime_version`; in WORKSPACE also the registered `@go_sdk`. rules_go 0.65.0 needs Go 1.26 |
   | `FORBID_HOST_GO` | `0` | `1` puts a `go` on `PATH` that fails the run when called (Unix hosts only) |
   | `INTEGRATION_SCENARIO_MODE` | `full` | `full` or `release`. In WORKSPACE, `release` runs only the archive fixture |

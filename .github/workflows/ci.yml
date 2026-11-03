@@ -395,7 +395,7 @@ jobs:
       fail-fast: false
       max-parallel: 4
       matrix:
-        rules_go: ["0.60.0", "0.61.1", "0.62.0", "0.63.0", "0.64.2", "0.65.0"]
+        rules_go: ["0.59.0", "0.60.0", "0.61.1", "0.62.0", "0.63.0", "0.64.2", "0.65.0"]
         module_system: [workspace, bzlmod]
         include:
           # rules_go 0.65.0 requires Go 1.26.
@@ -500,6 +500,7 @@ jobs:
       - name: Run an instrumented Go test in a Bzlmod consumer
         shell: bash
         env:
+          RULES_GO_VERSION: "0.59.0"
           WINDOWS_SMOKE_ONLY: "1"
         run: ./tools/tests/integration/run_bzlmod_go_integration.sh
 

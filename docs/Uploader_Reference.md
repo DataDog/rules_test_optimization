@@ -63,7 +63,7 @@ their existing enablement contract in this release.
 ```bash
 # Vendor the full tools/test_optimization/ helper directory, or set
 # DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
-# RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
+# Run tests with BEP and validate payloads. Add --upload to send them.
 tools/test_optimization/run_test_optimization_ci.sh \
   --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
@@ -89,7 +89,7 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
 ```powershell
 # Vendor the full tools/test_optimization/ helper directory, or set
 # DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
-# RECOMMENDED: Run tests with BEP, validate payloads, then upload payloads.
+# Run tests with BEP and validate payloads. Add -Upload to send them.
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
   -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `

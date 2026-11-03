@@ -36,8 +36,9 @@ versioning.
   value fails with what to configure. WORKSPACE consumers call
   `topt_go_ddtest_workspace_repositories(...)` after `go_rules_dependencies()`.
 - The Go companion uses upstream `rules_go` from the Bazel Central Registry,
-  `0.60.0` or newer, under the repository name `io_bazel_rules_go`. CI covers
-  `rules_go` `0.60.0`, `0.61.1`, `0.62.0`, `0.63.0`, `0.64.2`, and `0.65.0`.
+  `0.59.0` or newer, under the repository name `io_bazel_rules_go`. CI covers
+  `rules_go` `0.59.0`, `0.60.0`, `0.61.1`, `0.62.0`, `0.63.0`, `0.64.2`, and
+  `0.65.0`.
 - `datadog_go_test_optimization_workspace_repositories` declares only the Go
   companion and fails when `rules_go` is not declared yet. Declare upstream
   `rules_go` as `io_bazel_rules_go` before calling it.
@@ -58,6 +59,12 @@ versioning.
   declares upstream `rules_go` first and calls
   `topt_go_ddtest_workspace_repositories`. Published onboarding pins contain
   only the six `RTO_*` values.
+
+### Fixed
+
+- Go test registration respects legacy `// +build` constraints, including
+  ignored generators and multiple constraint lines. A `//go:build` line takes
+  precedence when both forms are present.
 
 ### Removed
 

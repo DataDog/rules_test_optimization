@@ -114,8 +114,8 @@ Fix:
 
 - Add `topt_go_ddtest.sdk(go_mod = "//:go.mod")` or
   `topt_go_ddtest.sdk(go_version = "<go-version>")` to the root
-  `MODULE.bazel`, or rerun the bootstrap. Set exactly one `sdk` tag, in the root
-  module.
+  `MODULE.bazel`, or rerun the bootstrap. Set exactly one default `sdk` tag
+  without `sdk_version`; add tags with `sdk_version` only for SDK variants.
 - In WORKSPACE, call `topt_go_ddtest_workspace_repositories(...)` after
   `go_rules_dependencies()`. It declares the repositories and registers the
   toolchains. The message names `topt_go_ddtest_repositories`, which does not
@@ -328,7 +328,7 @@ Checks:
 
 - In WORKSPACE, upstream `rules_go` is declared as `io_bazel_rules_go`. The SDK
   repositories that `go_wrap_sdk` writes load it under that name.
-- `rules_go` is upstream `0.60.0` or newer, with no 1.x fork override.
+- `rules_go` is upstream `0.59.0` or newer, with no 1.x fork override.
 
 ## Local Disk Pressure
 

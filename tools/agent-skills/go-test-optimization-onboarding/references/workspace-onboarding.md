@@ -38,10 +38,15 @@ implementation for the Test Optimization path where needed.
 
 ## Dependency Wiring
 
-Use the public WORKSPACE helpers. Pin a commit reachable from `origin/main`.
-For archive fetches, generate or copy the complete archive tuple from the
-published onboarding pins; do not invent a SHA or point at a feature-branch
-commit.
+Use the public WORKSPACE helpers. The ddtest backend is unreleased; published
+`v1.4.0` still uses Orchestrion. For a local preview, use a full development
+commit containing ddtest in place of `<published-main-commit>` below. Generate
+its archive tuple with `--commit <ddtest-rule-commit>` and omit
+`--verify-main-reachable`. Do not publish preview pins as a release.
+
+For production onboarding after this backend merges, pin a commit reachable
+from `origin/main`. Generate or copy its complete archive tuple; do not invent
+a SHA or mix core and companion commits.
 
 From this repository, generate published pins with:
 
@@ -91,7 +96,7 @@ load("@datadog-rules-test-optimization-go//:topt_go_ddtest_repository.bzl", "top
 topt_go_ddtest_workspace_repositories(go_version = "<go-version>")
 ```
 
-`rules_go` `0.60.0` or newer is supported; CI covers `0.60.0` through `0.65.0`,
+`rules_go` `0.59.0` or newer is supported; CI covers `0.59.0` through `0.65.0`,
 and `0.65.0` requires Go `1.26`. Keep the repository's existing
 `go_rules_dependencies()` and `go_register_toolchains(...)` calls.
 

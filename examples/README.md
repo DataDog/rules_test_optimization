@@ -19,6 +19,13 @@ repository, use `./bazelw` for local development convenience.
 
 ## Prerequisites
 
+The Go examples follow the unreleased ddtest backend on this branch. Use a
+matching development commit, not the published `v1.4.0` Orchestrion archive.
+See the [Git installation recipe](../docs/Installation_Reference.md#option-b-install-from-a-git-commit).
+The NodeJS, .NET, and Ruby smoke sources check Bazel wiring; they do not install
+or validate a real tracer. A project needs its own file-mode test runtime as
+explained in the [runtime prerequisites](../docs/Language_Onboarding.md#runtime-prerequisites).
+
 - For a released version, copy the `archive_override(...)` blocks from its
   `INSTALL.md` asset. See [release installation](../docs/Installation_Reference.md#option-a-install-from-a-release-archive-recommended).
   The commit-based blocks in this document also support development snapshots
@@ -32,7 +39,7 @@ repository, use `./bazelw` for local development convenience.
   - `bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.4.0")` for NodeJS macro usage
   - `bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.4.0")` for .NET macro usage
   - `bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.4.0")` for Ruby macro usage
-  - `bazel_dep(name = "rules_go", ...)` (upstream, `0.60.0` or newer) for Go examples shown below
+  - `bazel_dep(name = "rules_go", ...)` (upstream, `0.59.0` or newer) for Go examples shown below
 - For NodeJS/.NET/Ruby examples shown below, also pin reference rulesets and register toolchains:
   - `bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")`
   - `bazel_dep(name = "rules_nodejs", version = "6.7.3")`
@@ -322,7 +329,7 @@ load("@test_optimization_data_java//:export.bzl", "topt_data")
 
 dd_topt_java_test(
     name = "pkg_java_test",
-    srcs = ["*Test.java"],
+    srcs = glob(["*Test.java"]),
     deps = [":pkg_lib"],
     test_class = "com.example.pkg.SampleTest",
     topt_data = topt_data,

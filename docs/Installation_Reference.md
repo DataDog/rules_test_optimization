@@ -16,6 +16,13 @@ and multi-service onboarding, use [`docs/Language_Onboarding.md`](Language_Onboa
 
 ### Option A: install from a release archive (recommended)
 
+The Go instructions on this branch describe the unreleased ddtest integration.
+`v1.4.0` is the latest published release and still uses Orchestrion for Go;
+follow its [versioned guide](https://github.com/DataDog/rules_test_optimization/blob/v1.4.0/README.md)
+for that setup. To try ddtest before the next major release, use the
+[commit install](#option-b-install-from-a-git-commit). Do not combine its SDK
+configuration with the `v1.4.0` archive.
+
 Download `INSTALL.md`, `release.json`, and `SHA256SUMS` from the chosen
 [GitHub release](https://github.com/DataDog/rules_test_optimization/releases).
 `INSTALL.md` contains complete dependency blocks with the release version,
@@ -56,9 +63,11 @@ tuple further below still belongs to `v1.2.0`.
 
 Use this for an unreleased change, an older release without bundle assets, or
 a private repository that requires Git authentication. Pin the same published
-commit for core and companions. The examples use `1.4.0`, which is in
-preparation; use a development commit with that version, or select the
-published `v1.3.0` commit and module versions.
+commit for core and companions. The examples use this branch's module version,
+`1.4.0`; the override selects the implementation. For the ddtest Go setup, use
+a commit containing that backend. A commit or archive from the published
+`v1.4.0` release still contains Orchestrion. For another revision, match the
+module versions to its `MODULE.bazel` files.
 
 In your `MODULE.bazel`:
 
@@ -262,7 +271,8 @@ lives in companion modules:
 `dd_topt_go_test` builds each enabled test with the Go SDK that
 `ddtest instrument` instruments, and links Mini, ddtest's Test Optimization
 runtime. `rules_go` is plain upstream: Bzlmod consumers use
-`bazel_dep(name = "rules_go", version = "0.60.0")` or newer, with no override.
+`bazel_dep(name = "rules_go", version = "0.59.0")` or newer. Do not add a
+Datadog fork override; preserve any consumer-owned upstream patches.
 The ddtest side is documented in
 [ddtest's Bazel guide](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md).
 

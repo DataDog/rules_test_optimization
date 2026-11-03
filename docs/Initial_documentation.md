@@ -50,10 +50,14 @@ The steps are:
   Reference implementation: this repository
 
 2. **Test instrumentation**:
-   Enabled tests are instrumented by the tracer library as usual. Under Bazel,
-   they discover synced metadata via runfiles (for example through
-   `DD_TEST_OPTIMIZATION_MANIFEST_FILE`) and write test/coverage payloads to
-   `TEST_UNDECLARED_OUTPUTS_DIR`. The config-gated Go and Python companions
+   The Go companion selects a ddtest-instrumented SDK and links Mini into
+   enabled tests. Python and Java use the runtimes supplied by the consumer;
+   NodeJS, .NET, and Ruby wire an existing Datadog test integration. Tests read
+   synced metadata through runfiles and write JSON payloads under
+   `TEST_UNDECLARED_OUTPUTS_DIR`. Payload support depends on the runtime; the
+   pinned Go backend reports tests and telemetry, without coverage. See
+   [runtime prerequisites](Language_Onboarding.md#runtime-prerequisites).
+   The config-gated Go and Python companions
    consume the disabled export as a real no-op: they preserve the consumer's
    ordinary test behavior without Test Optimization selectors, metadata
    targets, or payload instrumentation.

@@ -154,9 +154,10 @@ generic binary name.
 
 ## Branch and PR hygiene
 
-Before making changes in a real repository, confirm whether to use the current
-branch or create a new branch from the latest default branch. Keep onboarding
-changes reviewable:
+Before editing, verify the repository, worktree, branch, and existing changes.
+Use the location and branch already authorized for the task; ask only when the
+user has left a material branch choice unresolved. Keep onboarding changes
+reviewable:
 
 - Put reusable rule changes in `rules_test_optimization`, not in a consumer
   repository workaround.

@@ -38,16 +38,19 @@ Interpretation:
   should not be injected into Go test sandboxes.
 - `DD_TEST_OPTIMIZATION_AGENTLESS_URL` can be forwarded as `--repo_env` for
   sync metadata fetches; this check is only about `--test_env`.
-- `rules_go` patches and overrides should not be part of onboarding. Use
-  upstream `rules_go`.
+- Do not introduce the removed Datadog `rules_go` fork. Preserve existing
+  consumer-owned upstream patches, mirrors, and SDK experiments; inspect them
+  for compatibility instead of removing them as part of onboarding.
 - `full_bundle_no_match` is valid for inferred/derived selection when no module
   group matches. Treat it as a stop condition only when the rollout requires a
   specific module group for that target; explicit selectors should fail
   analysis rather than produce this state when module groups exist.
 
-For Bzlmod, confirm the root `MODULE.bazel` has exactly one
-`topt_go_ddtest.sdk(...)` tag and no `rules_go` override. If guided bootstrap
-wrote the setup, the tag is in the block between
+For Bzlmod, confirm the root `MODULE.bazel` has exactly one default
+`topt_go_ddtest.sdk(...)` tag without `sdk_version`. Additional tags with distinct
+`sdk_version` values configure variants, such as FIPS. Remove the Datadog fork
+override, while preserving consumer-owned upstream patches. If guided bootstrap
+wrote the setup, the default tag is in the block between
 `# BEGIN Datadog Go Test Optimization bootstrap` and
 `# END Datadog Go Test Optimization bootstrap`. With `go_mod`, confirm the
 package that owns `go.mod` has a BUILD file.

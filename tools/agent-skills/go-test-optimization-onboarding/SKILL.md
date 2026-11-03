@@ -23,6 +23,10 @@ Instrumented tests build with the Go SDK that `ddtest instrument` instruments
 and link Mini, ddtest's Test Optimization runtime. The ddtest side is
 documented in
 [ddtest's Bazel guide](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md).
+This is the unreleased next-major Go setup. The published `v1.4.0` release
+still uses Orchestrion; use a development commit containing ddtest, with the
+same commit for core and Go companion. The backend reports tests and telemetry,
+but not coverage.
 
 ## Non-negotiable contract
 
@@ -47,7 +51,10 @@ Keep the RFC contract intact:
 - Do not add payload proxies or msgpack-only handoff paths.
 - Do not pass `DD_GIT_*` through `--test_env`; use `--repo_env` for sync metadata.
 - Do not pass uploader endpoints or credentials into the test sandbox.
-- Use upstream `rules_go`. Do not patch it or override it with a fork.
+- Use upstream `rules_go` 0.59.0+; do not introduce a Datadog fork for
+  instrumentation. Preserve existing consumer-owned SDK mirrors, experiments,
+  and unrelated rules_go patches rather than replacing the repository's
+  toolchain policy.
 - Put `--remote_download_minimal`,
   `--remote_download_regex=.*test[.]outputs.*`, and
   `--zip_undeclared_test_outputs` in the active test `.bazelrc` config when
@@ -223,9 +230,10 @@ Go wrapper, treat it as a consumer-specific integration:
 
 ## Branch and PR hygiene
 
-Before making changes in a real repository, confirm whether to use the current
-branch or create a new branch from the latest default branch. Keep onboarding
-changes reviewable:
+Before editing, verify the repository, worktree, branch, and existing changes.
+Use the location and branch already authorized for the task; ask only when the
+user has left a material branch choice unresolved. Keep onboarding changes
+reviewable:
 
 - Put reusable rule changes in `rules_test_optimization`, not in a consumer
   repository workaround.

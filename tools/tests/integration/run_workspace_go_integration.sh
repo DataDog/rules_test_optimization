@@ -1009,6 +1009,7 @@ ddtest_host_platform() {
 # rules_go_integrity prints the BCR integrity of RULES_GO_VERSION's release zip.
 rules_go_integrity() {
   case "$RULES_GO_VERSION" in
+    0.59.0) echo "sha256-aK9Uy5f73uXl6P6NIQ0VpRj51iq/1xYgw+r/Oyal/4Y=" ;;
     0.60.0) echo "sha256-htPcj1nSU1JPkzqvLzwFiWywtgX8NbRgwLSwOZlhJMY=" ;;
     0.61.1) echo "sha256-dj9KP2sDRp/bAKd6Mz3QtVRtPuH6Kds3MSjAj+5z4Og=" ;;
     0.62.0) echo "sha256-C4BclPs3MNwj3zKSXtR3s/TtN7VgddysbyGMPqe0q0I=" ;;

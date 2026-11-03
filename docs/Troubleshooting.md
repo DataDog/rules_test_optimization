@@ -1091,7 +1091,7 @@ used, outside the Go bootstrap block that 1.x wrote. Bootstrap replaces that
 block itself, but leaves other overrides to you.
 
 **Solution**: Delete the override so that `bazel_dep(name = "rules_go", ...)`
-resolves from the Bazel Central Registry (0.60.0 or newer), then rerun the
+resolves from the Bazel Central Registry (0.59.0 or newer), then rerun the
 bootstrap. If the workspace cannot load because the fork commit in the old block
 is no longer fetchable, run the bootstrap from another Bazel workspace that
 depends on the Go companion and pass `--workspace /path/to/your/workspace`, or

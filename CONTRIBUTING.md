@@ -116,6 +116,8 @@ This product includes software developed at Datadog
     `USE_BAZEL_VERSION=8.8.2 RULES_GO_VERSION=0.65.0 GO_VERSION=1.26.3 tools/tests/integration/run_workspace_go_integration.sh`
   - A new `rules_go` version in the WORKSPACE script needs its integrity in
     `rules_go_integrity`.
+  - Bzlmod checks the resolved `rules_go` version before building. A companion
+    dependency must not silently raise the version selected for a CI shard.
   - `FORBID_HOST_GO=1` shadows the host `go` with a failing sentinel (Unix
     only). ddtest needs no host Go, and CI runs every shard this way.
   - `WINDOWS_SMOKE_ONLY=1` (Bzlmod) runs only the instrumented test and its
@@ -176,15 +178,16 @@ This product includes software developed at Datadog
   - companion module tests with hermetic flags
   - scope policy: Linux-only by design today; non-Linux hermetic expansion is tracked separately to keep CI runtime bounded
 - `workspace-compat-shard (rules_go <version>, <module system>)`:
-  - one shard per supported `rules_go` version (`0.60.0`, `0.61.1`, `0.62.0`,
-    `0.63.0`, `0.64.2`, `0.65.0`) and WORKSPACE/Bzlmod pair, with
+  - one shard per supported `rules_go` version (`0.59.0`, `0.60.0`, `0.61.1`,
+    `0.62.0`, `0.63.0`, `0.64.2`, `0.65.0`) and WORKSPACE/Bzlmod pair, with
     `FORBID_HOST_GO=1`; `0.65.0` runs with Go `1.26.3`
   - the Go integration scripts themselves cover normal mode, hermetic mode, and structural `aquery` checks
 - `workspace-compat`:
   - requires every `workspace-compat-shard` to succeed when full CI runs
 - `windows-go-smoke`:
   - runs `WINDOWS_SMOKE_ONLY=1 tools/tests/integration/run_bzlmod_go_integration.sh`
-    on Windows: one instrumented Go test and its payload check
+    on Windows with the minimum supported `rules_go` (`0.59.0`): one
+    instrumented Go test and its payload check
 - Utility/lint lanes:
   - module version alignment check (`tools/dev/check_module_versions.py`)
   - `.bazelversion` parity check (`tools/dev/check_bazelversion_sync.py`)
