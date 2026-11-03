@@ -26,18 +26,18 @@ load("@io_bazel_rules_go//go:deps.bzl", "go_download_sdk", "go_wrap_sdk")
 # records the runtime's SemVer version, with v0.0.0- before a pre-release's
 # name.
 DDTEST_RELEASE = struct(
-    tag = "pre-release-f5df4db",
-    runtime_version = "v0.0.0-pre-release-f5df4db",
+    tag = "pre-release-eb41d04",
+    runtime_version = "v0.0.0-pre-release-eb41d04",
     contract = "1",
     sdk_name = "ddto",
     url = "https://github.com/DataDog/ddtest/releases/download/{tag}/{asset}",
     sha256 = {
-        "darwin_amd64": "2757f07ae096d03fd964e61e21c2779650a14ac3e5ed2435dade5fbfef921667",
-        "darwin_arm64": "223619f189ee31e3f8a196129c296481c61039d96c4e5aa42d909b053a46bcdb",
-        "linux_amd64": "825704a677062196bed79297700c7db25f99f0ccf844d0da01334c2608ffb490",
-        "linux_arm64": "a22e86a459265ee033ef9b6279ae39f6eed84dda5daf065c32d6a6274912470c",
-        "windows_amd64": "244071964c98fccbf3dad333199dc85a6b147aa2ac4bd78c605b111511618ebb",
-        "windows_arm64": "b48a5f769fe341650d8e50d264c828a7457c6d8cfef03b31a5a21cbcdcaa0e89",
+        "darwin_amd64": "55acf00f327381220941358d4a93f4febc33293a0db85b3fe2a4cf7cf1c95ba0",
+        "darwin_arm64": "003a13a2fc3bed04a2a595048a419d686f50c7a79f9a537084ecddecaf4cbd46",
+        "linux_amd64": "393d9836b58ba87d969a531f35bf811f92f4172892f5a7a4401a9c8c95fd2232",
+        "linux_arm64": "8feadb25daf8c36dc1cfba500b3c70b6b644f55ffdaf8faa4663b35d6303f501",
+        "windows_amd64": "9a9f5e1facdd864cf46ff2fe3cb223b5e98bdc7a81e879486d73c73ace2a04c5",
+        "windows_arm64": "a7389d64b3d815fcbaecc4649aa39f7a1df9bebdeede509ef6151dc8e04b2137",
     },
 )
 

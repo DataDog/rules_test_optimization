@@ -308,7 +308,7 @@ Expected:
 - Go target metadata records the instrumentation:
   `bazel.go.instrumentation.backend` is `ddtest`,
   `bazel.go.instrumentation.version` is the runtime version (for example
-  `v0.0.0-pre-release-f5df4db`), `bazel.go.instrumentation.release` is the
+  `v0.0.0-pre-release-eb41d04`), `bazel.go.instrumentation.release` is the
   ddtest release tag, `bazel.go.instrumentation.contract` is `1`,
   `bazel.go.sdk.name` is `ddto`, and `bazel.go.sdk.version` is the Go version
   of the instrumented SDK.

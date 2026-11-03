@@ -974,7 +974,7 @@ repository that provides the same module.
 a message such as:
 
 ```text
-Mini's repository: DDTEST_INSTRUMENT has version="<value>", want "v0.0.0-pre-release-f5df4db" (ddtest pre-release-f5df4db)
+Mini's repository: DDTEST_INSTRUMENT has version="<value>", want "v0.0.0-pre-release-eb41d04" (ddtest pre-release-eb41d04)
 ```
 
 For an SDK, the message starts with `the instrumented SDK for <platform>`.

@@ -158,8 +158,8 @@
   "moduleExtensions": {
     "//:topt_go_ddtest_extension.bzl%topt_go_ddtest": {
       "general": {
-        "bzlTransitiveDigest": "n5O4xLLdqGDM4y5XWH0B51n2RGUkaiC/vF4JrsZMTx0=",
-        "usagesDigest": "tgjgtFWtKN0BqQfQrh/mwAh7ZOA/g0vsgIO9+xMDZOs=",
+        "bzlTransitiveDigest": "jazTFSsqOOvmCIFjLlYf5tjC9wkgs0nCGxEF9JmJrZk=",
+        "usagesDigest": "Ox5PjdmuryyVrkznRLJSYhxL+FgORcczanrHcIM3xE4=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:,io_bazel_rules_go rules_go+",

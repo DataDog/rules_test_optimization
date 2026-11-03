@@ -345,8 +345,8 @@ adds its keys to the target's events.
 | `bazel.go.attr.goos`, `bazel.go.attr.goarch` | The test's `goos` and `goarch`, only when set |
 | `bazel.go.test_binary_linker_optimization` | Whether the macro added `-s -w` |
 | `bazel.go.instrumentation.backend` | `ddtest` |
-| `bazel.go.instrumentation.version` | Mini's runtime version, for example `v0.0.0-pre-release-f5df4db` |
-| `bazel.go.instrumentation.release` | The pinned ddtest release tag, for example `pre-release-f5df4db` |
+| `bazel.go.instrumentation.version` | Mini's runtime version, for example `v0.0.0-pre-release-eb41d04` |
+| `bazel.go.instrumentation.release` | The pinned ddtest release tag, for example `pre-release-eb41d04` |
 | `bazel.go.instrumentation.contract` | The `ddtest instrument bazel` contract, an integer (`1`) |
 | `bazel.go.sdk.name` | `ddto`, the SDK name that selects the instrumented toolchains |
 | `bazel.go.sdk.version` | Version of the instrumented Go SDK, when rules_go reports it |
