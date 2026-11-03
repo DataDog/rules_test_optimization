@@ -6,8 +6,9 @@
 
 """Macro: dd_topt_go_test.
 
-Wraps a rules_go `go_test` with Datadog Test Optimization support and
-Orchestrion-backed compile-time instrumentation.
+Wraps a rules_go `go_test` with Datadog Test Optimization support: the test is
+built with the Go SDK that `ddtest instrument bazel` instruments and links
+Mini, ddtest's Test Optimization runtime.
 
 Notes:
 - You must set up the sync repo once (via MODULE.bazel or WORKSPACE) so that
@@ -44,9 +45,6 @@ Maintenance notes:
   need public-target parity for tags, flaky companions, scheduling policy, or
   similar repository-specific behavior must wrap `dd_topt_go_test` externally
   instead of passing a custom wrapper via `go_test_rule`.
-- Keep nested-package Orchestrion pinning explicit. Package-local pin files are
-  auto-staged when they live next to the BUILD file, while module-root pin
-  files for nested packages should be passed through `orchestrion_pin_files`.
 - Avoid hardcoding labels outside values exported by `@<repo>//:export.bzl`.
 - Preserve compatibility with both single-service (`topt_data`) and
   multi-service (`topt_data_by_service`) exports.
@@ -75,10 +73,9 @@ load(
     "split_test_wrapper_kwargs",
     _is_dict = "is_dict",
 )
-load("@rules_go//go:def.bzl", "go_test")
-load("@rules_go//go/private/orchestrion:pin_files.bzl", _orchestrion_pin_files = "orchestrion_pin_files")
+load("@io_bazel_rules_go//go:def.bzl", "go_test")
+load("//:topt_go_ddtest.bzl", "MINI_TESTOPT", "ddtest_go_test", "topt_go_ddtest_registration")
 load("//:topt_go_infer.bzl", "topt_go_bazel_metadata", "topt_go_payloads_selector")
-load("//:topt_go_orchestrion.bzl", "orch_go_test")
 
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
@@ -101,18 +98,11 @@ def _build_module_labels(sync_repo_name, labels):
 
 build_module_labels_for_tests = _build_module_labels
 
-_ORCHESTRION_PIN_FILES = [
-    "go.mod",
-    "go.sum",
-    "orchestrion.tool.go",
-    "orchestrion.yml",
+# Attributes of the Orchestrion instrumentation, which 2.0.0 removed.
+_REMOVED_ORCHESTRION_ATTRS = [
+    "orchestrion_mode",
+    "orchestrion_pin_files",
 ]
-_ORCHESTRION_MODE_GENERAL = "general"
-_ORCHESTRION_MODE_TEST_OPTIMIZATION = "test_optimization"
-_ORCHESTRION_MODES = {
-    _ORCHESTRION_MODE_GENERAL: None,
-    _ORCHESTRION_MODE_TEST_OPTIMIZATION: None,
-}
 _STATIC_DESCRIPTOR_KEYS = {
     "manifest_label": None,
     "repo_name": None,
@@ -149,28 +139,41 @@ def _attr_or_default(value, default):
     """Return a Starlark attr value or a default without forcing truthiness."""
     return default if value == None else value
 
-def _has_package_local_go_mod(package_local_orchestrion_pin_files):
-    """Return whether auto-discovered package-local pin files include go.mod."""
-    return "go.mod" in package_local_orchestrion_pin_files
+def _reject_removed_orchestrion_attrs(kwargs):
+    """Fail on the Orchestrion attributes instead of passing them to go_test."""
+    removed = [attr for attr in _REMOVED_ORCHESTRION_ATTRS if attr in kwargs]
+    if removed:
+        fail_with_prefix(
+            "dd_topt_go_test",
+            "%s: Orchestrion was removed in 2.0.0, and ddtest instrument needs no mode or pin files; remove the attribute" % ", ".join(removed),
+        )
 
-has_package_local_go_mod_for_tests = _has_package_local_go_mod
+reject_removed_orchestrion_attrs_for_tests = _reject_removed_orchestrion_attrs
 
-def _has_go_mod_pin(orchestrion_pin_files):
-    """Return whether explicit Orchestrion pin labels include a go.mod file."""
-    for pin_file in orchestrion_pin_files:
-        pin_file = str(pin_file)
-        if pin_file == "go.mod" or pin_file.endswith(":go.mod") or pin_file.endswith("/go.mod"):
-            return True
-    return False
+def _with_mini(name, deps, target_compatible_with):
+    """Add Mini's testopt to the raw test's deps unless they already name it.
 
-has_go_mod_pin_for_tests = _has_go_mod_pin
-
-def _validate_orchestrion_mode(orchestrion_mode):
-    """Validate the public Orchestrion mode name."""
-    if orchestrion_mode not in _ORCHESTRION_MODES:
-        fail_with_prefix("dd_topt_go_test", "orchestrion_mode must be one of %s" % ", ".join(sorted(_ORCHESTRION_MODES.keys())))
-
-validate_orchestrion_mode_for_tests = _validate_orchestrion_mode
+    After a workspace overrides go_deps' copy of Mini's module with the
+    generated Mini, a test that uses Mini's Go API already depends on testopt,
+    and Bazel rejects a duplicated label. A select() cannot be inspected, so
+    Mini joins it through an alias: the same archive under another label.
+    """
+    if deps == None:
+        return [MINI_TESTOPT]
+    if type(deps) == "select":
+        alias_name = name + "_ddtest_mini"
+        native.alias(
+            name = alias_name,
+            actual = MINI_TESTOPT,
+            tags = ["manual"],
+            target_compatible_with = target_compatible_with,
+            visibility = ["//visibility:private"],
+        )
+        return deps + [":" + alias_name]
+    for dep in deps:
+        if native.package_relative_label(dep) == MINI_TESTOPT:
+            return deps
+    return list(deps) + [MINI_TESTOPT]
 
 def _validate_apparent_repo_name(repo_name):
     if type(repo_name) != type("") or not repo_name:
@@ -222,61 +225,25 @@ def _normalize_static_descriptor(descriptor, topt_service):
 
 normalize_static_descriptor_for_tests = _normalize_static_descriptor
 
-def _hidden_raw_tags(public_tags, orchestrion_mode):
+def _hidden_raw_tags(public_tags):
     """Return the tags needed by the hidden build target.
 
-    The public wrapper owns TestRunner execution policy. In Test Optimization
-    mode, keeping no-remote-exec on the hidden go_test would also force its
-    deterministic compile and link actions to run locally. Opaque select()
-    values cannot be filtered safely, so they retain the existing behavior.
+    The public wrapper owns TestRunner execution policy. Keeping no-remote-exec
+    on the hidden go_test would also force its deterministic compile and link
+    actions to run locally. Opaque select() values cannot be filtered safely,
+    so they retain the existing behavior.
     """
     if type(public_tags) == "select":
         return public_tags + ["manual"]
     tags = []
     for tag in list(public_tags or []):
-        if tag == "manual" or tag in _PUBLIC_WRAPPER_ONLY_TAGS:
-            continue
-        if orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and tag == "no-remote-exec":
+        if tag == "manual" or tag == "no-remote-exec" or tag in _PUBLIC_WRAPPER_ONLY_TAGS:
             continue
         tags.append(tag)
     tags.append("manual")
     return tags
 
 hidden_raw_tags_for_tests = _hidden_raw_tags
-
-def _validate_test_optimization_pin_files(
-        orchestrion_mode,
-        package_local_orchestrion_pin_files,
-        explicit_orchestrion_pin_files,
-        orchestrion_pin_inputs):
-    """Validate pin-file requirements for the optimized Go testing path."""
-    if orchestrion_mode != _ORCHESTRION_MODE_TEST_OPTIMIZATION:
-        return
-
-    if (
-        not _has_package_local_go_mod(package_local_orchestrion_pin_files) and
-        not _has_go_mod_pin(explicit_orchestrion_pin_files or [])
-    ):
-        fail_with_prefix(
-            "dd_topt_go_test",
-            (
-                "orchestrion_mode = \"test_optimization\" requires a package-local go.mod " +
-                "or explicit orchestrion_pin_files including the Go module root go.mod " +
-                "(for example //:go.mod, //:go.sum, //:orchestrion.tool.go, and //:orchestrion.yml)"
-            ),
-        )
-
-    if not orchestrion_pin_inputs:
-        fail_with_prefix(
-            "dd_topt_go_test",
-            (
-                "orchestrion_mode = \"test_optimization\" requires package-local " +
-                "Orchestrion pin files or explicit orchestrion_pin_files so compile/link actions " +
-                "can track the module state"
-            ),
-        )
-
-validate_test_optimization_pin_files_for_tests = _validate_test_optimization_pin_files
 
 def _concat_label_list_values(left, right):
     """Concatenate label-list-like macro inputs while preserving `select(...)`."""
@@ -307,27 +274,6 @@ def _concat_string_list_values(left, right):
 
     return left + right
 
-def _extend_unique_label_values(dest, values):
-    """Append label-like values while preserving order and avoiding duplicates."""
-    seen = {_label_dedupe_key(value): True for value in dest}
-    for value in values:
-        key = _label_dedupe_key(value)
-        if key not in seen:
-            dest.append(value)
-            seen[key] = True
-
-def _label_dedupe_key(value):
-    label = str(value)
-    if label.startswith(":"):
-        return label[1:]
-
-    package_name = native.package_name()
-    same_package_prefix = "//%s:" % package_name if package_name else "//:"
-    if label.startswith(same_package_prefix):
-        return label[len(same_package_prefix):]
-
-    return label
-
 def _rules_go_inferred_importpath(package_name, target_name):
     """Mirror rules_go's label-based fallback importpath calculation."""
     importpath = package_name
@@ -352,16 +298,12 @@ def dd_topt_go_test(
         topt_service = None,
         # Auto-select per-module known_tests/test_management group based on Go package import path
         module_label_override = None,
-        # Optional: stage direct test sources in runtime runfiles so dd-trace-go
-        # can open them for AST-derived metadata such as test.source.end.
+        # Optional: stage direct test sources in runtime runfiles so Mini can
+        # open them for AST-derived metadata such as test.source.end.
         stage_sources = False,
         # Enable CI Visibility in opt-in Go tests by default so payload-to-files
         # mode works without extra test_env wiring in consumer repos.
         ci_visibility_enabled = True,
-        # Optional module-root Orchestrion pin file labels for nested packages.
-        orchestrion_pin_files = None,
-        # Orchestrion mode used by the Datadog rules_go fork.
-        orchestrion_mode = _ORCHESTRION_MODE_GENERAL,
         # Apply test-only linker flags when Bazel/rules_go is not already
         # stripping and the user did not explicitly request debug/no-strip
         # behavior. Production go_binary targets are unaffected because this
@@ -370,10 +312,11 @@ def dd_topt_go_test(
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
-    For an enabled export, this macro creates a hidden raw go_test target plus a
-    public Orchestrion-enabled wrapper target. For a disabled export, it creates
-    only the caller's public raw go_test. Enabled payloads are written to Bazel's
-    TEST_UNDECLARED_OUTPUTS_DIR and collected in bazel-testlogs/<target>/test.outputs/.
+    For an enabled export, this macro creates a hidden raw go_test target, built
+    with the instrumented Go SDK, plus a public wrapper target. For a disabled
+    export, it creates only the caller's public raw go_test. Enabled payloads are
+    written to Bazel's TEST_UNDECLARED_OUTPUTS_DIR and collected in
+    bazel-testlogs/<target>/test.outputs/.
 
     After running tests, use a single workspace-level uploader target to upload
     all payloads:
@@ -385,7 +328,7 @@ def dd_topt_go_test(
         aggregator mapping (topt_data_by_service) exported by the multi-service repo.
         Used to derive the repo alias and whether to include per-module files.
       go_test_rule: Optional override for the underlying rules_go go_test rule.
-        Defaults to `go_test` from `@rules_go//go:def.bzl`. This hook is for
+        Defaults to `go_test` from `@io_bazel_rules_go//go:def.bzl`. This hook is for
         tests and low-level experiments; repository policy wrappers should stay
         outside `dd_topt_go_test`.
       topt_service: Optional when passing the aggregator mapping; selects which service to use.
@@ -394,31 +337,20 @@ def dd_topt_go_test(
       module_label_override: Optional override for the sanitized module label suffix when the
         automatic detection doesn't match the expected module name.
       stage_sources: Optional boolean that stages direct `srcs` and `embedsrcs`
-        into runtime runfiles so the tracer can open source files for
+        into runtime runfiles so Mini can open source files for
         AST-derived metadata. When enabled, the macro defaults `rundir` to `.`
         only if the caller did not already set `rundir`.
       ci_visibility_enabled: Optional boolean. When true, the macro forces
         `DD_CIVISIBILITY_ENABLED=true` on the generated test environment.
-        Set false only when the caller intentionally owns this tracer switch.
-      orchestrion_pin_files: Optional labels for module-root Orchestrion pin
-        files such as `//:go.mod`, `//:go.sum`, `//:orchestrion.tool.go`, and
-        `//:orchestrion.yml`. Use this when the BUILD file lives in a nested
-        package below the Go module root. In `test_optimization` mode, explicit
-        labels are required unless the BUILD package itself contains `go.mod`;
-        the optimized action graph keeps only the effective pin inputs while
-        preserving normal runtime data for the test.
-      orchestrion_mode: Orchestrion mode. Defaults to `general`, which
-        preserves the current behavior. Set to `test_optimization` to use the
-        standard Go `testing` Test Optimization path: stdlib/`testing`
-        instrumentation, synthetic testmain helper wiring, and plain
-        customer/external `_test` package compiles.
-      enable_test_binary_linker_optimization: Optional boolean. When true and
-        `orchestrion_mode = "test_optimization"`, the hidden raw go_test target
-        receives test-only `-s -w` `gc_linkopts` only in Bazel modes where
-        rules_go is not already stripping and the user did not explicitly
-        request debug/no-strip behavior. Set false to restore caller-provided
-        linker flags exactly if this optimization causes issues.
+        Set false only when the caller intentionally owns this switch.
+      enable_test_binary_linker_optimization: Optional boolean. When true, the
+        hidden raw go_test target receives test-only `-s -w` `gc_linkopts` only
+        in Bazel modes where rules_go is not already stripping and the user did
+        not explicitly request debug/no-strip behavior. Set false to restore
+        caller-provided linker flags exactly if this optimization causes issues.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
+        The raw test also gets Mini's `testopt` library and the registration
+        file of its package.
     """
 
     # ------------------------------------------------------------------
@@ -427,7 +359,7 @@ def dd_topt_go_test(
     # Validate required topt_data early so failures surface at loading time.
     if topt_data == None or not _is_dict(topt_data):
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
-    _validate_orchestrion_mode(orchestrion_mode)
+    _reject_removed_orchestrion_attrs(kwargs)
     if go_test_rule == None:
         fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
@@ -438,7 +370,6 @@ def dd_topt_go_test(
     is_local_static = "runtime_module_path" in topt_data
     if is_local_static:
         _svc = _normalize_static_descriptor(topt_data, topt_service)
-        orchestrion_mode = _ORCHESTRION_MODE_TEST_OPTIMIZATION
     elif topt_data.get("repo_name"):
         # Single-service shape: caller already selected the service by choosing
         # this exported dict, so no key resolution is needed.
@@ -461,10 +392,7 @@ def dd_topt_go_test(
         )
         return
 
-    test_binary_linker_optimization_requested = (
-        orchestrion_mode == _ORCHESTRION_MODE_TEST_OPTIMIZATION and
-        enable_test_binary_linker_optimization
-    )
+    test_binary_linker_optimization_requested = enable_test_binary_linker_optimization
     test_binary_linker_optimization_applied = (
         _TEST_BINARY_LINKER_OPTIMIZATION_APPLIED if test_binary_linker_optimization_requested else False
     )
@@ -479,8 +407,8 @@ def dd_topt_go_test(
     user_data = kwargs.pop("data", None)
     data = user_data
 
-    # Stage direct source files only when callers opt in. This gives the Go
-    # tracer a runtime-visible path it can open for AST-derived source metadata.
+    # Stage direct source files only when callers opt in. This gives Mini a
+    # runtime-visible path it can open for AST-derived source metadata.
     if stage_sources:
         data = _concat_label_list_values(data, kwargs.get("srcs"))
         data = _concat_label_list_values(data, kwargs.get("embedsrcs"))
@@ -541,8 +469,8 @@ def dd_topt_go_test(
     # Same `pop` pattern keeps final go_test kwargs clean and explicit.
     user_env = kwargs.pop("env", None)
 
-    # Default DD_SERVICE from sync metadata so the tracer does not fall back
-    # to platform-specific executable names when callers omit the service.
+    # Default DD_SERVICE from sync metadata so Mini does not fall back to
+    # platform-specific executable names when callers omit the service.
     user_env = _merge_optional_env_defaults(
         user_env,
         {"DD_SERVICE": _svc.get("service_name")},
@@ -608,11 +536,8 @@ def dd_topt_go_test(
     )
 
     # Emit a small Bazel-owned metadata file next to the built test artifacts.
-    # The Orchestrion wrapper copies this into TEST_UNDECLARED_OUTPUTS_DIR so
-    # the uploader can merge target-specific Bazel tags into emitted events.
-    # The metadata rule cross-checks this request against the actual
-    # `rules_go_orchestrion_tool` repository contents so omitted bootstrap
-    # configuration does not produce a false positive.
+    # The public test copies this into TEST_UNDECLARED_OUTPUTS_DIR so the
+    # uploader can merge target-specific Bazel tags into emitted events.
     topt_go_bazel_metadata(
         name = metadata_name,
         # Keep metadata generation attached to the public test instead of
@@ -632,12 +557,10 @@ def dd_topt_go_test(
         expected_repo_name = sync_repo_name if is_local_static else "",
         expected_service_name = expected_service_name,
         expected_runtime_module_path = expected_runtime_module_path,
-        orchestrion_mode = orchestrion_mode,
         bazel_package = "//%s" % pkg_path if pkg_path else "//",
         bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
         repo_name = sync_repo_name,
         service_name = _svc.get("service_name") or "",
-        orchestrion_requested = True,
         cgo = _attr_or_default(kwargs.get("cgo"), False),
         pure = _attr_or_default(kwargs.get("pure"), "auto"),
         race = _attr_or_default(kwargs.get("race"), "auto"),
@@ -657,40 +580,6 @@ def dd_topt_go_test(
         ":" + selector_name,
         ":" + metadata_name,
     ])
-
-    # Nested Go packages often keep the authoritative Orchestrion pin files at
-    # the module root. Callers can pass those labels explicitly so the builder's
-    # upward directory scan can still find the pinned module/config state.
-    explicit_orchestrion_pin_files = _normalize_user_data(orchestrion_pin_files)
-    if type(explicit_orchestrion_pin_files) == "select":
-        fail_with_prefix("dd_topt_go_test", "orchestrion_pin_files does not support select(...) values")
-
-    # Stage package-local Orchestrion pin files as hidden data inputs when the
-    # caller keeps them next to the BUILD file that defines the test target.
-    # The provider target lets the optimized mode keep only these pin files in
-    # compile/link action inputs while preserving the same runtime data surface
-    # for the raw go_test target.
-    orchestrion_pin_inputs = []
-    package_local_orchestrion_pin_files = native.glob(_ORCHESTRION_PIN_FILES, allow_empty = True)
-    if package_local_orchestrion_pin_files:
-        _extend_unique_label_values(orchestrion_pin_inputs, package_local_orchestrion_pin_files)
-    if explicit_orchestrion_pin_files:
-        _extend_unique_label_values(orchestrion_pin_inputs, explicit_orchestrion_pin_files)
-
-    _validate_test_optimization_pin_files(
-        orchestrion_mode,
-        package_local_orchestrion_pin_files,
-        explicit_orchestrion_pin_files,
-        orchestrion_pin_inputs,
-    )
-
-    if orchestrion_pin_inputs:
-        orchestrion_pin_target_name = name + "_orchestrion_pin_files"
-        _orchestrion_pin_files(
-            name = orchestrion_pin_target_name,
-            srcs = orchestrion_pin_inputs,
-        )
-        data = _append_data_dependencies(data, [":" + orchestrion_pin_target_name])
 
     # Add manifest file reference for deriving the working directory.
     # Keep this dynamic via export metadata so custom out_dir values continue
@@ -732,14 +621,29 @@ def dd_topt_go_test(
             _TEST_BINARY_LINKER_OPTIMIZATION_GC_LINKOPTS,
         )
 
-    user_tags = wrapper_kwargs.get("tags")
-    kwargs["tags"] = _hidden_raw_tags(user_tags, orchestrion_mode)
+    # Compile and link actions stay remote-capable; no-remote-exec is left to
+    # the TestRunner.
+    kwargs["tags"] = _hidden_raw_tags(wrapper_kwargs.get("tags"))
     kwargs["visibility"] = ["//visibility:private"]
     for key, value in raw_passthrough.items():
         kwargs[key] = value
 
-    # Create the hidden raw go_test first, then expose it through an
-    # Orchestrion-enabled public wrapper target.
+    # The registration file joins the test's own package or its external test
+    # package, which only its sources tell; Mini's testopt links Mini.
+    registration_name = name + "_ddtest_registration"
+    topt_go_ddtest_registration(
+        name = registration_name,
+        srcs = kwargs.get("srcs") or [],
+        embed = kwargs.get("embed") or [],
+        tags = ["manual"],
+        target_compatible_with = wrapper_kwargs.get("target_compatible_with", []),
+        visibility = ["//visibility:private"],
+    )
+    kwargs["srcs"] = _concat_label_list_values(kwargs.get("srcs"), [":" + registration_name])
+    kwargs["deps"] = _with_mini(name, kwargs.get("deps"), wrapper_kwargs.get("target_compatible_with", []))
+
+    # Create the hidden raw go_test first, then expose it through a public
+    # wrapper target that builds it with the instrumentation.
     go_test_rule(
         name = raw_name,
         data = data,
@@ -747,10 +651,9 @@ def dd_topt_go_test(
         **kwargs
     )
 
-    orch_go_test(
+    ddtest_go_test(
         name = name,
         actual = ":" + raw_name,
         metadata = ":" + metadata_name,
-        orchestrion_mode = orchestrion_mode,
         **wrapper_kwargs
     )

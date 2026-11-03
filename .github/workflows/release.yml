@@ -264,7 +264,6 @@ jobs:
       run_schema_validation: true
       run_fixture_json_validation: false
       run_schema_parser_parity: true
-      run_rules_go_fork_drift: true
 
   release-docs-links:
     timeout-minutes: 10
@@ -388,7 +387,6 @@ jobs:
             args+=(--tag "${GITHUB_REF#refs/tags/}")
           fi
           python3 tools/dev/check_module_versions.py
-          python3 tools/dev/check_release_archive_contents.py
           python3 tools/dev/build_release.py --ref "$GITHUB_SHA" --output "$RUNNER_TEMP/release" "${args[@]}"
           (cd "$RUNNER_TEMP/release" && sha256sum --check SHA256SUMS)
 

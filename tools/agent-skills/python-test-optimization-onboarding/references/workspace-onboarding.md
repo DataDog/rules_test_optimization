@@ -150,7 +150,7 @@ Enable this sync only through the named Bazel config:
 common:test-optimization --repo_env=DD_TEST_OPTIMIZATION_ENABLED=1
 ```
 
-Do not add a `rules_go` Orchestrion flag to a Python-only consumer.
+A Python-only consumer needs no `rules_go` or Go SDK configuration.
 Set `runtime_module_path` to the stable Python package/module prefix used by
 backend module groups. This is the checked-in default; `PYTHON_MODULE_PATH`
 remains an explicit higher-precedence override. Keep that environment variable

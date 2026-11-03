@@ -1,0 +1,27 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "registration_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/DataDog/rules_test_optimization/modules/go/tools/registration",
+    visibility = ["//visibility:private"],
+)
+
+# Writes the registration file of instrumented Go tests.
+go_binary(
+    name = "registration",
+    embed = [":registration_lib"],
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "registration_test",
+    srcs = ["main_test.go"],
+    embed = [":registration_lib"],
+)

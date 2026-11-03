@@ -279,20 +279,20 @@ load(
 )
 load(
     "//tools/tests/core:test_workspace_repositories_utils.bzl",
-    "archive_archive_specs_test",
-    "base_git_specs_test",
-    "custom_rules_go_repo_name_test",
-    "existing_repo_failure_test",
-    "existing_repo_target_rule",
-    "explicit_upstream_base_specs_test",
-    "invalid_upstream_failure_test",
-    "invalid_upstream_rule",
-    "invalid_variant_failure_test",
-    "invalid_variant_target_rule",
-    "missing_archive_failure_test",
-    "missing_archive_target_rule",
-    "removed_complete_variant_failure_test",
-    "removed_complete_variant_target_rule",
+    "go_archive_specs_test",
+    "go_custom_rules_go_repo_name_failure_test",
+    "go_custom_rules_go_repo_name_target_rule",
+    "go_existing_repo_failure_test",
+    "go_existing_repo_target_rule",
+    "go_git_specs_test",
+    "go_invalid_fetch_mode_failure_test",
+    "go_invalid_fetch_mode_target_rule",
+    "go_missing_archive_failure_test",
+    "go_missing_archive_target_rule",
+    "go_missing_git_commit_failure_test",
+    "go_missing_git_commit_target_rule",
+    "go_missing_rules_go_repo_failure_test",
+    "go_missing_rules_go_repo_target_rule",
 )
 
 disabled_cache_payloads_contract_test(
@@ -324,28 +324,28 @@ legacy_context_capture_rule(
     tags = ["manual"],
 )
 
-invalid_variant_target_rule(
-    name = "invalid_variant_target",
+go_invalid_fetch_mode_target_rule(
+    name = "go_invalid_fetch_mode_target",
     tags = ["manual"],
 )
 
-removed_complete_variant_target_rule(
-    name = "removed_complete_variant_target",
+go_missing_git_commit_target_rule(
+    name = "go_missing_git_commit_target",
     tags = ["manual"],
 )
 
-invalid_upstream_rule(
-    name = "invalid_upstream_target",
+go_missing_archive_target_rule(
+    name = "go_missing_archive_target",
     tags = ["manual"],
 )
 
-missing_archive_target_rule(
-    name = "missing_archive_target",
+go_existing_repo_target_rule(
+    name = "go_existing_repo_target",
     tags = ["manual"],
 )
 
-existing_repo_target_rule(
-    name = "existing_repo_target",
+go_missing_rules_go_repo_target_rule(
+    name = "go_missing_rules_go_repo_target",
     tags = ["manual"],
 )
 
@@ -535,28 +535,26 @@ apparent_repo_key_parsing_test(
     timeout = "short",
 )
 
-base_git_specs_test(
-    name = "base_git_specs_test",
+go_git_specs_test(
+    name = "go_git_specs_test",
     size = "small",
     timeout = "short",
 )
 
-archive_archive_specs_test(
-    name = "archive_archive_specs_test",
+go_archive_specs_test(
+    name = "go_archive_specs_test",
     size = "small",
     timeout = "short",
 )
 
-custom_rules_go_repo_name_test(
-    name = "custom_rules_go_repo_name_test",
-    size = "small",
-    timeout = "short",
+go_custom_rules_go_repo_name_target_rule(
+    name = "go_custom_rules_go_repo_name_target",
+    tags = ["manual"],
 )
 
-explicit_upstream_base_specs_test(
-    name = "explicit_upstream_base_specs_test",
-    size = "small",
-    timeout = "short",
+go_custom_rules_go_repo_name_failure_test(
+    name = "go_custom_rules_go_repo_name_failure_test",
+    target_under_test = ":go_custom_rules_go_repo_name_target",
 )
 
 python_git_specs_test(
@@ -595,29 +593,29 @@ java_custom_repo_names_test(
     timeout = "short",
 )
 
-invalid_variant_failure_test(
-    name = "invalid_variant_failure_test",
-    target_under_test = ":invalid_variant_target",
+go_invalid_fetch_mode_failure_test(
+    name = "go_invalid_fetch_mode_failure_test",
+    target_under_test = ":go_invalid_fetch_mode_target",
 )
 
-removed_complete_variant_failure_test(
-    name = "removed_complete_variant_failure_test",
-    target_under_test = ":removed_complete_variant_target",
+go_missing_git_commit_failure_test(
+    name = "go_missing_git_commit_failure_test",
+    target_under_test = ":go_missing_git_commit_target",
 )
 
-invalid_upstream_failure_test(
-    name = "invalid_upstream_failure_test",
-    target_under_test = ":invalid_upstream_target",
+go_missing_archive_failure_test(
+    name = "go_missing_archive_failure_test",
+    target_under_test = ":go_missing_archive_target",
 )
 
-missing_archive_failure_test(
-    name = "missing_archive_failure_test",
-    target_under_test = ":missing_archive_target",
+go_existing_repo_failure_test(
+    name = "go_existing_repo_failure_test",
+    target_under_test = ":go_existing_repo_target",
 )
 
-existing_repo_failure_test(
-    name = "existing_repo_failure_test",
-    target_under_test = ":existing_repo_target",
+go_missing_rules_go_repo_failure_test(
+    name = "go_missing_rules_go_repo_failure_test",
+    target_under_test = ":go_missing_rules_go_repo_target",
 )
 
 python_invalid_fetch_mode_failure_test(
@@ -1771,8 +1769,6 @@ test_suite(
     tests = [
         ":apparent_repo_key_parsing_test",
         ":apply_dd_git_overrides_test",
-        ":archive_archive_specs_test",
-        ":base_git_specs_test",
         ":bash_curl_retry_flags_test",
         ":build_multi_sync_specs_deduplicates_sanitized_service_keys_test",
         ":build_multi_sync_specs_propagates_non_default_enablement_test",
@@ -1799,7 +1795,6 @@ test_suite(
         ":contains_parent_segment_test",
         ":context_manifest_content_test",
         ":count_flaky_tests_response_tests_test",
-        ":custom_rules_go_repo_name_test",
         ":dd_site_invalid_failure_test",
         ":dd_site_normalization_test",
         ":decode_json_object_array_failure_test",
@@ -1835,25 +1830,29 @@ test_suite(
         ":example_stub_module_targets_test",
         ":example_stub_service_keys_targets_test",
         ":example_stub_telemetry_facts_service_name_test",
-        ":existing_repo_failure_test",
         ":expected_targets_file_test",
         ":expected_targets_test",
         ":explicit_context_data_test",
         ":explicit_payload_labels_precede_static_fallback_test",
-        ":explicit_upstream_base_specs_test",
         ":export_bzl_escaping_test",
         ":export_bzl_manifest_path_test",
         ":external_manifest_label_failure_test",
         ":first_env_ctx_test",
         ":first_env_from_environ_test",
         ":fnv1a_symbol_distinguishes_common_symbols_test",
+        ":go_archive_specs_test",
+        ":go_custom_rules_go_repo_name_failure_test",
+        ":go_existing_repo_failure_test",
+        ":go_git_specs_test",
         ":go_grouped_payload_split_test",
+        ":go_invalid_fetch_mode_failure_test",
+        ":go_missing_archive_failure_test",
+        ":go_missing_git_commit_failure_test",
+        ":go_missing_rules_go_repo_failure_test",
         ":go_module_group_members_test",
         ":http_execute_timeout_seconds_test",
         ":invalid_manifest_failure_test",
         ":invalid_service_derivation_failure_test",
-        ":invalid_upstream_failure_test",
-        ":invalid_variant_failure_test",
         ":load_github_event_payload_ctx_test",
         ":local_git_metadata_detached_head_has_no_branch_test",
         ":local_git_metadata_fills_empty_fields_test",
@@ -1871,7 +1870,6 @@ test_suite(
         ":merge_optional_env_defaults_preserves_explicit_value_test",
         ":merge_optional_env_defaults_select_passthrough_test",
         ":missing_api_key_message_test",
-        ":missing_archive_failure_test",
         ":module_label_map_collision_test",
         ":module_label_map_empty_inputs_test",
         ":module_label_map_flaky_modules_test",
@@ -1894,7 +1892,6 @@ test_suite(
         ":record_multi_repo_owner_success_test",
         ":record_sync_extension_repo_owner_duplicate_failure_test",
         ":record_sync_extension_repo_owner_success_test",
-        ":removed_complete_variant_failure_test",
         ":render_module_runfiles_bzl_escaping_test",
         ":render_module_runfiles_bzl_respects_manifest_root_test",
         ":render_multi_aggregate_bzl_contains_expected_targets_test",

@@ -2086,7 +2086,7 @@ def _validate_outputs(
             _fail(
                 f"raw msgpack payloads are not supported in Bazel file mode under {output_dir}: "
                 f"{formatted}. Tests must write JSON payloads to TEST_UNDECLARED_OUTPUTS_DIR; "
-                "check the dd-trace-go version and Go/Orchestrion Bazel environment."
+                "check that Go tests are built by the ddtest instrument SDK."
             )
         if require_json_payloads and not payloads:
             _fail(f"missing JSON payloads under {output_dir}")

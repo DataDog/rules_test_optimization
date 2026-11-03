@@ -26,10 +26,9 @@ The solution separates concerns into four phases:
 - Agent workflow for Go consumer onboarding: see `tools/agent-skills/go-test-optimization-onboarding/SKILL.md` for the neutral Codex-compatible skill that guides agents through WORKSPACE/Bzlmod Go instrumentation, validation, and troubleshooting.
 - Agent workflow for Python consumer onboarding: see `tools/agent-skills/python-test-optimization-onboarding/SKILL.md` for the neutral Codex-compatible skill that guides agents through WORKSPACE/Bzlmod Python instrumentation, validation, and troubleshooting.
 - Agent workflow for Java consumer onboarding: see `tools/agent-skills/java-test-optimization-onboarding/SKILL.md` for the neutral Codex-compatible skill that guides agents through WORKSPACE/Bzlmod Java instrumentation, validation, and troubleshooting.
-- Agent workflow for rules_go upstream migrations: see `tools/agent-skills/rules-go-orchestrion-upstream-migration/SKILL.md` for the neutral Codex-compatible skill that guides agents through porting the vendored Orchestrion-enabled `rules_go` fork to a new upstream tag or commit.
 - Cross-repository integration fixture: see the sibling repository `../rules_test_optimization_tests` and its `README.md` for the consumer-style validation flow that must stay green after changes here.
   - For local validation of unpublished changes from this repo, switch that fixture repo from its pinned `git_override(...)` entries to the commented `local_path_override(...)` entries in `../rules_test_optimization_tests/MODULE.bazel` so Bazel resolves this checkout instead of GitHub.
-- Go fork maintenance details: see `third_party/rgo/v0_60_0/base.METADATA.json`, `third_party/rules_go_orchestrion/registry.json`, `third_party/rules_go_orchestrion/profiles/workspace_runtime.json`, `tools/dev/diff_rules_go_fork.py`, and `tools/dev/verify_rules_go_profiles.py`.
+- Go instrumentation: `dd_topt_go_test` builds tests with the Go SDK that `ddtest instrument` instruments. The ddtest release is pinned in `modules/go/topt_go_ddtest_repository.bzl` (`DDTEST_RELEASE`); the ddtest side is documented in https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md.
 
 Agents: start with `README.md` for current operational behavior, then `CONTRIBUTING.md` for the maintained validation workflow. When instrumenting a Go, Python, or Java consumer repository, load the matching skill under `tools/agent-skills/` before editing that consumer. Use the overview and RFC when you need architecture details or design rationale/trade-off context.
 
@@ -43,22 +42,22 @@ Agents: start with `README.md` for current operational behavior, then `CONTRIBUT
     static multi-sync and does not own target discovery or service derivation.
   - `core/test_optimization_uploader.bzl` — workspace-level uploader rule (normal rule, not test; runs via `bazel run`).
   - `dev/*_bootstrap.bzl` — dev-only bootstrap extensions wiring the local Go, Python, Java, NodeJS, .NET, and Ruby companion repos from this workspace root.
-  - `dev/diff_rules_go_fork.py` — maintainer utility that regenerates the delta report for the vendored `rules_go` fork.
   - `agent-skills/go-test-optimization-onboarding/` — neutral agent skill for instrumenting Go consumer repositories with Test Optimization.
   - `agent-skills/python-test-optimization-onboarding/` — neutral agent skill for instrumenting Python consumer repositories with Test Optimization.
   - `agent-skills/java-test-optimization-onboarding/` — neutral agent skill for instrumenting Java consumer repositories with Test Optimization.
-  - `agent-skills/rules-go-orchestrion-upstream-migration/` — neutral agent skill for porting the vendored Orchestrion-enabled `rules_go` fork to a new upstream version.
 - `modules/go/` — Go companion module sources:
-  - `topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables.
+  - `topt_go_test.bzl` — macro wrapping `go_test` with test optimization environment variables, Mini's `testopt` library, and the registration file.
+  - `topt_go_ddtest.bzl` — public `ddtest_go_test` wrapper, its `sdk_name` transition, the registration rule, and the aspect that rejects a second copy of Mini.
+  - `topt_go_ddtest_extension.bzl` / `topt_go_ddtest_repository.bzl` — `topt_go_ddtest` Bzlmod extension, WORKSPACE entry point, pinned ddtest release, instrumented SDK, Mini, and toolchain repositories.
   - `topt_go_infer.bzl` — aspect + rule to infer Go `importpath` via rules_go providers and select per‑module payloads.
+  - `topt_go_stdlib.bzl` — `dd_topt_go_stdlib_warmup`, which builds the instrumented standard library.
+  - `tools/` — `dd_topt_go_bootstrap`, onboarding pins, and the registration file generator.
   - `tests/` — Go-specific Starlark tests and local stub extension for `@test_optimization_data`.
 - `modules/python/` — Python companion module sources (`topt_py_test.bzl`, `topt_py_infer.bzl`, companion tests).
 - `modules/java/` — Java companion module sources (`topt_java_test.bzl`, `topt_java_infer.bzl`, companion tests).
 - `modules/nodejs/` — NodeJS companion module sources (`topt_nodejs_test.bzl`, `topt_nodejs_infer.bzl`, companion tests).
 - `modules/dotnet/` — .NET companion module sources (`topt_dotnet_test.bzl`, `topt_dotnet_infer.bzl`, companion tests).
 - `modules/ruby/` — Ruby companion module sources (`topt_ruby_test.bzl`, `topt_ruby_infer.bzl`, companion tests).
-- `third_party/rgo/v0_60_0/base/` — vendored `rules_go` fork used by this repository's dev-only root module wiring and the generic Orchestrion integration.
-- `third_party/rules_go_orchestrion/profiles/` — public consumer patch profiles generated from the base Orchestrion integration for repositories that need to rebase this repository's changes onto their own `rules_go` patch stack.
 - Top‑level: `README.md`, `MODULE.bazel`, `WORKSPACE`, `bazelw`.
 - Consumers depend on `@<repo>//:test_optimization_files` or `:module_<sanitized>`; context via `@<repo>//:test_optimization_context`.
 
@@ -73,7 +72,8 @@ The sync rule creates `@test_optimization_data//` containing:
 - **Per-module splitting**: known tests, test management, and flaky tests data are split by module to reduce cache invalidation.
 - **Sanitization**: module names are converted into Bazel-safe labels using `sanitize_label_fragment()` (lowercase, `[a-z0-9_]` only, deterministic suffixes).
 - **Go importpath inference**: `topt_go_payloads_selector` mirrors rules_go importpath logic (explicit `importpath` > `embed` provider > fallback `<module>/<package>`).
-- **Vendored rules_go forks for root workflows**: the repository root pins `rules_go` as a dev-only dependency and redirects it to `third_party/rgo/v0_60_0/base` with `local_path_override(...)`; consumer-facing core usage remains rules_go-free.
+- **Upstream rules_go**: the repository root pins upstream `rules_go` as a dev-only dependency named `io_bazel_rules_go`, the name that the instrumented SDK repositories load; consumer-facing core usage remains rules_go-free.
+- **ddtest instrumentation**: an enabled `dd_topt_go_test` builds a hidden raw `go_test` under a transition that sets `@io_bazel_rules_go//go/toolchain:sdk_name` to `ddto`; only the instrumented toolchains match it, so other builds fetch neither the instrumented SDKs nor Mini.
 - **Cross-platform uploader**: Python 3.10+ provides one implementation on
   Linux, macOS, and Windows. Small Bash and PowerShell launchers locate Python
   and Bazel runfiles. The former Bash/curl and PowerShell/.NET uploaders remain
@@ -121,10 +121,8 @@ The sync rule creates `@test_optimization_data//` containing:
 - Typical workflow: edit Starlark, then run the narrowest matching validation command from `CONTRIBUTING.md`.
 - Python tooling tests: `./bazelw test //tools/tests/python:python_tools_test`.
 - Release guard: `python3 tools/dev/check_module_versions.py` (core and all companion module version alignment).
-- Fork delta refresh: run `python3 tools/dev/diff_rules_go_fork.py --all --write-report` after intentional edits under the base fork. Then run `python3 tools/dev/materialize_rules_go_fork.py check --all` and `python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt`.
 - Cross-repo regression check: after this repository's own validation passes, also validate the change in `../rules_test_optimization_tests` using that repo's documented commands (`./runtests`, `./runtests-hermetic`, or `./bazelw test //src/...`) so consumer-style integration stays intact.
   - Before running those checks against local changes, update `../rules_test_optimization_tests/MODULE.bazel` to enable the commented `local_path_override(...)` entries for the core module and any companion modules affected by the change.
-  - If the change touches the vendored `rules_go` fork or Go bootstrap/orchestrion wiring, also add a temporary local override for `rules_go` that points to `../rules_test_optimization/third_party/rgo/v0_60_0/base`.
 
 ## Coding Style & Naming Conventions
 - Starlark: 2‑space indent; `snake_case` for rules/macros/attrs; concise, descriptive docstrings.
@@ -147,12 +145,11 @@ The sync rule creates `@test_optimization_data//` containing:
   - After validating changes in this repo, also run the relevant checks in sibling repo `../rules_test_optimization_tests`.
   - Minimum expectation: use that repo's documented integration entrypoints (`./runtests`, `./runtests-hermetic`, or `./bazelw test //src/...`) to confirm this repo still works in a consumer-style workspace before calling the change done.
   - Use local overrides there while validating local work: enable the commented `local_path_override(...)` entries in `../rules_test_optimization_tests/MODULE.bazel` for `datadog-rules-test-optimization` and each affected companion module so the fixture tests the current checkout instead of the pinned GitHub commit.
-  - When validating changes under `third_party/rgo/v0_60_0/base/`, `third_party/rules_go_orchestrion/profiles/`, or related Go bootstrap/orchestrion wiring, add a temporary `local_path_override(module_name = "rules_go", path = "../rules_test_optimization/third_party/rgo/v0_60_0/base")` in the fixture repo before running its tests.
 - Local vs CI troubleshooting for `../rules_test_optimization_tests`:
-  - If local fixture results differ from CI, compare the local environment to CI before assuming the fork is broken.
-  - Match the host Go version used in CI when reproducing Go or Orchestrion issues. For the current fixture setup, use Go `1.25.0`.
-  - Reset long-lived local state early when debugging: run `./bazelw shutdown`, then clear the stable Orchestrion cache under `~/Library/Caches/datadog-orchestrion-go-cache`.
-  - Global Git configuration can change `go mod` and Orchestrion behavior. In particular, HTTPS-to-SSH rewrites or interactive Git prompts can make local runs diverge from CI.
+  - If local fixture results differ from CI, compare the local environment to CI before assuming the rules are broken.
+  - Match the Go version used in CI when reproducing Go issues. For the current fixture setup, use Go `1.25.0`.
+  - Reset long-lived local state early when debugging: run `./bazelw shutdown`.
+  - Global Git configuration can change `go mod` behavior. In particular, HTTPS-to-SSH rewrites or interactive Git prompts can make local runs diverge from CI.
   - When results still look suspicious, retry from a fresh checkout or worktree so Bazel analysis state and external repo state are not inherited from earlier experiments.
 - In consumer workspaces, prefer `./bazelw test //...` when package layout permits.
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
@@ -172,6 +169,7 @@ The sync rule creates `@test_optimization_data//` containing:
 
 ## Consumer Tips (bzlmod)
 - In `MODULE.bazel`: add `bazel_dep("datadog-rules-test-optimization", ...)` and `bazel_dep("datadog-rules-test-optimization-go", ...)`, then use `test_optimization_go_extension` from `@datadog-rules-test-optimization-go//:topt_go_extension.bzl`. Instantiate `test_optimization_go(name = "test_optimization_data", service = "<service>", runtime_version = "<ver>", module_path = "<go-module-path>")`, then `use_repo(..., "test_optimization_data")`. The public Go extension is config-gated by default.
+- Configure the Go SDK that `ddtest instrument` instruments: `topt_go_ddtest = use_extension("@datadog-rules-test-optimization-go//:topt_go_ddtest_extension.bzl", "topt_go_ddtest")` and `topt_go_ddtest.sdk(go_mod = "//:go.mod")` (or `go_version = "<ver>"`). The Go companion registers the toolchains. A workspace whose `go.mod` requires `github.com/DataDog/ddtest/ddto` adds `use_repo(topt_go_ddtest, "topt_go_ddtest_mini")` and `override_repo(go_deps, com_github_datadog_ddtest_ddto = "topt_go_ddtest_mini")`.
 - In a small root package or a lightweight monorepo package, create the workspace-level doctor and uploader:
   ```bzl
   load("@datadog-rules-test-optimization//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
@@ -193,21 +191,20 @@ The sync rule creates `@test_optimization_data//` containing:
 - Tests can read `DD_TEST_OPTIMIZATION_MANIFEST_FILE` to resolve the manifest directory (via `filepath.Dir()`) and access synced payloads.
 - For Python/Java/NodeJS/.NET/Ruby companions, follow the corresponding quickstart sections in `README.md` (`Bzlmod + Python companion`, `Bzlmod + Java companion`, `Bzlmod + NodeJS companion`, `Bzlmod + .NET companion`, `Bzlmod + Ruby companion`).
 
-Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go companion module declares the `rules_go` dependency to load provider definitions; consumers still configure Go SDK/toolchains in their own `MODULE.bazel`.
+Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go companion module declares the `rules_go` dependency (as `io_bazel_rules_go`) and registers the instrumented Go toolchains; consumers still configure their own Go SDK/toolchains for ordinary Go targets in their own `MODULE.bazel`.
 
 ## Maintainer Architecture Map
 - Core ownership (`tools/core/*`): runtime-agnostic sync + uploader + shared helpers; keep it free from non-dev language-rule dependencies.
-- Go ownership (`modules/go/*`): Go macro/aspect/selector and Go-specific tests.
+- Go ownership (`modules/go/*`): Go macro/aspect/selector, the ddtest instrumentation repositories and toolchains, the bootstrap, and Go-specific tests.
 - Python ownership (`modules/python/*`): Python macro/inference rule and companion tests.
 - Java ownership (`modules/java/*`): Java macro/inference rule and companion tests.
 - NodeJS ownership (`modules/nodejs/*`): NodeJS macro/inference rule and companion tests.
 - .NET ownership (`modules/dotnet/*`): .NET macro/inference rule and companion tests.
 - Ruby ownership (`modules/ruby/*`): Ruby macro/inference rule and companion tests.
-- Vendored fork ownership (`third_party/rgo/*/base/*`, `third_party/rgo/*/base.METADATA.json`, `third_party/rgo/*/base.CHANGED_FILES.md`, `third_party/rules_go_orchestrion/patches/*/base*`): in-repo `rules_go` base forks used by the repository root and consumer validation flows; when modifying them, keep the metadata, changed-files reports, materialization checks, and profile verifier in sync.
 - Bootstrap ownership (`tools/dev/*_bootstrap.bzl`): dev-only local companion wiring for root workspace testing; do not convert bootstrap wiring into module dependency edges.
 - Invariants:
   - root module must not `bazel_dep` the Go companion module (avoid `core -> go -> core` cycle),
-  - root module keeps `rules_go` as a dev-only dependency and redirects it to `third_party/rgo/v0_60_0/base` via `local_path_override(...)` (not consumer-facing core behavior),
+  - root module keeps upstream `rules_go` as a dev-only dependency named `io_bazel_rules_go` (not consumer-facing core behavior),
   - Go companion must depend on core and `rules_go`,
   - non-Go companion modules are also wired into the root workspace through dev-only `tools/dev/*_bootstrap.bzl` extensions instead of root `bazel_dep(...)` edges,
   - public generated labels in synced repos remain stable (`test_optimization_files`, `test_optimization_context`, `module_<sanitized>`).
@@ -219,10 +216,6 @@ Note: Core module (`datadog-rules-test-optimization`) is rules-go free. The Go c
   - Verify the matching `//tools/dev:*_bootstrap.bzl` extension call and `use_repo(...)` entry still exist in root `MODULE.bazel`.
 - Symptom: companion tests resolve released core instead of local core.
   - Run companion tests with `--override_module=datadog-rules-test-optimization=../..`.
-- Symptom: repo-root Go/example builds stop reflecting the in-tree fork.
-  - Verify root `MODULE.bazel` still has `bazel_dep(name = "rules_go", ..., dev_dependency = True)` plus `local_path_override(module_name = "rules_go", path = "third_party/rgo/v0_60_0/base")`.
-- Symptom: fork metadata report or consumer patch profile no longer matches the base `rules_go` fork.
-  - Run `python3 tools/dev/diff_rules_go_fork.py --all --write-report`, review the matching changed-files reports, then run `python3 tools/dev/materialize_rules_go_fork.py check --all` and `python3 tools/dev/verify_rules_go_profiles.py --public-denylist tools/dev/private_leak_public_denylist.txt`.
 
 ## Multi‑Service Usage
 - Use `test_optimization_multi_sync_extension` (`@...//tools/core:test_optimization_multi_sync.bzl`) with `services = ["<svc1>", "<svc2>"]` to fetch multiple services at once.

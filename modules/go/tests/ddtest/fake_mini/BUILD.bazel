@@ -1,0 +1,14 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+load("@io_bazel_rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "fake_mini",
+    srcs = ["fake.go"],
+    importpath = "github.com/DataDog/ddtest/ddto/fake",
+    visibility = ["//tests/ddtest:__pkg__"],
+)

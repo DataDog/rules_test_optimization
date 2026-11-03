@@ -4,7 +4,7 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-load("@rules_go//go:def.bzl", "go_binary", "go_library")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library")
 load("@datadog-rules-test-optimization-go//:topt_go_test.bzl", "dd_topt_go_test")
 load("@test_optimization_data_go//:export.bzl", "topt_data")
 
@@ -24,5 +24,4 @@ dd_topt_go_test(
   topt_data = topt_data,
   srcs = ["main_test.go"],
   embed = [":hello_lib"],  # lets the macro infer importpath via rules_go provider
-  orchestrion_mode = "test_optimization",
 )

@@ -51,12 +51,14 @@ done
 
 # All targets, including independently selected helpers, must be analyzable
 # when their metadata repository is disabled. This is Andrew's reproduction.
+# The Mini alias that configurable deps get must stay incompatible too, or
+# analyzing it would fetch Mini for a test that cannot run.
 run_bazel cquery "$package/..." >"$scratch/output"
 run_bazel cquery \
-  "filter(':(static_select|dynamic_select|disabled_repository)(__raw_go_test|_topt_payloads|_topt_bazel_metadata)?$', $package:all)" \
+  "filter(':(static_select|dynamic_select|disabled_repository)(__raw_go_test|_topt_payloads|_topt_bazel_metadata|_ddtest_mini)?$', $package:all)" \
   --output=starlark \
   --starlark:expr='str(target.label) + " " + str("IncompatiblePlatformProvider" in providers(target))' >"$scratch/output"
-test "$(awk '{print $1}' "$scratch/output" | sort -u | wc -l | tr -d ' ')" = 12
+test "$(awk '{print $1}' "$scratch/output" | sort -u | wc -l | tr -d ' ')" = 15
 if grep -qv ' True$' "$scratch/output"; then
   cat "$scratch/output" >&2
   exit 1

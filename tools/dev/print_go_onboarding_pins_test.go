@@ -10,67 +10,59 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/DataDog/rules_test_optimization/modules/go/tools/onboardingpins"
 )
 
-func TestPrintGoOnboardingPinsIncludesRulesGoUpstream(t *testing.T) {
+func TestPrintGoOnboardingPinsPrintsPublishedTuple(t *testing.T) {
 	var stdout bytes.Buffer
+	commit := strings.Repeat("a", 40)
 	cfg := cliConfig{
-		commit:             strings.Repeat("a", 40),
-		variant:            "base",
-		upstream:           "v0_60_0",
-		remote:             onboardingpins.DefaultRemote,
-		workspace:          testWorkspaceWithRulesGoFork(t),
-		archiveType:        onboardingpins.DefaultArchiveType,
-		ddTraceGoVersion:   onboardingpins.DefaultDDTraceGoVersion,
-		orchestrionVersion: onboardingpins.DefaultOrchestrionVersion,
-		fetchArchive:       archiveFromStringForCLI("archive"),
+		commit:       commit,
+		remote:       onboardingpins.DefaultRemote,
+		workspace:    t.TempDir(),
+		archiveType:  onboardingpins.DefaultArchiveType,
+		printSummary: true,
+		fetchArchive: archiveFromStringForCLI("archive"),
 	}
 	if err := runWithOutput(context.Background(), cfg, &stdout); err != nil {
 		t.Fatalf("runWithOutput error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), `RULES_GO_UPSTREAM="v0_60_0"`) {
-		t.Fatalf("pin output missing upstream:\n%s", stdout.String())
+	got := stdout.String()
+	for _, want := range []string{
+		`RTO_COMMIT="` + commit + `"`,
+		`RTO_ARCHIVE_PREFIX="rules_test_optimization-` + commit + `"`,
+		"# Datadog Go Test Optimization Onboarding Pins",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("pin output missing %q:\n%s", want, got)
+		}
+	}
+	for _, removed := range []string{"RULES_GO_", "ORCHESTRION", "DD_TRACE_GO"} {
+		if strings.Contains(got, removed) {
+			t.Fatalf("pin output still prints %q:\n%s", removed, got)
+		}
 	}
 }
 
-func TestPrintGoOnboardingPinsRejectsCompleteVariant(t *testing.T) {
+func TestPrintGoOnboardingPinsRejectsShortCommit(t *testing.T) {
 	var stdout bytes.Buffer
 	cfg := cliConfig{
-		commit:             strings.Repeat("a", 40),
-		variant:            "complete",
-		upstream:           "v0_60_0",
-		remote:             onboardingpins.DefaultRemote,
-		workspace:          testWorkspaceWithRulesGoFork(t),
-		archiveType:        onboardingpins.DefaultArchiveType,
-		ddTraceGoVersion:   onboardingpins.DefaultDDTraceGoVersion,
-		orchestrionVersion: onboardingpins.DefaultOrchestrionVersion,
-		fetchArchive:       archiveFromStringForCLI("archive"),
+		commit:       "abc123",
+		remote:       onboardingpins.DefaultRemote,
+		workspace:    t.TempDir(),
+		archiveType:  onboardingpins.DefaultArchiveType,
+		fetchArchive: archiveFromStringForCLI("archive"),
 	}
 	err := runWithOutput(context.Background(), cfg, &stdout)
-	if err == nil {
-		t.Fatalf("runWithOutput succeeded for removed complete variant")
-	}
-	if !strings.Contains(err.Error(), `rules_go_variant "complete" is no longer supported`) {
-		t.Fatalf("unexpected complete variant error: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "--commit must be a full 40-character lowercase SHA") {
+		t.Fatalf("runWithOutput error=%v, want short commit rejection", err)
 	}
 	if stdout.Len() != 0 {
-		t.Fatalf("unexpected stdout for rejected variant:\n%s", stdout.String())
+		t.Fatalf("unexpected stdout for rejected commit:\n%s", stdout.String())
 	}
-}
-
-func testWorkspaceWithRulesGoFork(t *testing.T) string {
-	t.Helper()
-	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "third_party", "rgo", "v0_60_0", "base"), 0o755); err != nil {
-		t.Fatalf("create variant dir: %v", err)
-	}
-	return dir
 }
 
 func archiveFromStringForCLI(body string) onboardingpins.ArchiveFetcher {

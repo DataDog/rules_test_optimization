@@ -19,13 +19,9 @@ import (
 // cliConfig contains the command-line flags accepted by print_go_onboarding_pins.
 type cliConfig struct {
 	commit              string
-	variant             string
-	upstream            string
 	remote              string
 	workspace           string
 	archiveType         string
-	ddTraceGoVersion    string
-	orchestrionVersion  string
 	verifyMainReachable bool
 	printSummary        bool
 	fetchArchive        onboardingpins.ArchiveFetcher
@@ -52,13 +48,9 @@ func parseFlags() cliConfig {
 		}
 	}
 	flag.StringVar(&cfg.commit, "commit", "", "Published rules_test_optimization commit to print")
-	flag.StringVar(&cfg.variant, "variant", "base", "rules_go Orchestrion variant: base")
-	flag.StringVar(&cfg.upstream, "rules-go-upstream", "default", "Datadog-managed rules_go upstream support id, for example v0_60_0")
 	flag.StringVar(&cfg.remote, "remote", onboardingpins.DefaultRemote, "rules_test_optimization Git remote")
 	flag.StringVar(&cfg.workspace, "workspace", workspaceDefault, "rules_test_optimization checkout used for verification")
 	flag.StringVar(&cfg.archiveType, "archive-type", onboardingpins.DefaultArchiveType, "Archive type used by http_archive")
-	flag.StringVar(&cfg.ddTraceGoVersion, "dd-trace-go-version", onboardingpins.DefaultDDTraceGoVersion, "dd-trace-go version to include in the tuple")
-	flag.StringVar(&cfg.orchestrionVersion, "orchestrion-version", onboardingpins.DefaultOrchestrionVersion, "Orchestrion version to include in the tuple")
 	flag.BoolVar(&cfg.verifyMainReachable, "verify-main-reachable", false, "Require --commit to be reachable from origin/main")
 	flag.BoolVar(&cfg.printSummary, "print-summary", false, "Print the Markdown onboarding summary after the shell tuple")
 	flag.Parse()
@@ -88,13 +80,8 @@ func resolvePinsForCLI(ctx context.Context, cfg cliConfig) (onboardingpins.Pins,
 		WorkspaceDir:        cfg.workspace,
 		Commit:              cfg.commit,
 		Remote:              cfg.remote,
-		RulesGoUpstream:     cfg.upstream,
-		Variant:             cfg.variant,
 		ArchiveType:         cfg.archiveType,
-		DDTraceGoVersion:    cfg.ddTraceGoVersion,
-		OrchestrionVersion:  cfg.orchestrionVersion,
 		VerifyMainReachable: cfg.verifyMainReachable,
-		ValidateVariantDir:  true,
 		FetchArchive:        cfg.fetchArchive,
 	})
 	if err != nil {

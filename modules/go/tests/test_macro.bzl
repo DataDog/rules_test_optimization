@@ -19,51 +19,51 @@ forwards at analysis time without compiling Go code.
 """
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "loadingtest", "unittest")
-load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load(
+    "@datadog-rules-test-optimization-go//:topt_go_ddtest.bzl",
+    "MINI_TESTOPT",
+    "ddtest_go_test",
+    "test_execution_requirements_for_tests",
+    "windows_wrapper_content_for_tests",
+    "wrapper_output_name_for_tests",
+)
+load(
+    "@datadog-rules-test-optimization-go//:topt_go_ddtest_repository.bzl",
+    "DDTEST_RELEASE",
+)
 load(
     "@datadog-rules-test-optimization-go//:topt_go_infer.bzl",
     "ToptGoBazelMetadataInfo",
     "topt_go_payloads_selector",
 )
 load(
-    "@datadog-rules-test-optimization-go//:topt_go_orchestrion.bzl",
-    "orch_go_test",
-    "orch_transition_impl_for_tests",
-    "select_wrapper_output_name_for_tests",
-    "test_execution_requirements_for_tests",
-    "windows_wrapper_content_for_tests",
-)
-load(
     "@datadog-rules-test-optimization-go//:topt_go_stdlib.bzl",
     "stdlib_warmup_tags_for_tests",
-    "stdlib_warmup_transition_impl_for_tests",
 )
 load(
     "@datadog-rules-test-optimization-go//:topt_go_test.bzl",
     "dd_topt_go_test",
-    "has_go_mod_pin_for_tests",
-    "has_package_local_go_mod_for_tests",
     "hidden_raw_tags_for_tests",
+    "reject_removed_orchestrion_attrs_for_tests",
     "resolve_topt_service_key_for_tests",
-    "validate_orchestrion_mode_for_tests",
-    "validate_test_optimization_pin_files_for_tests",
 )
-load("@rules_go//go/private/orchestrion:pin_files.bzl", "OrchestrionPinFilesInfo")
 
 ToptGoMacroCaptureInfo = provider(
     doc = "Captured arguments forwarded by dd_topt_go_test to the underlying go_test rule.",
     fields = {
         "data_labels": "Forwarded data dependency labels.",
+        "deps_labels": "Forwarded Go dependency labels.",
         "env": "Forwarded environment map.",
         "gc_linkopts": "Forwarded Go linker options.",
         "importpath": "Forwarded importpath attribute.",
         "rundir": "Forwarded runtime working directory.",
+        "srcs_labels": "Forwarded source labels.",
         "tags": "Forwarded raw-test tags.",
     },
 )
 
 WrapperOutputNameInfo = provider(
-    doc = "Computed wrapper output file name for Orchestrion wrapper tests.",
+    doc = "Computed launcher file name for ddtest_go_test wrapper tests.",
     fields = {
         "output_name": "The output file name selected by the wrapper helper.",
     },
@@ -82,10 +82,12 @@ def _go_test_capture_impl(ctx):
         RunEnvironmentInfo(environment = dict(ctx.attr.env)),
         ToptGoMacroCaptureInfo(
             data_labels = [str(dep.label) for dep in ctx.attr.data],
+            deps_labels = [str(dep.label) for dep in ctx.attr.deps],
             env = dict(ctx.attr.env),
             gc_linkopts = list(ctx.attr.gc_linkopts),
             importpath = ctx.attr.importpath,
             rundir = ctx.attr.rundir,
+            srcs_labels = [str(src.label) for src in ctx.attr.srcs],
             tags = list(ctx.attr.tags),
         ),
     ]
@@ -118,6 +120,8 @@ _go_test_capture_rule = rule(
     implementation = _go_test_capture_impl,
     attrs = {
         "data": attr.label_list(allow_files = True),
+        # dd_topt_go_test adds Mini's testopt here.
+        "deps": attr.label_list(),
         "embed": attr.label_list(),
         "embedsrcs": attr.label_list(allow_files = True),
         "env": attr.string_dict(),
@@ -125,38 +129,6 @@ _go_test_capture_rule = rule(
         "importpath": attr.string(),
         "rundir": attr.string(),
         "srcs": attr.label_list(allow_files = True),
-    },
-    executable = True,
-)
-
-def _go_test_transition_mode_impl(ctx):
-    """Expose the transitioned Orchestrion mode through the executable basename."""
-    mode = ctx.attr._orchestrion_mode[BuildSettingInfo].value
-    out = ctx.actions.declare_file(ctx.label.name + "__orchestrion_mode_" + mode + ".sh")
-    ctx.actions.write(out, "#!/bin/sh\nexit 0\n", is_executable = True)
-    return [
-        DefaultInfo(
-            files = depset([out]),
-            runfiles = ctx.runfiles(files = [out]),
-            executable = out,
-        ),
-    ]
-
-_go_test_transition_mode_rule = rule(
-    implementation = _go_test_transition_mode_impl,
-    attrs = {
-        "data": attr.label_list(allow_files = True),
-        "embed": attr.label_list(),
-        "embedsrcs": attr.label_list(allow_files = True),
-        "env": attr.string_dict(),
-        "gc_linkopts": attr.string_list(),
-        "importpath": attr.string(),
-        "rundir": attr.string(),
-        "srcs": attr.label_list(allow_files = True),
-        "_orchestrion_mode": attr.label(
-            default = "@rules_go//go/private/orchestrion:mode",
-            providers = [BuildSettingInfo],
-        ),
     },
     executable = True,
 )
@@ -190,9 +162,8 @@ fake_metadata_rule = rule(implementation = _fake_metadata_impl)
 
 def _wrapper_output_name_target_impl(ctx):
     return [WrapperOutputNameInfo(
-        output_name = select_wrapper_output_name_for_tests(
+        output_name = wrapper_output_name_for_tests(
             ctx.attr.label_name,
-            ctx.attr.executable_basename,
             ctx.attr.is_windows,
         ),
     )]
@@ -201,7 +172,6 @@ wrapper_output_name_target_rule = rule(
     implementation = _wrapper_output_name_target_impl,
     attrs = {
         "label_name": attr.string(mandatory = True),
-        "executable_basename": attr.string(mandatory = True),
         "is_windows": attr.bool(mandatory = True),
     },
 )
@@ -379,6 +349,7 @@ def go_macro_internal_helper_tags_loading_tests(
         for helper_kind, suffix in [
             ("payloads", "_topt_payloads"),
             ("metadata", "_topt_bazel_metadata"),
+            ("registration", "_ddtest_registration"),
         ]:
             helper = native.existing_rule(target_name + suffix)
             loadingtest.equals(
@@ -401,6 +372,12 @@ def go_macro_internal_helper_tags_loading_tests(
         "disabled_metadata_helper_absent",
         None,
         native.existing_rule(disabled_target + "_topt_bazel_metadata"),
+    )
+    loadingtest.equals(
+        env,
+        "disabled_registration_helper_absent",
+        None,
+        native.existing_rule(disabled_target + "_ddtest_registration"),
     )
 
 def go_macro_helper_compatibility_fixture(name):
@@ -426,16 +403,18 @@ def go_macro_helper_compatibility_fixture(name):
             ("composed", {"target_compatible_with": ["@platforms//os:linux"] + gate}),
         ]:
             target_name = mode + "_" + case
+
+            # Configurable deps make the macro add Mini through an alias.
             dd_topt_go_test(
                 name = target_name,
                 topt_data = descriptor,
                 go_test_rule = _go_test_capture_rule,
-                orchestrion_pin_files = [":go.mod"],
                 tags = ["manual"],
+                deps = select({"//conditions:default": []}),
                 **attrs
             )
             expected = native.existing_rule(target_name).get("target_compatible_with", ())
-            for suffix in ["__raw_go_test", "_topt_payloads", "_topt_bazel_metadata"]:
+            for suffix in ["__raw_go_test", "_topt_payloads", "_topt_bazel_metadata", "_ddtest_registration", "_ddtest_mini"]:
                 actual = native.existing_rule(target_name + suffix).get("target_compatible_with", ())
                 loadingtest.equals(env, target_name + suffix, str(expected), str(actual))
 
@@ -448,8 +427,8 @@ def go_macro_helper_compatibility_fixture(name):
             service_name = "static-disabled-service",
         ),
         go_test_rule = _go_test_capture_rule,
-        orchestrion_pin_files = [":go.mod"],
         tags = ["manual"],
+        deps = select({"//conditions:default": []}),
         target_compatible_with = select({
             ":enabled": [],
             "//conditions:default": ["@platforms//:incompatible"],
@@ -470,7 +449,7 @@ def go_macro_helper_compatibility_fixture(name):
         str(native.existing_rule("static_select")["target_compatible_with"]),
         str(native.existing_rule("disabled_export")["target_compatible_with"]),
     )
-    for suffix in ["__raw_go_test", "_topt_payloads", "_topt_bazel_metadata"]:
+    for suffix in ["__raw_go_test", "_topt_payloads", "_topt_bazel_metadata", "_ddtest_registration"]:
         loadingtest.equals(env, "disabled_export_absent" + suffix, None, native.existing_rule("disabled_export" + suffix))
 
 def go_macro_disabled_raw_target(name, tags = None):
@@ -604,90 +583,29 @@ def go_macro_stage_sources_select_target(name, tags = None):
         tags = tags,
     )
 
-def go_macro_orchestrion_pin_files_target(name, tags = None):
-    """Target under test for explicit module-root Orchestrion pin-file labels."""
-    dd_topt_go_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        go_test_rule = _go_test_capture_rule,
-        orchestrion_pin_files = [
-            ":test_macro.bzl",
-            ":test_selection_utils.bzl",
-        ],
-        tags = tags,
-    )
-
-def go_macro_test_optimization_mode_target(name, tags = None):
-    """Target under test for opt-in Test Optimization Orchestrion mode."""
-    dd_topt_go_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        go_test_rule = _go_test_capture_rule,
-        data = [":test_macro.bzl"],
-        orchestrion_mode = "test_optimization",
-        orchestrion_pin_files = [":go.mod"],
-        tags = tags,
-    )
-
-def go_macro_test_optimization_public_wrapper_mode_target(name, tags = None):
-    """Target under test for public wrapper Orchestrion mode forwarding."""
-    dd_topt_go_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        go_test_rule = _go_test_transition_mode_rule,
-        orchestrion_mode = "test_optimization",
-        orchestrion_pin_files = [":go.mod"],
-        tags = tags,
-    )
-
-def go_macro_default_general_public_wrapper_mode_target(name, tags = None):
-    """Target under test for omitted Orchestrion mode defaulting to general."""
-    dd_topt_go_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        go_test_rule = _go_test_transition_mode_rule,
-        tags = tags,
-    )
-
 def go_macro_test_optimization_linker_default_target(name, tags = None):
-    """Target under test for default Test Optimization linker flags."""
+    """Target under test for the default test-binary linker flags."""
     dd_topt_go_test(
         name = name,
         topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_capture_rule,
         data = [":test_macro.bzl"],
-        orchestrion_mode = "test_optimization",
-        orchestrion_pin_files = [":go.mod"],
         tags = tags,
     )
 
 def go_macro_test_optimization_linker_opt_out_target(name, tags = None):
-    """Target under test for disabling Test Optimization linker flags."""
+    """Target under test for disabling the test-binary linker flags."""
     dd_topt_go_test(
         name = name,
         topt_data = _single_service_topt_data(),
         go_test_rule = _go_test_capture_rule,
         data = [":test_macro.bzl"],
-        orchestrion_mode = "test_optimization",
-        orchestrion_pin_files = [":go.mod"],
         enable_test_binary_linker_optimization = False,
         gc_linkopts = ["-custom-link-flag"],
         tags = tags,
     )
 
-def go_macro_general_mode_linker_flags_target(name, tags = None):
-    """Target under test for preserving linker flags outside Test Optimization."""
-    dd_topt_go_test(
-        name = name,
-        topt_data = _single_service_topt_data(),
-        go_test_rule = _go_test_capture_rule,
-        data = [":test_macro.bzl"],
-        orchestrion_mode = "general",
-        gc_linkopts = ["-custom-link-flag"],
-        tags = tags,
-    )
-
-def orch_wrapper_materialized_actual_non_windows_target(name, tags = None):
+def ddtest_wrapper_materialized_actual_non_windows_target(name, tags = None):
     """Target under test for non-Windows sibling executable materialization."""
     fake_executable_rule(
         name = name + "_actual",
@@ -698,14 +616,14 @@ def orch_wrapper_materialized_actual_non_windows_target(name, tags = None):
         name = name + "_metadata",
         tags = ["manual"],
     )
-    orch_go_test(
+    ddtest_go_test(
         name = name,
         actual = ":" + name + "_actual",
         metadata = ":" + name + "_metadata",
         tags = tags,
     )
 
-def orch_wrapper_materialized_actual_windows_target(name, tags = None):
+def ddtest_wrapper_materialized_actual_windows_target(name, tags = None):
     """Target under test for Windows sibling executable materialization."""
     fake_executable_rule(
         name = name + "_actual",
@@ -717,7 +635,7 @@ def orch_wrapper_materialized_actual_windows_target(name, tags = None):
         name = name + "_metadata",
         tags = ["manual"],
     )
-    orch_go_test(
+    ddtest_go_test(
         name = name,
         actual = ":" + name + "_actual",
         metadata = ":" + name + "_metadata",
@@ -735,6 +653,9 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
+    asserts.equals(env, [str(MINI_TESTOPT)], captured.deps_labels)
+    asserts.equals(env, 1, len(captured.srcs_labels))
+    asserts.true(env, _has_label_suffix(captured.srcs_labels, ":go_macro_single_service_target_ddtest_registration"))
 
     manifest_env = captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
     asserts.true(env, manifest_env != None)
@@ -768,6 +689,18 @@ def _go_macro_inferred_importpath_metadata_test_impl(ctx):
         metadata["bazel.go.importpath"],
     )
     asserts.equals(env, "fallback", metadata["bazel.go.importpath_source"])
+    return analysistest.end(env)
+
+def _go_macro_instrumentation_metadata_test_impl(ctx):
+    """Assert metadata names the pinned ddtest release and no Orchestrion state."""
+    env = analysistest.begin(ctx)
+    metadata = analysistest.target_under_test(env)[ToptGoBazelMetadataInfo].metadata
+    asserts.equals(env, "ddtest", metadata["bazel.go.instrumentation.backend"])
+    asserts.equals(env, DDTEST_RELEASE.runtime_version, metadata["bazel.go.instrumentation.version"])
+    asserts.equals(env, DDTEST_RELEASE.tag, metadata["bazel.go.instrumentation.release"])
+    asserts.equals(env, int(DDTEST_RELEASE.contract), metadata["bazel.go.instrumentation.contract"])
+    asserts.equals(env, DDTEST_RELEASE.sdk_name, metadata["bazel.go.sdk.name"])
+    asserts.equals(env, [], [key for key in metadata if key.startswith("bazel.go.orchestrion.")])
     return analysistest.end(env)
 
 def _go_macro_disabled_raw_wiring_test_impl(ctx):
@@ -825,7 +758,7 @@ def _go_macro_dynamic_manifest_payloads_test_impl(ctx):
     return analysistest.end(env)
 
 def _go_macro_static_wiring_test_impl(ctx):
-    """Assert static descriptors use stable repository labels and TO mode."""
+    """Assert static descriptors use stable repository labels and raw-test tags."""
     env = analysistest.begin(ctx)
     captured = analysistest.target_under_test(env)[ToptGoMacroCaptureInfo]
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_static_target_topt_payloads"))
@@ -840,7 +773,7 @@ def _go_macro_static_fallback_metadata_test_impl(ctx):
     env = analysistest.begin(ctx)
     metadata = analysistest.target_under_test(env)[ToptGoBazelMetadataInfo].metadata
     asserts.equals(env, "full_bundle_disabled", metadata["bazel.go.payload_selection"])
-    asserts.equals(env, "test_optimization", metadata["bazel.go.orchestrion.mode"])
+    asserts.equals(env, "ddtest", metadata["bazel.go.instrumentation.backend"])
     return analysistest.end(env)
 
 def _go_macro_static_module_metadata_test_impl(ctx):
@@ -998,45 +931,6 @@ def _go_macro_stage_sources_select_wiring_test_impl(ctx):
     asserts.equals(env, ".", captured.rundir)
     return analysistest.end(env)
 
-def _go_macro_orchestrion_pin_files_wiring_test_impl(ctx):
-    """Assert explicit Orchestrion pin files are forwarded through the provider target."""
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    captured = target[ToptGoMacroCaptureInfo]
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_orchestrion_pin_files_target_topt_payloads"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_orchestrion_pin_files_target_topt_bazel_metadata"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_orchestrion_pin_files_target_orchestrion_pin_files"))
-    asserts.false(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
-    asserts.false(env, _has_label_suffix(captured.data_labels, ":test_selection_utils.bzl"))
-    return analysistest.end(env)
-
-def _go_macro_orchestrion_pin_files_provider_test_impl(ctx):
-    """Assert the hidden pin-files target carries only Orchestrion pin files."""
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    pin_files = target[OrchestrionPinFilesInfo].files.to_list()
-    asserts.equals(env, 3, len(pin_files))
-    asserts.true(env, _has_file_basename(pin_files, "go.mod"))
-    asserts.true(env, _has_file_basename(pin_files, "test_macro.bzl"))
-    asserts.true(env, _has_file_basename(pin_files, "test_selection_utils.bzl"))
-    return analysistest.end(env)
-
-def _go_macro_test_optimization_mode_wiring_test_impl(ctx):
-    """Assert opt-in mode preserves raw test runtime data and env wiring."""
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    captured = target[ToptGoMacroCaptureInfo]
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_test_optimization_mode_target_topt_payloads"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_test_optimization_mode_target_topt_bazel_metadata"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_test_optimization_mode_target_orchestrion_pin_files"))
-    asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
-    asserts.equals(env, "$(rlocationpath @test_optimization_data//:.testoptimization/manifest.txt)", captured.env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE"))
-    asserts.equals(env, "go_macro_test_optimization_mode_target_topt_bazel_metadata.json", captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"))
-    asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
-    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
-    return analysistest.end(env)
-
 def _go_macro_test_optimization_linker_opt_out_wiring_test_impl(ctx):
     """Assert opt-out preserves caller-provided linker flags exactly."""
     env = analysistest.begin(ctx)
@@ -1046,7 +940,7 @@ def _go_macro_test_optimization_linker_opt_out_wiring_test_impl(ctx):
     return analysistest.end(env)
 
 def _go_macro_test_optimization_linker_default_wiring_test_impl(ctx):
-    """Assert optimized tests receive default strip linker flags in opt mode."""
+    """Assert tests receive the default strip linker flags in opt mode."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
@@ -1067,14 +961,6 @@ def _go_macro_test_optimization_linker_metadata_false_test_impl(ctx):
     target = analysistest.target_under_test(env)
     metadata = target[ToptGoBazelMetadataInfo].metadata
     asserts.equals(env, False, metadata["bazel.go.test_binary_linker_optimization"])
-    return analysistest.end(env)
-
-def _go_macro_general_mode_linker_flags_wiring_test_impl(ctx):
-    """Assert non-Test Optimization mode preserves caller-provided linker flags."""
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    captured = target[ToptGoMacroCaptureInfo]
-    asserts.equals(env, ["-custom-link-flag"], captured.gc_linkopts)
     return analysistest.end(env)
 
 def _go_macro_explicit_service_wiring_test_impl(ctx):
@@ -1121,42 +1007,6 @@ def _go_macro_public_wrapper_test_impl(ctx):
     asserts.equals(env, "1", run_env.get("CUSTOM_ENV"))
     return analysistest.end(env)
 
-def _go_macro_test_optimization_public_wrapper_mode_test_impl(ctx):
-    """Assert dd_topt_go_test forwards the optimized mode to the public wrapper."""
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    files = target[DefaultInfo].files.to_list()
-    asserts.true(
-        env,
-        _has_file_basename(
-            files,
-            (
-                "go_macro_test_optimization_public_wrapper_mode_target__wrapped_" +
-                "go_macro_test_optimization_public_wrapper_mode_target__raw_go_test" +
-                "__orchestrion_mode_test_optimization.sh"
-            ),
-        ),
-    )
-    return analysistest.end(env)
-
-def _go_macro_default_general_public_wrapper_mode_test_impl(ctx):
-    """Assert omitted orchestrion_mode forwards the default general mode."""
-    env = analysistest.begin(ctx)
-    target = analysistest.target_under_test(env)
-    files = target[DefaultInfo].files.to_list()
-    asserts.true(
-        env,
-        _has_file_basename(
-            files,
-            (
-                "go_macro_default_general_public_wrapper_mode_target__wrapped_" +
-                "go_macro_default_general_public_wrapper_mode_target__raw_go_test" +
-                "__orchestrion_mode_general.sh"
-            ),
-        ),
-    )
-    return analysistest.end(env)
-
 def _resolve_topt_service_key_missing_target_impl(_ctx):
     """Analysis target expected to fail on missing service in multi-service map."""
     resolve_topt_service_key_for_tests(
@@ -1179,19 +1029,9 @@ def _resolve_topt_service_key_unknown_target_impl(_ctx):
     )
     return []
 
-def _validate_orchestrion_mode_invalid_target_impl(_ctx):
-    """Analysis target expected to fail on invalid Orchestrion mode."""
-    validate_orchestrion_mode_for_tests("invalid")
-    return []
-
-def _validate_test_optimization_pin_files_missing_go_mod_target_impl(_ctx):
-    """Analysis target expected to fail when optimized mode has no go.mod pin."""
-    validate_test_optimization_pin_files_for_tests(
-        "test_optimization",
-        ["go.sum"],
-        [":test_selection_utils.bzl"],
-        [":test_selection_utils.bzl"],
-    )
+def _reject_removed_orchestrion_attrs_target_impl(ctx):
+    """Analysis target expected to fail on a removed Orchestrion attribute."""
+    reject_removed_orchestrion_attrs_for_tests({name: None for name in ctx.attr.macro_attrs})
     return []
 
 resolve_topt_service_key_missing_target_rule = rule(
@@ -1202,12 +1042,11 @@ resolve_topt_service_key_unknown_target_rule = rule(
     implementation = _resolve_topt_service_key_unknown_target_impl,
 )
 
-validate_orchestrion_mode_invalid_target_rule = rule(
-    implementation = _validate_orchestrion_mode_invalid_target_impl,
-)
-
-validate_test_optimization_pin_files_missing_go_mod_target_rule = rule(
-    implementation = _validate_test_optimization_pin_files_missing_go_mod_target_impl,
+reject_removed_orchestrion_attrs_target_rule = rule(
+    implementation = _reject_removed_orchestrion_attrs_target_impl,
+    attrs = {
+        "macro_attrs": attr.string_list(doc = "The attribute names passed to dd_topt_go_test."),
+    },
 )
 
 def _resolve_topt_service_key_missing_failure_test_impl(ctx):
@@ -1224,16 +1063,17 @@ def _resolve_topt_service_key_unknown_failure_test_impl(ctx):
     asserts.expect_failure(env, "go_service, ruby_service")
     return analysistest.end(env)
 
-def _validate_orchestrion_mode_invalid_failure_test_impl(ctx):
-    """Assert invalid Orchestrion mode failures use the public attr name."""
+def _reject_removed_orchestrion_mode_failure_test_impl(ctx):
+    """Assert orchestrion_mode fails with a migration hint instead of reaching go_test."""
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "orchestrion_mode must be one of general, test_optimization")
+    asserts.expect_failure(env, "[dd_topt_go_test] orchestrion_mode: Orchestrion was removed in 2.0.0")
+    asserts.expect_failure(env, "remove the attribute")
     return analysistest.end(env)
 
-def _validate_test_optimization_pin_files_missing_go_mod_failure_test_impl(ctx):
-    """Assert optimized mode requires a real go.mod pin."""
+def _reject_removed_orchestrion_attrs_failure_test_impl(ctx):
+    """Assert the failure names every removed Orchestrion attribute at once."""
     env = analysistest.begin(ctx)
-    asserts.expect_failure(env, "requires a package-local go.mod or explicit orchestrion_pin_files")
+    asserts.expect_failure(env, "[dd_topt_go_test] orchestrion_mode, orchestrion_pin_files: Orchestrion was removed in 2.0.0")
     return analysistest.end(env)
 
 def _wrapper_output_name_non_windows_test_impl(ctx):
@@ -1266,47 +1106,18 @@ def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
     asserts.false(env, "HELPER" in content)
     return unittest.end(env)
 
-def _has_package_local_go_mod_test_impl(ctx):
-    """Assert auto-discovered pin-file validation requires the module file."""
+def _reject_removed_orchestrion_attrs_test_impl(ctx):
+    """Assert ordinary go_test attributes pass the removed-attribute check."""
     env = unittest.begin(ctx)
-    asserts.true(env, has_package_local_go_mod_for_tests(["go.mod", "go.sum"]))
-    asserts.false(env, has_package_local_go_mod_for_tests(["go.sum", "orchestrion.yml"]))
-    asserts.false(env, has_package_local_go_mod_for_tests([]))
-    return unittest.end(env)
-
-def _has_go_mod_pin_test_impl(ctx):
-    """Assert explicit optimized-mode pin validation looks for go.mod labels."""
-    env = unittest.begin(ctx)
-    asserts.true(env, has_go_mod_pin_for_tests(["//:go.mod"]))
-    asserts.true(env, has_go_mod_pin_for_tests([":go.mod"]))
-    asserts.true(env, has_go_mod_pin_for_tests(["nested/go.mod"]))
-    asserts.false(env, has_go_mod_pin_for_tests([":test_selection_utils.bzl"]))
-    asserts.false(env, has_go_mod_pin_for_tests([]))
-    return unittest.end(env)
-
-def _validate_orchestrion_mode_test_impl(ctx):
-    """Assert the public mode accepts only supported values."""
-    env = unittest.begin(ctx)
-    validate_orchestrion_mode_for_tests("general")
-    validate_orchestrion_mode_for_tests("test_optimization")
-    return unittest.end(env)
-
-def _orch_transition_forwards_mode_test_impl(ctx):
-    """Assert the wrapper transition enables Orchestrion and forwards its mode."""
-    env = unittest.begin(ctx)
-    result = orch_transition_impl_for_tests(None, struct(orchestrion_mode = "test_optimization"))
-    asserts.equals(env, 2, len(result))
-    asserts.true(env, result["@rules_go//go/private/orchestrion:enabled"])
-    asserts.equals(env, "test_optimization", result["@rules_go//go/private/orchestrion:mode"])
-    return unittest.end(env)
-
-def _stdlib_warmup_transition_selects_test_optimization_test_impl(ctx):
-    """Assert the cache-warm target selects the exact instrumented stdlib."""
-    env = unittest.begin(ctx)
-    result = stdlib_warmup_transition_impl_for_tests(None, None)
-    asserts.equals(env, 2, len(result))
-    asserts.true(env, result["@rules_go//go/private/orchestrion:enabled"])
-    asserts.equals(env, "test_optimization", result["@rules_go//go/private/orchestrion:mode"])
+    asserts.equals(
+        env,
+        None,
+        reject_removed_orchestrion_attrs_for_tests({
+            "deps": [],
+            "importpath": "example.com/pkg",
+            "srcs": [],
+        }),
+    )
     return unittest.end(env)
 
 def _stdlib_warmup_tags_test_impl(ctx):
@@ -1318,7 +1129,7 @@ def _stdlib_warmup_tags_test_impl(ctx):
     return unittest.end(env)
 
 def _hidden_raw_tags_test_impl(ctx):
-    """Assert TestRunner-only policy stays off optimized build actions."""
+    """Assert TestRunner-only policy stays off the raw test's build actions."""
     env = unittest.begin(ctx)
     asserts.equals(
         env,
@@ -1330,16 +1141,17 @@ def _hidden_raw_tags_test_impl(ctx):
             "no-remote-exec",
             "dd-test-optimization-source-manual",
             "manual",
-        ], "test_optimization"),
+        ]),
     )
     asserts.equals(
         env,
-        ["dd-requires-docker", "no-remote-exec", "manual"],
+        ["dd-requires-docker", "manual"],
         hidden_raw_tags_for_tests([
             "dd-requires-docker",
             "no-remote-exec",
-        ], "general"),
+        ]),
     )
+    asserts.equals(env, ["manual"], hidden_raw_tags_for_tests(None))
     return unittest.end(env)
 
 def _test_execution_requirements_test_impl(ctx):
@@ -1364,39 +1176,39 @@ def _stdlib_warmup_target_has_outputs_test_impl(ctx):
     asserts.true(env, len(target[DefaultInfo].files.to_list()) > 0)
     return analysistest.end(env)
 
-def _orch_wrapper_materialized_actual_non_windows_test_impl(ctx):
+def _ddtest_wrapper_materialized_actual_non_windows_test_impl(ctx):
     """Assert the wrapper target ships transitioned inputs as siblings."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
     materialized_metadata = (
-        "orch_wrapper_materialized_actual_non_windows_target__wrapped_" +
-        "orch_wrapper_materialized_actual_non_windows_target_metadata.json"
+        "ddtest_wrapper_materialized_actual_non_windows_target__wrapped_" +
+        "ddtest_wrapper_materialized_actual_non_windows_target_metadata.json"
     )
     asserts.equals(env, 3, len(files))
-    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target"))
-    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_non_windows_target"))
+    asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
     asserts.true(env, _has_file_basename(files, materialized_metadata))
-    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_file_basename(runfiles, "ddtest_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
     asserts.true(env, _has_file_basename(runfiles, materialized_metadata))
     return analysistest.end(env)
 
-def _orch_wrapper_materialized_actual_windows_test_impl(ctx):
+def _ddtest_wrapper_materialized_actual_windows_test_impl(ctx):
     """Assert the Windows wrapper target ships transitioned inputs as siblings."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
     materialized_metadata = (
-        "orch_wrapper_materialized_actual_windows_target__wrapped_" +
-        "orch_wrapper_materialized_actual_windows_target_metadata.json"
+        "ddtest_wrapper_materialized_actual_windows_target__wrapped_" +
+        "ddtest_wrapper_materialized_actual_windows_target_metadata.json"
     )
     asserts.equals(env, 3, len(files))
-    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target.bat"))
-    asserts.true(env, _has_file_basename(files, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_windows_target.bat"))
+    asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
     asserts.true(env, _has_file_basename(files, materialized_metadata))
-    asserts.true(env, _has_file_basename(runfiles, "orch_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_file_basename(runfiles, "ddtest_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
     asserts.true(env, _has_file_basename(runfiles, materialized_metadata))
     return analysistest.end(env)
 
@@ -1405,6 +1217,9 @@ go_macro_single_service_wiring_test = analysistest.make(
 )
 go_macro_inferred_importpath_metadata_test = analysistest.make(
     _go_macro_inferred_importpath_metadata_test_impl,
+)
+go_macro_instrumentation_metadata_test = analysistest.make(
+    _go_macro_instrumentation_metadata_test_impl,
 )
 go_macro_disabled_raw_wiring_test = analysistest.make(
     _go_macro_disabled_raw_wiring_test_impl,
@@ -1439,15 +1254,6 @@ go_macro_stage_sources_rundir_wiring_test = analysistest.make(
 go_macro_stage_sources_select_wiring_test = analysistest.make(
     _go_macro_stage_sources_select_wiring_test_impl,
 )
-go_macro_orchestrion_pin_files_wiring_test = analysistest.make(
-    _go_macro_orchestrion_pin_files_wiring_test_impl,
-)
-go_macro_orchestrion_pin_files_provider_test = analysistest.make(
-    _go_macro_orchestrion_pin_files_provider_test_impl,
-)
-go_macro_test_optimization_mode_wiring_test = analysistest.make(
-    _go_macro_test_optimization_mode_wiring_test_impl,
-)
 go_macro_test_optimization_linker_default_wiring_test = analysistest.make(
     _go_macro_test_optimization_linker_default_wiring_test_impl,
     config_settings = {
@@ -1481,20 +1287,11 @@ go_macro_test_optimization_linker_metadata_opt_out_test = analysistest.make(
 go_macro_test_optimization_linker_opt_out_wiring_test = analysistest.make(
     _go_macro_test_optimization_linker_opt_out_wiring_test_impl,
 )
-go_macro_general_mode_linker_flags_wiring_test = analysistest.make(
-    _go_macro_general_mode_linker_flags_wiring_test_impl,
-)
 go_macro_explicit_service_wiring_test = analysistest.make(
     _go_macro_explicit_service_wiring_test_impl,
 )
 go_macro_public_wrapper_test = analysistest.make(
     _go_macro_public_wrapper_test_impl,
-)
-go_macro_test_optimization_public_wrapper_mode_test = analysistest.make(
-    _go_macro_test_optimization_public_wrapper_mode_test_impl,
-)
-go_macro_default_general_public_wrapper_mode_test = analysistest.make(
-    _go_macro_default_general_public_wrapper_mode_test_impl,
 )
 resolve_topt_service_key_missing_failure_test = analysistest.make(
     _resolve_topt_service_key_missing_failure_test_impl,
@@ -1504,12 +1301,12 @@ resolve_topt_service_key_unknown_failure_test = analysistest.make(
     _resolve_topt_service_key_unknown_failure_test_impl,
     expect_failure = True,
 )
-validate_orchestrion_mode_invalid_failure_test = analysistest.make(
-    _validate_orchestrion_mode_invalid_failure_test_impl,
+reject_removed_orchestrion_mode_failure_test = analysistest.make(
+    _reject_removed_orchestrion_mode_failure_test_impl,
     expect_failure = True,
 )
-validate_test_optimization_pin_files_missing_go_mod_failure_test = analysistest.make(
-    _validate_test_optimization_pin_files_missing_go_mod_failure_test_impl,
+reject_removed_orchestrion_attrs_failure_test = analysistest.make(
+    _reject_removed_orchestrion_attrs_failure_test_impl,
     expect_failure = True,
 )
 go_macro_static_wiring_test = analysistest.make(
@@ -1551,20 +1348,8 @@ wrapper_output_name_windows_test = analysistest.make(
 windows_wrapper_uses_file_payload_mode_test = unittest.make(
     _windows_wrapper_uses_file_payload_mode_test_impl,
 )
-has_package_local_go_mod_test = unittest.make(
-    _has_package_local_go_mod_test_impl,
-)
-has_go_mod_pin_test = unittest.make(
-    _has_go_mod_pin_test_impl,
-)
-validate_orchestrion_mode_test = unittest.make(
-    _validate_orchestrion_mode_test_impl,
-)
-orch_transition_forwards_mode_test = unittest.make(
-    _orch_transition_forwards_mode_test_impl,
-)
-stdlib_warmup_transition_selects_test_optimization_test = unittest.make(
-    _stdlib_warmup_transition_selects_test_optimization_test_impl,
+reject_removed_orchestrion_attrs_test = unittest.make(
+    _reject_removed_orchestrion_attrs_test_impl,
 )
 stdlib_warmup_tags_test = unittest.make(
     _stdlib_warmup_tags_test_impl,
@@ -1578,12 +1363,12 @@ test_execution_requirements_test = unittest.make(
 stdlib_warmup_target_has_outputs_test = analysistest.make(
     _stdlib_warmup_target_has_outputs_test_impl,
 )
-orch_wrapper_materialized_actual_non_windows_test = analysistest.make(
-    _orch_wrapper_materialized_actual_non_windows_test_impl,
+ddtest_wrapper_materialized_actual_non_windows_test = analysistest.make(
+    _ddtest_wrapper_materialized_actual_non_windows_test_impl,
 )
-orch_wrapper_materialized_actual_windows_test = analysistest.make(
-    _orch_wrapper_materialized_actual_windows_test_impl,
+ddtest_wrapper_materialized_actual_windows_test = analysistest.make(
+    _ddtest_wrapper_materialized_actual_windows_test_impl,
     config_settings = {
-        "//command_line_option:platforms": str(Label("@rules_go//go/toolchain:windows_amd64")),
+        "//command_line_option:platforms": str(Label("@io_bazel_rules_go//go/toolchain:windows_amd64")),
     },
 )

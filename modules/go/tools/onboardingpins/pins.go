@@ -16,9 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"time"
 )
@@ -28,14 +26,8 @@ const (
 	DefaultRemote = "https://github.com/DataDog/rules_test_optimization.git"
 	// DefaultArchiveType is the archive type used by GitHub codeload tarballs.
 	DefaultArchiveType = "tar.gz"
-	// DefaultDDTraceGoVersion is the Go tracer version that supports the Bazel JSON payload contract.
-	DefaultDDTraceGoVersion = "v2.9.1"
-	// DefaultOrchestrionVersion is the Orchestrion version validated by the Go onboarding fixtures.
-	DefaultOrchestrionVersion = "v1.12.0"
 	// DefaultMainRef is the remote ref that published pins must be reachable from.
 	DefaultMainRef = "origin/main"
-
-	removedCompleteVariantError = `rules_go_variant "complete" is no longer supported. Use "base".`
 )
 
 // ArchiveFetcher returns the bytes for one archive URL.
@@ -46,35 +38,25 @@ type GitRunner func(ctx context.Context, workspaceDir string, args ...string) (s
 
 // Options describes the inputs needed to produce published onboarding pins.
 type Options struct {
-	// WorkspaceDir is the repository checkout used for git reachability checks and variant validation.
+	// WorkspaceDir is the repository checkout used for git reachability checks.
 	WorkspaceDir string
 	// Commit is the published rules_test_optimization commit to pin.
 	Commit string
 	// Remote is the repository remote used by git_repository snippets.
 	Remote string
-	// RulesGoUpstream is the Datadog-managed rules_go upstream support id.
-	RulesGoUpstream string
-	// Variant is the rules_go Orchestrion variant. Only "base" is supported.
-	Variant string
 	// ArchiveType is the archive type used by http_archive.
 	ArchiveType string
-	// DDTraceGoVersion is the tracer version printed in the operator summary.
-	DDTraceGoVersion string
-	// OrchestrionVersion is the Orchestrion version printed in the operator summary.
-	OrchestrionVersion string
 	// MainRef is the remote ref that must contain Commit when VerifyMainReachable is true.
 	MainRef string
 	// VerifyMainReachable requires Commit to be an ancestor of MainRef.
 	VerifyMainReachable bool
-	// ValidateVariantDir requires the selected variant directory to exist in WorkspaceDir.
-	ValidateVariantDir bool
 	// FetchArchive overrides archive downloads for tests.
 	FetchArchive ArchiveFetcher
 	// RunGit overrides git execution for tests.
 	RunGit GitRunner
 }
 
-// Pins is the complete published tuple consumers need for Go/Orchestrion onboarding.
+// Pins is the complete published tuple consumers need for Go onboarding.
 type Pins struct {
 	// RTOCommit is the full published commit SHA.
 	RTOCommit string
@@ -88,28 +70,6 @@ type Pins struct {
 	RTOArchivePrefix string
 	// RTOArchiveType is the archive type expected by http_archive.
 	RTOArchiveType string
-	// RulesGoUpstream is the selected Datadog-managed rules_go upstream support id.
-	RulesGoUpstream string
-	// Variant is the selected rules_go Orchestrion variant.
-	Variant string
-	// RulesGoStripPrefix is the archive subdirectory for the selected variant.
-	RulesGoStripPrefix string
-	// DDTraceGoVersion is the tracer version used by generated onboarding snippets.
-	DDTraceGoVersion string
-	// OrchestrionVersion is the Orchestrion version used by generated onboarding snippets.
-	OrchestrionVersion string
-}
-
-type rulesGoForkSelection struct {
-	upstream string
-	variant  string
-}
-
-var legacyRulesGoForkStripPrefixAliases = map[string]rulesGoForkSelection{
-	"third_party/rules_go_orchestrion_base": {
-		upstream: "v0_60_0",
-		variant:  "base",
-	},
 }
 
 // Resolve computes a published pin tuple from a checkout and commit.
@@ -118,17 +78,8 @@ func Resolve(ctx context.Context, opts Options) (Pins, error) {
 	if strings.TrimSpace(opts.Commit) == "" {
 		return Pins{}, errors.New("--commit is required and must be a published full SHA")
 	}
-	rulesGoUpstream, rulesGoVariant, rulesGoStripPrefix, err := resolveRulesGoStripPrefix(opts.RulesGoUpstream, opts.Variant)
-	if err != nil {
-		return Pins{}, err
-	}
 	if opts.ArchiveType != DefaultArchiveType {
 		return Pins{}, fmt.Errorf("--archive-type must be %q for published GitHub codeload pins, got %q", DefaultArchiveType, opts.ArchiveType)
-	}
-	if opts.ValidateVariantDir {
-		if err := validateVariantDir(opts.WorkspaceDir, rulesGoStripPrefix); err != nil {
-			return Pins{}, err
-		}
 	}
 	commit := strings.TrimSpace(opts.Commit)
 	if opts.VerifyMainReachable {
@@ -152,17 +103,12 @@ func Resolve(ctx context.Context, opts Options) (Pins, error) {
 		return Pins{}, err
 	}
 	return Pins{
-		RTOCommit:          commit,
-		RTORemote:          opts.Remote,
-		RTOArchiveURL:      archiveURL,
-		RTOArchiveSHA256:   archiveSHA,
-		RTOArchivePrefix:   ArchivePrefix(opts.Remote, commit),
-		RTOArchiveType:     opts.ArchiveType,
-		RulesGoUpstream:    rulesGoUpstream,
-		Variant:            rulesGoVariant,
-		RulesGoStripPrefix: rulesGoStripPrefix,
-		DDTraceGoVersion:   opts.DDTraceGoVersion,
-		OrchestrionVersion: opts.OrchestrionVersion,
+		RTOCommit:        commit,
+		RTORemote:        opts.Remote,
+		RTOArchiveURL:    archiveURL,
+		RTOArchiveSHA256: archiveSHA,
+		RTOArchivePrefix: ArchivePrefix(opts.Remote, commit),
+		RTOArchiveType:   opts.ArchiveType,
 	}, nil
 }
 
@@ -175,11 +121,6 @@ func FormatShell(pins Pins) string {
 	fmt.Fprintf(&buf, "RTO_ARCHIVE_SHA256=%q\n", pins.RTOArchiveSHA256)
 	fmt.Fprintf(&buf, "RTO_ARCHIVE_PREFIX=%q\n", pins.RTOArchivePrefix)
 	fmt.Fprintf(&buf, "RTO_ARCHIVE_TYPE=%q\n", pins.RTOArchiveType)
-	fmt.Fprintf(&buf, "RULES_GO_UPSTREAM=%q\n", pins.RulesGoUpstream)
-	fmt.Fprintf(&buf, "RULES_GO_VARIANT=%q\n", pins.Variant)
-	fmt.Fprintf(&buf, "RULES_GO_STRIP_PREFIX=%q\n", pins.RulesGoStripPrefix)
-	fmt.Fprintf(&buf, "DD_TRACE_GO_VERSION=%q\n", pins.DDTraceGoVersion)
-	fmt.Fprintf(&buf, "ORCHESTRION_VERSION=%q\n", pins.OrchestrionVersion)
 	return buf.String()
 }
 
@@ -187,7 +128,7 @@ func FormatShell(pins Pins) string {
 func FormatMarkdownSummary(pins Pins) string {
 	var buf strings.Builder
 	buf.WriteString("# Datadog Go Test Optimization Onboarding Pins\n\n")
-	buf.WriteString("Use this published tuple when wiring a WORKSPACE or Bzlmod repository to the Go/Orchestrion integration.\n\n")
+	buf.WriteString("Use this published tuple when wiring a WORKSPACE or Bzlmod repository to the Go integration, which builds tests with the Go SDK that `ddtest instrument` instruments.\n\n")
 	buf.WriteString("## Published Rules Tuple\n\n")
 	fmt.Fprintf(&buf, "- `RTO_COMMIT`: `%s`\n", pins.RTOCommit)
 	fmt.Fprintf(&buf, "- `RTO_REMOTE`: `%s`\n", pins.RTORemote)
@@ -195,11 +136,6 @@ func FormatMarkdownSummary(pins Pins) string {
 	fmt.Fprintf(&buf, "- `RTO_ARCHIVE_SHA256`: `%s`\n", pins.RTOArchiveSHA256)
 	fmt.Fprintf(&buf, "- `RTO_ARCHIVE_PREFIX`: `%s`\n", pins.RTOArchivePrefix)
 	fmt.Fprintf(&buf, "- `RTO_ARCHIVE_TYPE`: `%s`\n", pins.RTOArchiveType)
-	fmt.Fprintf(&buf, "- `rules_go_upstream`: `%s`\n", pins.RulesGoUpstream)
-	fmt.Fprintf(&buf, "- `rules_go_variant`: `%s`\n", pins.Variant)
-	fmt.Fprintf(&buf, "- `rules_go_strip_prefix`: `%s`\n", pins.RulesGoStripPrefix)
-	fmt.Fprintf(&buf, "- `dd_trace_go_version`: `%s`\n", pins.DDTraceGoVersion)
-	fmt.Fprintf(&buf, "- `orchestrion_version`: `%s`\n", pins.OrchestrionVersion)
 	buf.WriteString("\n")
 	buf.WriteString("## Recommended Flow\n\n")
 	buf.WriteString("1. Wire the published repositories using the tuple above.\n")
@@ -253,20 +189,8 @@ func (opts Options) withDefaults() Options {
 	if opts.Remote == "" {
 		opts.Remote = DefaultRemote
 	}
-	if opts.RulesGoUpstream == "" {
-		opts.RulesGoUpstream = "default"
-	}
-	if opts.Variant == "" {
-		opts.Variant = "base"
-	}
 	if opts.ArchiveType == "" {
 		opts.ArchiveType = DefaultArchiveType
-	}
-	if opts.DDTraceGoVersion == "" {
-		opts.DDTraceGoVersion = DefaultDDTraceGoVersion
-	}
-	if opts.OrchestrionVersion == "" {
-		opts.OrchestrionVersion = DefaultOrchestrionVersion
 	}
 	if opts.MainRef == "" {
 		opts.MainRef = DefaultMainRef
@@ -275,85 +199,6 @@ func (opts Options) withDefaults() Options {
 		opts.RunGit = defaultGitRunner
 	}
 	return opts
-}
-
-// RulesGoStripPrefix resolves a rules_go upstream and variant to a repository path.
-func RulesGoStripPrefix(upstream string, variant string) (string, error) {
-	_, _, prefix, err := resolveRulesGoStripPrefix(upstream, variant)
-	return prefix, err
-}
-
-// RulesGoSelectionForStripPrefix resolves a generated fork path to upstream and variant ids.
-func RulesGoSelectionForStripPrefix(stripPrefix string) (string, string, error) {
-	for upstream, variants := range rulesGoForkStripPrefixes {
-		for variant, candidate := range variants {
-			if candidate == stripPrefix {
-				return upstream, variant, nil
-			}
-		}
-	}
-	if stripPrefix == "third_party/rules_go_orchestrion_complete" {
-		return "", "", errors.New(removedCompleteVariantError)
-	}
-	if selection, ok := legacyRulesGoForkStripPrefixAliases[stripPrefix]; ok {
-		return selection.upstream, selection.variant, nil
-	}
-	return "", "", fmt.Errorf("rules_go strip_prefix must be one of the generated fork paths or compatibility aliases, got %q", stripPrefix)
-}
-
-func resolveRulesGoStripPrefix(upstream string, variant string) (string, string, string, error) {
-	if upstream == "" || upstream == "default" {
-		upstream = DefaultRulesGoUpstream
-	}
-	if variant == "" || variant == "default" {
-		variant = "base"
-	}
-	if variant == "complete" {
-		return "", "", "", errors.New(removedCompleteVariantError)
-	}
-	variants, ok := rulesGoForkStripPrefixes[upstream]
-	if !ok {
-		return "", "", "", fmt.Errorf("rules_go_upstream must be one of %v, got %q", sortedRulesGoUpstreams(), upstream)
-	}
-	prefix, ok := variants[variant]
-	if !ok {
-		return "", "", "", fmt.Errorf("rules_go_variant must be one of %v for rules_go_upstream %q, got %q", sortedRulesGoVariants(variants), upstream, variant)
-	}
-	return upstream, variant, prefix, nil
-}
-
-func sortedRulesGoUpstreams() []string {
-	upstreams := make([]string, 0, len(rulesGoForkStripPrefixes))
-	for upstream := range rulesGoForkStripPrefixes {
-		upstreams = append(upstreams, upstream)
-	}
-	sort.Strings(upstreams)
-	return upstreams
-}
-
-func sortedRulesGoVariants(variants map[string]string) []string {
-	names := make([]string, 0, len(variants))
-	for variant := range variants {
-		names = append(names, variant)
-	}
-	sort.Strings(names)
-	return names
-}
-
-// validateVariantDir confirms the selected vendored fork path exists locally.
-func validateVariantDir(workspaceDir, rulesGoStripPrefix string) error {
-	path := filepath.Join(workspaceDir, filepath.FromSlash(rulesGoStripPrefix))
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return fmt.Errorf("rules_go fork path does not exist at %s", path)
-		}
-		return fmt.Errorf("stat rules_go fork path %s: %w", path, err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("rules_go fork path is not a directory: %s", path)
-	}
-	return nil
 }
 
 // resolveCommit resolves any Git revision accepted by git to a full commit SHA.

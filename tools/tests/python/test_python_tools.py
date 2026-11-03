@@ -8939,7 +8939,7 @@ echo blocked
             encoding="utf-8"
         )
 
-        self.assertIn("Go/Orchestrion", bash_text)
+        self.assertIn("Go test\n# payloads can encode CI Visibility test data as span events", bash_text)
         self.assertNotIn('if (.type? == "span") then .', bash_text)
         self.assertNotIn('select((.type // "") != "span")', bash_text)
         self.assertIn("events still receive context and Bazel tags before this CODEOWNERS pass", bash_text)
@@ -9078,19 +9078,16 @@ class GoWorkspaceIntegrationTests(unittest.TestCase):
         quote = source[source.index("bzl_quote() {"):source.index("\nsha256_file() {")]
         writer = source[
             source.index("write_positive_workspace() {"):
-            source.index("\nwrite_invalid_workspace() {")
+            source.index("\nrun_positive_fixture() {")
         ]
         env = {
             **os.environ,
             "PYTHON": sys.executable,
             "REPO_ROOT": "/fixture/rules with spaces",
-            "rules_go_fork_abs": "/fixture/rules with spaces/third_party/rgo/v0_60_0/base",
             "ARCHIVE_URL": "file:///fixture/rules.tar.gz",
             "ARCHIVE_SHA256": "a" * 64,
             "ARCHIVE_NAME": "rules-fixture",
-            "RULES_GO_UPSTREAM": "v0_60_0",
-            "RULES_GO_VARIANT": "base",
-            "ORCHESTRION_VERSION": "v1.12.0",
+            "RULES_GO_VERSION": "0.60.0",
             "GO_VERSION": "1.25.0",
             "SERVICE_NAME": "fixture-service",
             "MODULE_IMPORTPATH": "example.com/fixture",
@@ -9132,6 +9129,18 @@ class GoWorkspaceIntegrationTests(unittest.TestCase):
                 self.assertLess(shell_load, names.index("rules_shell_dependencies"))
                 self.assertLess(names.index("rules_shell_dependencies"), names.index("rules_shell_toolchains"))
                 self.assertEqual(1, names.count("rules_shell_toolchains"))
+                self.assertLess(
+                    names.index("go_register_toolchains"),
+                    names.index("topt_go_ddtest_workspace_repositories"),
+                )
+                # The helper requires rules_go to be declared before it runs.
+                rules_go_archive = next(
+                    index for index, call in enumerate(calls)
+                    if call.func.id == "http_archive"
+                    and any(keyword.arg == "name" and keyword.value.value == "io_bazel_rules_go" for keyword in call.keywords)
+                )
+                if fetch_mode == "archive":
+                    self.assertLess(rules_go_archive, names.index("datadog_go_test_optimization_workspace_repositories"))
 
 
 class MockDdServerTests(unittest.TestCase):

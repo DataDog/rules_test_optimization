@@ -47,7 +47,8 @@ load(
 
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
 # GoArchive still exists separately.
-load("@rules_go//go:def.bzl", "GoArchive", "GoInfo")
+load("@io_bazel_rules_go//go:def.bzl", "GoArchive", "GoInfo")
+load(":topt_go_ddtest_repository.bzl", "DDTEST_RELEASE")
 
 _select_module_group_name = select_module_group_name
 _selected_payload_runfiles = selected_payload_runfiles
@@ -303,10 +304,7 @@ def _topt_go_bazel_metadata_impl(ctx):
     """Emit a single JSON file with Bazel-owned Go target metadata."""
     selection = _resolve_payload_selection(ctx)
     out = ctx.actions.declare_file(ctx.label.name + ".json")
-    orchestrion_configured = _orchestrion_metadata_enabled(
-        ctx.attr.orchestrion_requested,
-        ctx.files._orchestrion_tool,
-    )
+    sdk = ctx.toolchains["@io_bazel_rules_go//go:toolchain"].sdk
 
     metadata = {
         "bazel.package": ctx.attr.bazel_package,
@@ -317,15 +315,22 @@ def _topt_go_bazel_metadata_impl(ctx):
         "bazel.go.importpath": selection.importpath,
         "bazel.go.importpath_source": selection.importpath_source,
         "bazel.go.payload_selection": selection.selection,
-        "bazel.go.orchestrion.enabled": orchestrion_configured,
-        "bazel.go.orchestrion.mode": ctx.attr.orchestrion_mode,
         "bazel.go.attr.cgo": ctx.attr.cgo,
         "bazel.go.attr.pure": ctx.attr.pure,
         "bazel.go.attr.race": ctx.attr.race,
         "bazel.go.attr.msan": ctx.attr.msan,
         "bazel.go.attr.linkmode": ctx.attr.linkmode,
         "bazel.go.test_binary_linker_optimization": ctx.attr.test_binary_linker_optimization,
+        # The instrumentation that built this test: the pinned ddtest release
+        # and the SDK that the transition selected.
+        "bazel.go.instrumentation.backend": "ddtest",
+        "bazel.go.instrumentation.version": DDTEST_RELEASE.runtime_version,
+        "bazel.go.instrumentation.release": DDTEST_RELEASE.tag,
+        "bazel.go.instrumentation.contract": int(DDTEST_RELEASE.contract),
+        "bazel.go.sdk.name": DDTEST_RELEASE.sdk_name,
     }
+    if getattr(sdk, "version", None):
+        metadata["bazel.go.sdk.version"] = sdk.version
     if ctx.attr.goos:
         metadata["bazel.go.attr.goos"] = ctx.attr.goos
     if ctx.attr.goarch:
@@ -339,12 +344,6 @@ def _topt_go_bazel_metadata_impl(ctx):
         DefaultInfo(files = depset([out]), runfiles = ctx.runfiles(files = [out])),
         ToptGoBazelMetadataInfo(metadata = metadata),
     ]
-
-def _orchestrion_metadata_enabled(orchestrion_requested, orchestrion_tool_files):
-    """Return True when metadata should report Orchestrion as actually enabled."""
-    return orchestrion_requested and len(orchestrion_tool_files) > 0
-
-orchestrion_metadata_enabled_for_tests = _orchestrion_metadata_enabled
 
 topt_go_payloads_selector = rule(
     implementation = _topt_go_payloads_selector_impl,
@@ -402,12 +401,10 @@ topt_go_bazel_metadata = rule(
         "expected_repo_name": attr.string(),
         "expected_service_name": attr.string(),
         "expected_runtime_module_path": attr.string(),
-        "orchestrion_mode": attr.string(default = "general", values = ["general", "test_optimization"]),
         "bazel_package": attr.string(mandatory = True),
         "bazel_target": attr.string(mandatory = True),
         "repo_name": attr.string(mandatory = True),
         "service_name": attr.string(mandatory = True),
-        "orchestrion_requested": attr.bool(default = True),
         "cgo": attr.bool(default = False),
         "pure": attr.string(default = "auto"),
         "race": attr.string(default = "auto"),
@@ -416,9 +413,6 @@ topt_go_bazel_metadata = rule(
         "goos": attr.string(),
         "goarch": attr.string(),
         "test_binary_linker_optimization": attr.bool(default = False),
-        "_orchestrion_tool": attr.label(
-            allow_files = True,
-            default = "@rules_go//go/private/orchestrion:tool_binary",
-        ),
     },
+    toolchains = ["@io_bazel_rules_go//go:toolchain"],
 )
