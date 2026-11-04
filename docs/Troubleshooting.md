@@ -898,7 +898,7 @@ pins. See [Go instrumentation SDK](Configuration_Reference.md#go-instrumentation
 for the configuration and
 [ddtest's Bazel documentation](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md)
 for the ddtest side. To move a 1.x setup, see the
-[migration note](../CHANGELOG.md#unreleased).
+[migration note](../CHANGELOG.md#migrating-go-consumers).
 
 ### Instrumented test fails: no Go SDK to instrument
 

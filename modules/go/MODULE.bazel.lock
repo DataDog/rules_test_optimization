@@ -159,7 +159,7 @@
     "//:topt_go_ddtest_extension.bzl%topt_go_ddtest": {
       "general": {
         "bzlTransitiveDigest": "bvTyU65OW4peX9l/9w4+j2N6yCafmIc+4odpplaz/7g=",
-        "usagesDigest": "Ox5PjdmuryyVrkznRLJSYhxL+FgORcczanrHcIM3xE4=",
+        "usagesDigest": "37UHIfEv9dsxzlRkupsIHixyGMM/t763tmPy5HMUTlA=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:,io_bazel_rules_go rules_go+",
@@ -1101,7 +1101,7 @@
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "qE9S3HNMfKVJtD4XMT5WNvc3sgOOqqdVoBns0egnuPE=",
-        "usagesDigest": "mPWPVGZI09Qhtram/IZX/vhiYexgT22lq8nuVZ+IWHQ=",
+        "usagesDigest": "Il4asUe3wQl24zB9abmQLk2u8ZWG0N+LzEiHohhvCZI=",
         "recordedInputs": [
           "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+"
         ],
@@ -1339,7 +1339,7 @@
     },
     "@@rules_python+//python/private/pypi:pip.bzl%pip_internal": {
       "general": {
-        "bzlTransitiveDigest": "hDRuMlkaP5i2ctpFeM19gk8D1vsnVVUAP/3vsh5M5SU=",
+        "bzlTransitiveDigest": "N0fPhJacazEDKNGD+osHhs+bQfazPtnJszXAijQSdV0=",
         "usagesDigest": "OLoIStnzNObNalKEMRq99FqenhPGLFZ5utVLV4sz7OI=",
         "recordedInputs": [
           "REPO_MAPPING:bazel_features+,bazel_features_globals bazel_features++version_extension+bazel_features_globals",

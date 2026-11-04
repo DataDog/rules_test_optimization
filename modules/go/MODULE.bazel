@@ -6,10 +6,10 @@
 
 module(
     name = "datadog-rules-test-optimization-go",
-    version = "1.4.0",
+    version = "2.0.0",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 bazel_dep(name = "platforms", version = "1.0.0")
 
 # The SDK repositories that go_wrap_sdk writes load rules_go as

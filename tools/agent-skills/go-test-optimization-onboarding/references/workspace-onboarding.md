@@ -38,15 +38,9 @@ implementation for the Test Optimization path where needed.
 
 ## Dependency Wiring
 
-Use the public WORKSPACE helpers. The ddtest backend is unreleased; published
-`v1.4.0` still uses Orchestrion. For a local preview, use a full development
-commit containing ddtest in place of `<published-main-commit>` below. Generate
-its archive tuple with `--commit <ddtest-rule-commit>` and omit
-`--verify-main-reachable`. Do not publish preview pins as a release.
-
-For production onboarding after this backend merges, pin a commit reachable
-from `origin/main`. Generate or copy its complete archive tuple; do not invent
-a SHA or mix core and companion commits.
+Use the public WORKSPACE helpers. Pin a commit reachable from `origin/main`.
+Generate or copy its complete archive tuple; do not invent a SHA or mix core
+and companion commits.
 
 From this repository, generate published pins with:
 
@@ -316,7 +310,7 @@ it to `ddtest instrument`:
   harmless. You may delete them.
 
 `--print-workspace-snippet` prints the current wiring to compare against. The
-[migration note](../../../../CHANGELOG.md#unreleased) lists the files,
+[migration note](../../../../CHANGELOG.md#migrating-go-consumers) lists the files,
 `go.mod` requirements, and metadata keys that changed.
 
 ## Bazel Config

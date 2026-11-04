@@ -15,6 +15,8 @@ versioning.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-04
+
 ### Changed
 
 - Go tests are instrumented by `ddtest instrument` instead of Orchestrion. This
@@ -96,7 +98,7 @@ versioning.
 - Remove the `rules_go` override that points at the fork
   (`third_party/rgo/...`) and the `orchestrion` extension with its
   `rules_go_orchestrion_tool` repository, and depend on upstream `rules_go`
-  `0.60.0` or newer. In WORKSPACE, declare upstream `rules_go` as
+  `0.59.0` or newer. In WORKSPACE, declare upstream `rules_go` as
   `io_bazel_rules_go`, drop the fork arguments of
   `datadog_go_test_optimization_workspace_repositories`, and remove the
   `dd_topt_go_orchestrion_tool_repo` call.

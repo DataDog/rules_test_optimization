@@ -23,10 +23,9 @@ Instrumented tests build with the Go SDK that `ddtest instrument` instruments
 and link Mini, ddtest's Test Optimization runtime. The ddtest side is
 documented in
 [ddtest's Bazel guide](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md).
-This is the unreleased next-major Go setup. The published `v1.4.0` release
-still uses Orchestrion; use a development commit containing ddtest, with the
-same commit for core and Go companion. The backend reports tests and telemetry,
-but not coverage.
+This is the Go setup of version 2.0.0 and later; 1.x releases use Orchestrion.
+Use the same release or commit for core and Go companion. The backend reports
+tests and telemetry, but not coverage.
 
 ## Non-negotiable contract
 

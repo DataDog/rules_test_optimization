@@ -38,7 +38,7 @@ Rerunning bootstrap replaces the Go bootstrap block that 1.x wrote. It stops
 with a message when an override outside that block still points `rules_go` at
 the removed Datadog fork; see
 [Bootstrap stops on a rules_go fork override](Troubleshooting.md#bootstrap-stops-on-a-rules_go-fork-override)
-and the [migration note](../CHANGELOG.md#unreleased).
+and the [migration note](../CHANGELOG.md#migrating-go-consumers).
 
 Bzlmod and guided setup accept:
 
@@ -266,7 +266,7 @@ A `no-remote-exec` tag on the test applies to its `TestRunner` action only;
 the hidden test's compile and link actions stay remote-capable.
 
 Attributes that 2.0.0 removed fail at loading with a migration message; see the
-[migration note](../CHANGELOG.md#unreleased).
+[migration note](../CHANGELOG.md#migrating-go-consumers).
 
 ### Explicit single-service Go descriptor
 
