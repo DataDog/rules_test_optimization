@@ -26,7 +26,7 @@ versioning.
   is ddtest's Test Optimization runtime), and selects the instrumented
   toolchains through the public test's transition. Builds without instrumented
   tests fetch neither the instrumented SDKs nor Mini, and the instrumentation
-  needs no host Go. The ddtest release is pinned in
+  needs no host Go. ddtest v1.15.0 is pinned in
   `modules/go/topt_go_ddtest_repository.bzl`.
 - Bzlmod root modules configure the SDK to instrument with
   `topt_go_ddtest.sdk(...)` (`go_mod`, `go_version`, `base_sdk_roots`,

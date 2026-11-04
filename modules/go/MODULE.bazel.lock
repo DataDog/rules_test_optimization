@@ -158,7 +158,7 @@
   "moduleExtensions": {
     "//:topt_go_ddtest_extension.bzl%topt_go_ddtest": {
       "general": {
-        "bzlTransitiveDigest": "bvTyU65OW4peX9l/9w4+j2N6yCafmIc+4odpplaz/7g=",
+        "bzlTransitiveDigest": "MUCAQ/BJEp4WdR7flf/pRC8W0c61GqCSJJoB8Ix6MC0=",
         "usagesDigest": "37UHIfEv9dsxzlRkupsIHixyGMM/t763tmPy5HMUTlA=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_skylib bazel_skylib+",
