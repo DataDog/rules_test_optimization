@@ -368,25 +368,26 @@ Planned next slices:
 - isolate repository output/rendering helpers
 - keep parity tests green on every slice before removing legacy wrappers
 
-## Publication checklist (when BCR publication is enabled)
+## Publication checklist (BCR)
 
 Release archives support direct installation without BCR. See the
 [release runbook](../CONTRIBUTING.md#release-runbook-core--companion-modules)
-for bundle generation and draft-release gates. BCR publication is a separate
-operation. When publishing to BCR, update and verify:
+for bundle generation and draft-release gates. BCR publication is a separate,
+manual operation, and only these modules are published:
 
-- Module entries for:
-  - `datadog-rules-test-optimization`
-  - `datadog-rules-test-optimization-go`
-  - `datadog-rules-test-optimization-python`
-  - `datadog-rules-test-optimization-java`
-  - `datadog-rules-test-optimization-nodejs`
-  - `datadog-rules-test-optimization-dotnet`
-  - `datadog-rules-test-optimization-ruby`
-- Per-module BCR files:
-  - `MODULE.bazel`
-  - `metadata.json`
-  - `source.json`
-- Companion module `source.json` maps archive root to `modules/go` via
-  `strip_prefix` (and similarly for `modules/python`, `modules/java`,
-  `modules/nodejs`, `modules/dotnet`, and `modules/ruby`).
+- `datadog-rules-test-optimization`
+- `datadog-rules-test-optimization-go`
+
+`.bcr/` holds their metadata, source and presubmit templates, in the layout of
+[publish-to-bcr](https://github.com/bazel-contrib/publish-to-bcr). For each
+module, the BCR entry needs:
+
+- `metadata.json`, with the new version in `versions`.
+- `<version>/MODULE.bazel`, copied from the release archive.
+- `<version>/source.json`, with the release archive's URL and integrity. The Go
+  companion's `strip_prefix` ends in `/modules/go`.
+- `<version>/presubmit.yml`.
+
+Before opening the pull request, run
+`bazel run -- //tools:bcr_validation --check=<module>@<version>` in the BCR
+repository.

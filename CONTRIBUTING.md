@@ -303,9 +303,9 @@ This product includes software developed at Datadog
 - Companion source mapping:
   - Ensure release metadata maps each companion source to `modules/<language>` (strip-prefix/subdirectory strategy).
 - BCR metadata checklist (performed in the Bazel Central Registry repo):
-  - Core module entry includes `MODULE.bazel`, `metadata.json`, and `source.json`.
-  - Companion entries include `MODULE.bazel`, `metadata.json`, and `source.json`.
-  - Each companion `source.json` uses a `strip_prefix` that resolves to `modules/<language>` at archive root.
+  - Only the core module and the Go companion are published; `.bcr/` holds their templates.
+  - Each entry includes `MODULE.bazel`, `metadata.json`, `source.json`, and `presubmit.yml`.
+  - The Go companion's `source.json` uses a `strip_prefix` that resolves to `modules/go` at archive root.
   - Generate scaffolding with BCR helper tooling (for example `bazel run //tools:add_module`) and then verify each generated file.
 - Pre-announce validation:
   - core tests, companion tests, examples build, integration harness, hermetic lane all green.
