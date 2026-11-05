@@ -40,9 +40,8 @@ def _contract_test(ctx):
     good = "version=%s\ncontract=%s\nsdk_name=%s\n" % (DDTEST_RELEASE.runtime_version, DDTEST_RELEASE.contract, DDTEST_RELEASE.sdk_name)
     asserts.equals(env, None, contract_error(parse_contract(good), "test"))
 
-    # The release tag is not what the runtime records.
-    tagged = good.replace(DDTEST_RELEASE.runtime_version, DDTEST_RELEASE.tag)
-    asserts.true(env, "version" in contract_error(parse_contract(tagged), "test"))
+    other = good.replace(DDTEST_RELEASE.runtime_version, "v0.0.0-other")
+    asserts.true(env, "version" in contract_error(parse_contract(other), "test"))
     asserts.true(env, "contract" in contract_error(parse_contract(good.replace("contract=1", "contract=2")), "test"))
     asserts.true(env, "sdk_name" in contract_error(parse_contract(good.replace("sdk_name=ddto", "sdk_name=go")), "test"))
     asserts.true(env, "contract" in contract_error(parse_contract(""), "test"))

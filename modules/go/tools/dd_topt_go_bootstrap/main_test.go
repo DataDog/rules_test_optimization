@@ -1779,8 +1779,8 @@ func TestRunGuidedWritesDdtestSetup(t *testing.T) {
 	const goMod = "module example.com/service\n\ngo 1.25.0\n"
 	dir, moduleFile := writeModuleFile(t, `module(name = "example")
 
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
 `)
 	cfg := config{
 		workspaceDir:       dir,

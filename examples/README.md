@@ -19,9 +19,6 @@ repository, use `./bazelw` for local development convenience.
 
 ## Prerequisites
 
-The Go examples follow the unreleased ddtest backend on this branch. Use a
-matching development commit, not the published `v1.4.0` Orchestrion archive.
-See the [Git installation recipe](../docs/Installation_Reference.md#option-b-install-from-a-git-commit).
 The NodeJS, .NET, and Ruby smoke sources check Bazel wiring; they do not install
 or validate a real tracer. A project needs its own file-mode test runtime as
 explained in the [runtime prerequisites](../docs/Language_Onboarding.md#runtime-prerequisites).
@@ -32,13 +29,13 @@ explained in the [runtime prerequisites](../docs/Language_Onboarding.md#runtime-
   and older releases without bundle assets. Omit overrides only when the
   selected modules are available from your configured registry.
 - Add module dependencies before `use_extension(...)`:
-  - `bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")`
-  - `bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")` for Go macro usage
-  - `bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.4.0")` for Python macro usage
-  - `bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.4.0")` for Java macro usage
-  - `bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.4.0")` for NodeJS macro usage
-  - `bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.4.0")` for .NET macro usage
-  - `bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.4.0")` for Ruby macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")`
+  - `bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")` for Go macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-python", version = "2.0.0")` for Python macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-java", version = "2.0.0")` for Java macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "2.0.0")` for NodeJS macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "2.0.0")` for .NET macro usage
+  - `bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "2.0.0")` for Ruby macro usage
   - `bazel_dep(name = "rules_go", ...)` (upstream, `0.59.0` or newer) for Go examples shown below
 - For NodeJS/.NET/Ruby examples shown below, also pin reference rulesets and register toolchains:
   - `bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")`
@@ -71,13 +68,13 @@ explained in the [runtime prerequisites](../docs/Language_Onboarding.md#runtime-
 MODULE.bazel:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.4.0")
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.4.0")
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.4.0")
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.4.0")
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "2.0.0")
 
 bazel_dep(name = "rules_go", version = "0.60.0")  # or newer
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
@@ -536,8 +533,8 @@ added.
 MODULE.bazel:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
 bazel_dep(name = "rules_go", version = "0.60.0")  # or newer
 
 git_override(

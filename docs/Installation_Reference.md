@@ -16,12 +16,9 @@ and multi-service onboarding, use [`docs/Language_Onboarding.md`](Language_Onboa
 
 ### Option A: install from a release archive (recommended)
 
-The Go instructions on this branch describe the unreleased ddtest integration.
-`v1.4.0` is the latest published release and still uses Orchestrion for Go;
-follow its [versioned guide](https://github.com/DataDog/rules_test_optimization/blob/v1.4.0/README.md)
-for that setup. To try ddtest before the next major release, use the
-[commit install](#option-b-install-from-a-git-commit). Do not combine its SDK
-configuration with the `v1.4.0` archive.
+Releases before `v2.0.0` use Orchestrion for Go; for that setup, follow the
+[`v1.4.0` guide](https://github.com/DataDog/rules_test_optimization/blob/v1.4.0/README.md).
+Do not combine the SDK configuration below with a 1.x archive.
 
 Download `INSTALL.md`, `release.json`, and `SHA256SUMS` from the chosen
 [GitHub release](https://github.com/DataDog/rules_test_optimization/releases).
@@ -63,16 +60,14 @@ tuple further below still belongs to `v1.2.0`.
 
 Use this for an unreleased change, an older release without bundle assets, or
 a private repository that requires Git authentication. Pin the same published
-commit for core and companions. The examples use this branch's module version,
-`1.4.0`; the override selects the implementation. For the ddtest Go setup, use
-a commit containing that backend. A commit or archive from the published
-`v1.4.0` release still contains Orchestrion. For another revision, match the
-module versions to its `MODULE.bazel` files.
+commit for core and companions. The examples use module version `2.0.0`; the
+override selects the implementation. For another revision, match the module
+versions to its `MODULE.bazel` files.
 
 In your `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -80,7 +75,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_go_test)
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -93,7 +88,7 @@ git_override(
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 # Optional companion module (only needed if you use dd_topt_py_test)
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-python",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -102,7 +97,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_java_test)
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-java",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -111,7 +106,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_nodejs_test)
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-nodejs",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -120,7 +115,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_dotnet_test)
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-dotnet",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -129,7 +124,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_ruby_test)
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-ruby",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -356,7 +351,7 @@ remove that override and rerun. If the old block's fork commit no longer loads,
 run bootstrap from another workspace with `--workspace <path>`, or delete the
 old block by hand. Managed pin-file blocks that 1.x wrote in BUILD files are
 harmless and can be deleted. See the
-[migration note](../CHANGELOG.md#unreleased).
+[migration note](../CHANGELOG.md#migrating-go-consumers).
 
 A Bzlmod workspace whose `go.mod` requires `github.com/DataDog/ddtest/ddto`, to
 use Mini's Go API in tests, must replace `go_deps`' copy of that module with
@@ -681,7 +676,7 @@ If your repository needs sync + uploader only (including non-Go languages),
 depend on core only:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -874,7 +869,7 @@ filegroup(
 
 ## WORKSPACE installation (Bazel without Bzlmod)
 
-WORKSPACE mode is supported for v1 when Bzlmod is disabled.
+WORKSPACE mode is supported when Bzlmod is disabled.
 
 ### 1) Add this repository in `WORKSPACE`
 

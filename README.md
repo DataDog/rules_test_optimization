@@ -10,13 +10,10 @@ This product includes software developed at Datadog
 
 This repository provides Bazel integrations that fetch Datadog Test Optimization metadata during module/repository resolution and materialize JSON files for use in your build. It also generates public filegroups so consumers can depend on stable labels instead of wiring files manually.
 
-> This branch documents the next major Go integration, which uses `ddtest instrument`.
-> The latest published release, [`v1.4.0`](https://github.com/DataDog/rules_test_optimization/releases/tag/v1.4.0),
-> still uses Orchestrion for Go. For that release, use its
-> [versioned documentation](https://github.com/DataDog/rules_test_optimization/blob/v1.4.0/README.md)
-> and `INSTALL.md` asset. To try the Go setup below, pin core and the Go companion
-> to the same development commit using the
-> [Git recipe](docs/Installation_Reference.md#option-b-install-from-a-git-commit).
+> Version 2.0.0 instruments Go tests with `ddtest instrument` instead of
+> Orchestrion, which is a breaking change for Go consumers. To upgrade from 1.x,
+> follow the [migration note](CHANGELOG.md#migrating-go-consumers). For 1.x, use
+> the [`v1.4.0` documentation](https://github.com/DataDog/rules_test_optimization/blob/v1.4.0/README.md).
 > Other language companions keep their existing APIs.
 
 ## Onboarding paths
@@ -35,7 +32,7 @@ Pick the path that matches your repository:
 - **Managed Go/Python monorepo:** one invocation-scoped aggregate repository,
   with targets and services derived by a consumer-owned command instead of a
   checked-in mapping
-- **WORKSPACE mode:** fully supported for v1 when Bzlmod is disabled, including Go, Python, and Java companion helpers
+- **WORKSPACE mode:** fully supported when Bzlmod is disabled, including Go, Python, and Java companion helpers
 - **Other languages:** use core sync/uploader now, or follow companion patterns for custom `dd_topt_<lang>_test` modules
 
 ### Sync contract comparison
@@ -220,10 +217,6 @@ automatically. No per-target disable attribute is required.
 
 ## Published Go onboarding pins
 
-These commands are for a backend already merged into `main`. Until the ddtest
-integration merges, use its full development commit for local evaluation and
-omit `--verify-main-reachable`; do not publish those preview pins as a release.
-
 When a repository consumes this project from GitHub, pin a commit that is
 already reachable from `origin/main`. Do not publish snippets that point at a
 feature-branch commit: those commits can disappear after squash merge and break
@@ -266,10 +259,7 @@ check as the dev helper.
 
 Replace `<release-archive-url>`, `<release-archive-sha256>`, and
 `<archive-prefix>` with the values from the release's `INSTALL.md`. Match the
-Datadog `bazel_dep` versions to that release. The Go examples target this
-branch's unreleased ddtest integration and use commit overrides instead; the
-`1.4.0` module version in those blocks matches this branch's `MODULE.bazel`,
-not the published `v1.4.0` Go behavior. For Git installation, use the
+Datadog `bazel_dep` versions to that release. For Git installation, use the
 [commit recipe](docs/Installation_Reference.md#option-b-install-from-a-git-commit).
 
 ### Bzlmod + core only (any language)
@@ -278,7 +268,7 @@ Use this when you do not need `dd_topt_go_test`:
 
 ```bzl
 # MODULE.bazel
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization",
     urls = ["<release-archive-url>"],
@@ -377,19 +367,20 @@ prerequisite block below, then let the guided bootstrap finish the Go-specific
 setup.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
-git_override(
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
+archive_override(
     module_name = "datadog-rules-test-optimization",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<ddtest-rule-commit>",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
-git_override(
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
+archive_override(
     module_name = "datadog-rules-test-optimization-go",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<ddtest-rule-commit>",
-    strip_prefix = "modules/go",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/go",
 )
 bazel_dep(name = "rules_go", version = "0.60.0")
 ```
@@ -462,7 +453,7 @@ message that says what to configure; see
 [Troubleshooting](docs/Troubleshooting.md#instrumented-test-fails-no-go-sdk-to-instrument).
 
 Rerunning the bootstrap on a workspace set up by 1.x replaces the Go block that
-1.x wrote. See the [migration note](CHANGELOG.md#unreleased) and
+1.x wrote. See the [migration note](CHANGELOG.md#migrating-go-consumers) and
 [Bootstrap stops on a rules_go fork override](docs/Troubleshooting.md#bootstrap-stops-on-a-rules_go-fork-override).
 
 If the Go module requires `github.com/DataDog/ddtest/ddto` to use Mini's Go API
@@ -579,7 +570,7 @@ named config. Python does not declare `rules_go` and needs no Go SDK
 configuration.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization",
     urls = ["<release-archive-url>"],
@@ -587,7 +578,7 @@ archive_override(
     strip_prefix = "<archive-prefix>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-python",
     urls = ["<release-archive-url>"],
@@ -729,7 +720,7 @@ absent.
 ### Bzlmod + Java companion (`dd_topt_java_test`)
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-java",
     urls = ["<release-archive-url>"],
@@ -797,7 +788,7 @@ payloads; the macro does not install it. See
 ```bzl
 bazel_dep(name = "aspect_rules_js", version = "3.0.0-rc5")
 bazel_dep(name = "rules_nodejs", version = "6.7.3")
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-nodejs",
     urls = ["<release-archive-url>"],
@@ -835,7 +826,7 @@ payloads; the macro does not install it. See
 
 ```bzl
 bazel_dep(name = "rules_dotnet", version = "0.21.5")
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-dotnet",
     urls = ["<release-archive-url>"],
@@ -895,7 +886,7 @@ payloads; the macro does not install it. See
 
 ```bzl
 bazel_dep(name = "rules_ruby", version = "0.21.1")
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-ruby",
     urls = ["<release-archive-url>"],
@@ -1132,7 +1123,7 @@ dd_test_optimization_targets(
 
 ### WORKSPACE mode
 
-WORKSPACE remains supported for v1. Minimal setup:
+WORKSPACE remains supported. Minimal setup:
 
 ```bzl
 # WORKSPACE
@@ -1325,7 +1316,7 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 | rules_go (Go users) | `0.60.0` | Upstream `rules_go`, `0.59.0` or newer; CI covers `0.59.0`, `0.60.0`, `0.61.1`, `0.62.0`, `0.63.0`, `0.64.2`, and `0.65.0` (which requires Go `1.26`) |
 | Go SDK (example) | `1.25.0` | The version that `ddtest instrument` instruments; consumer repositories may use another version |
 | `ddtest instrument` | pinned | The Go companion pins one ddtest release in [`modules/go/topt_go_ddtest_repository.bzl`](modules/go/topt_go_ddtest_repository.bzl) |
-| Published release | `1.4.0` | Its Go integration uses Orchestrion; the ddtest integration on this branch is unreleased |
+| Module versions | `2.0.0` | Use release archives when available, or the Git alternative |
 
 - **Bazel 8.8.2 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
 - **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.8.2` during migration away from WORKSPACE mode in Bazel 9+
@@ -1813,7 +1804,7 @@ Use the raw macro directly only when you need the lower-level API.
 Before using it directly, configure the Go companion extension in `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 go_topt = use_extension(

@@ -898,7 +898,7 @@ pins. See [Go instrumentation SDK](Configuration_Reference.md#go-instrumentation
 for the configuration and
 [ddtest's Bazel documentation](https://github.com/DataDog/ddtest/blob/main/ddto/docs/bazel.md)
 for the ddtest side. To move a 1.x setup, see the
-[migration note](../CHANGELOG.md#unreleased).
+[migration note](../CHANGELOG.md#migrating-go-consumers).
 
 ### Instrumented test fails: no Go SDK to instrument
 
@@ -974,7 +974,7 @@ repository that provides the same module.
 a message such as:
 
 ```text
-Mini's repository: DDTEST_INSTRUMENT has version="<value>", want "v0.0.0-pre-release-eb41d04" (ddtest pre-release-eb41d04)
+Mini's repository: DDTEST_INSTRUMENT has version="<value>", want "v1.15.0" (ddtest v1.15.0)
 ```
 
 For an SDK, the message starts with `the instrumented SDK for <platform>`.

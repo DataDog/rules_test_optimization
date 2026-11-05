@@ -15,6 +15,8 @@ versioning.
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-11-05
+
 ### Changed
 
 - Go tests are instrumented by `ddtest instrument` instead of Orchestrion. This
@@ -24,7 +26,7 @@ versioning.
   is ddtest's Test Optimization runtime), and selects the instrumented
   toolchains through the public test's transition. Builds without instrumented
   tests fetch neither the instrumented SDKs nor Mini, and the instrumentation
-  needs no host Go. The ddtest release is pinned in
+  needs no host Go. ddtest v1.15.0 is pinned in
   `modules/go/topt_go_ddtest_repository.bzl`.
 - Bzlmod root modules configure the SDK to instrument with
   `topt_go_ddtest.sdk(...)` (`go_mod`, `go_version`, `base_sdk_roots`,
@@ -96,7 +98,7 @@ versioning.
 - Remove the `rules_go` override that points at the fork
   (`third_party/rgo/...`) and the `orchestrion` extension with its
   `rules_go_orchestrion_tool` repository, and depend on upstream `rules_go`
-  `0.60.0` or newer. In WORKSPACE, declare upstream `rules_go` as
+  `0.59.0` or newer. In WORKSPACE, declare upstream `rules_go` as
   `io_bazel_rules_go`, drop the fork arguments of
   `datadog_go_test_optimization_workspace_repositories`, and remove the
   `dd_topt_go_orchestrion_tool_repo` call.
@@ -105,13 +107,16 @@ versioning.
 - Add `topt_go_ddtest.sdk(go_mod = "//:go.mod")` to the root `MODULE.bazel`,
   or call `topt_go_ddtest_workspace_repositories(go_version = ...)` in
   WORKSPACE.
-- Or rerun `dd_topt_go_bootstrap`: it replaces the
-  `# BEGIN Datadog Go Orchestrion bootstrap` block with the new managed block,
-  and stops if an unmanaged `rules_go` override still points at the fork. If
-  the old block's fork commit no longer loads, run the bootstrap from another
-  workspace with `--workspace <path>`, or delete the block by hand. Old
+- Or rerun `dd_topt_go_bootstrap` without the flags listed above: it replaces
+  the `# BEGIN Datadog Go Orchestrion bootstrap` block with the new managed
+  block, and stops if an unmanaged `rules_go` override still points at the
+  fork. If the old block's fork commit no longer loads, run the bootstrap from
+  another workspace with `--workspace <path>`, or delete the block by hand. Old
   `# BEGIN Datadog Go Pin Files` blocks in BUILD files are harmless and can be
   deleted.
+- Regenerate a validation script that 1.x wrote by rerunning the bootstrap with
+  `--write-validation-script`. The old script queries a target of the `rules_go`
+  fork and exits before it runs anything.
 - If `go.mod` requires `github.com/DataDog/ddtest/ddto`, replace `go_deps`'
   copy with the generated Mini: `use_repo(topt_go_ddtest, "topt_go_ddtest_mini")`
   and `override_repo(go_deps, com_github_datadog_ddtest_ddto = "topt_go_ddtest_mini")`.

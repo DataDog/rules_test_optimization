@@ -13,27 +13,26 @@ Go companion module through Bzlmod.
 
 ## Module Wiring
 
-These instructions target the unreleased ddtest backend. Replace
-`<ddtest-rule-commit>` with one full commit containing that backend for both
-modules. The `1.4.0` module version matches this branch; the published
-`v1.4.0` release still uses Orchestrion. After the next major release, use its
-`INSTALL.md` archive tuple instead. See the
-[installation reference](../../../../docs/Installation_Reference.md#option-b-install-from-a-git-commit).
+Add core and Go companion blocks from the release's `INSTALL.md`, with the same
+archive URL and SHA256. Replace the placeholders below and match the module
+versions to the release. For development commits, use the Git alternative in
+the [installation reference](../../../../docs/Installation_Reference.md#option-b-install-from-a-git-commit).
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "1.4.0")
-git_override(
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
+archive_override(
     module_name = "datadog-rules-test-optimization",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<ddtest-rule-commit>",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "1.4.0")
-git_override(
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
+archive_override(
     module_name = "datadog-rules-test-optimization-go",
-    remote = "https://github.com/DataDog/rules_test_optimization.git",
-    commit = "<ddtest-rule-commit>",
-    strip_prefix = "modules/go",
+    urls = ["<release-archive-url>"],
+    sha256 = "<release-archive-sha256>",
+    strip_prefix = "<archive-prefix>/modules/go",
 )
 
 bazel_dep(name = "rules_go", version = "0.60.0")
@@ -178,8 +177,11 @@ belongs to `--workspace-mode`, not the Bzlmod guided flow.
 
 ## Migrating A 1.x Setup
 
-Rerun the bootstrap with the same flags. It replaces the Go bootstrap block
-that 1.x wrote with the new block and writes no `rules_go` override.
+Rerun the bootstrap with the same flags, except the ones that 2.0.0 removed,
+such as `--dd-trace-go-version` and `--orchestrion-version`: the bootstrap
+rejects them, and the changelog's 2.0.0 section lists them all. It replaces the
+Go bootstrap block that 1.x wrote with the new block and writes no `rules_go`
+override.
 
 - The bootstrap stops when `MODULE.bazel` still has an unmanaged override of
   `rules_go` that points at the 1.x `rules_go` fork. Remove that override so
@@ -191,8 +193,11 @@ that 1.x wrote with the new block and writes no `rules_go` override.
   `dd_topt_go_test` fails analysis with a migration message while they remain.
 - The `# BEGIN Datadog Go Pin Files` blocks that 1.x wrote in BUILD files are
   harmless. You may delete them.
+- Regenerate a validation script that 1.x wrote with
+  `--write-validation-script`. The old script queries a target of the
+  `rules_go` fork and exits before it runs anything.
 
-The [migration note](../../../../CHANGELOG.md#unreleased) lists the files,
+The [migration note](../../../../CHANGELOG.md#migrating-go-consumers) lists the files,
 `go.mod` requirements, and metadata keys that changed.
 
 ## Manual Sync And Workspace Targets

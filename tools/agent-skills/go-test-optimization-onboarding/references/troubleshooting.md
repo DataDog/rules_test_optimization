@@ -187,7 +187,7 @@ Fix:
   then rerun the bootstrap. If Bazel cannot load the workspace to run the
   bootstrap, run it from another workspace with
   `--workspace /absolute/path/to/consumer`, or delete the old managed block by
-  hand. See the [migration note](../../../../CHANGELOG.md#unreleased) and
+  hand. See the [migration note](../../../../CHANGELOG.md#migrating-go-consumers) and
   [`docs/Troubleshooting.md`](../../../../docs/Troubleshooting.md#bootstrap-stops-on-a-rules_go-fork-override).
 
 ## Missing Git Metadata

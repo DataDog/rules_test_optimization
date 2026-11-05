@@ -136,7 +136,7 @@ Rerun the same bootstrap with `--write-bazelrc`. It replaces the content
 between the Datadog-managed markers with the current config, preserves all
 content outside those markers, and is idempotent. A workspace set up by 1.x
 must also replace its 1.x WORKSPACE wiring by hand with the helpers above; see
-the [migration note](../CHANGELOG.md#unreleased).
+the [migration note](../CHANGELOG.md#migrating-go-consumers).
 
 ## Validation
 
