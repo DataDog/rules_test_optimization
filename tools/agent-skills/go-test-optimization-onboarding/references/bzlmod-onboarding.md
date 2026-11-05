@@ -177,8 +177,11 @@ belongs to `--workspace-mode`, not the Bzlmod guided flow.
 
 ## Migrating A 1.x Setup
 
-Rerun the bootstrap with the same flags. It replaces the Go bootstrap block
-that 1.x wrote with the new block and writes no `rules_go` override.
+Rerun the bootstrap with the same flags, except the ones that 2.0.0 removed,
+such as `--dd-trace-go-version` and `--orchestrion-version`: the bootstrap
+rejects them, and the changelog's 2.0.0 section lists them all. It replaces the
+Go bootstrap block that 1.x wrote with the new block and writes no `rules_go`
+override.
 
 - The bootstrap stops when `MODULE.bazel` still has an unmanaged override of
   `rules_go` that points at the 1.x `rules_go` fork. Remove that override so

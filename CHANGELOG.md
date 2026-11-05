@@ -107,11 +107,11 @@ versioning.
 - Add `topt_go_ddtest.sdk(go_mod = "//:go.mod")` to the root `MODULE.bazel`,
   or call `topt_go_ddtest_workspace_repositories(go_version = ...)` in
   WORKSPACE.
-- Or rerun `dd_topt_go_bootstrap`: it replaces the
-  `# BEGIN Datadog Go Orchestrion bootstrap` block with the new managed block,
-  and stops if an unmanaged `rules_go` override still points at the fork. If
-  the old block's fork commit no longer loads, run the bootstrap from another
-  workspace with `--workspace <path>`, or delete the block by hand. Old
+- Or rerun `dd_topt_go_bootstrap` without the flags listed above: it replaces
+  the `# BEGIN Datadog Go Orchestrion bootstrap` block with the new managed
+  block, and stops if an unmanaged `rules_go` override still points at the
+  fork. If the old block's fork commit no longer loads, run the bootstrap from
+  another workspace with `--workspace <path>`, or delete the block by hand. Old
   `# BEGIN Datadog Go Pin Files` blocks in BUILD files are harmless and can be
   deleted.
 - If `go.mod` requires `github.com/DataDog/ddtest/ddto`, replace `go_deps`'
