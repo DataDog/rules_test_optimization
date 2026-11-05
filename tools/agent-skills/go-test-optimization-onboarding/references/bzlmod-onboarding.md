@@ -193,6 +193,9 @@ override.
   `dd_topt_go_test` fails analysis with a migration message while they remain.
 - The `# BEGIN Datadog Go Pin Files` blocks that 1.x wrote in BUILD files are
   harmless. You may delete them.
+- Regenerate a validation script that 1.x wrote with
+  `--write-validation-script`. The old script queries a target of the
+  `rules_go` fork and exits before it runs anything.
 
 The [migration note](../../../../CHANGELOG.md#migrating-go-consumers) lists the files,
 `go.mod` requirements, and metadata keys that changed.

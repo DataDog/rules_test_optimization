@@ -114,6 +114,9 @@ versioning.
   another workspace with `--workspace <path>`, or delete the block by hand. Old
   `# BEGIN Datadog Go Pin Files` blocks in BUILD files are harmless and can be
   deleted.
+- Regenerate a validation script that 1.x wrote by rerunning the bootstrap with
+  `--write-validation-script`. The old script queries a target of the `rules_go`
+  fork and exits before it runs anything.
 - If `go.mod` requires `github.com/DataDog/ddtest/ddto`, replace `go_deps`'
   copy with the generated Mini: `use_repo(topt_go_ddtest, "topt_go_ddtest_mini")`
   and `override_repo(go_deps, com_github_datadog_ddtest_ddto = "topt_go_ddtest_mini")`.
