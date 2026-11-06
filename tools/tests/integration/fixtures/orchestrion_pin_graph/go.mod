@@ -1,0 +1,3 @@
+module example.com/orchestrion-pin-graph
+
+go 1.26.0
