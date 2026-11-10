@@ -1,2 +1,6 @@
 # Preserve Bazel 7 behavior for optional file globs under Bazel 8.
 common --incompatible_disallow_empty_glob=false
+
+# Java targets run on Bazel's JDK 21, not on the host JDK, whose version comes
+# from the CI image: ubuntu-26.04 has Java 25, newer than the javac toolchain.
+build --java_runtime_version=remotejdk_21
