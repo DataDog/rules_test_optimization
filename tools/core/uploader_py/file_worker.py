@@ -25,6 +25,8 @@ from typing import Any, Callable, Mapping, Protocol
 
 from validate_payload_schema import validate_payload as validate_schema_payload
 
+from topt_runtime.bep_execution import test_result_event_count
+
 from .codeowners import CodeOwnersMatch, CodeOwnersMatcher
 from .endpoints import EndpointSet
 from .enrichment import ContextPlan, enrich_test_payload, payload_repo_key
@@ -342,6 +344,7 @@ def _process_test(
         source_path=task.display_path,
         payload_type=task.payload_type,
         events=_event_count(payload),
+        test_events=test_result_event_count(payload),
         chunks_created=len(requests),
         requests_planned=len(requests),
     )

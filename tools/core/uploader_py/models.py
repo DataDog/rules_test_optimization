@@ -73,3 +73,4 @@ class FileResult:
     phase_times: tuple[tuple[str, float, float], ...] = field(default=(), compare=False)
     source_bytes: int = field(default=0, compare=False)
     prepared_body_bytes: int = field(default=0, compare=False)
+    test_events: int = 0

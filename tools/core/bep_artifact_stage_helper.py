@@ -80,13 +80,13 @@ def main(argv: list[str]) -> int:
     valid_bep_paths = _valid_bep_paths(args.bep_json)
     if not valid_bep_paths:
         return 0
-    freshness = doctor._parse_bep_freshness(valid_bep_paths, unavailable_is_error=True)
+    freshness = doctor._parse_bep_freshness(valid_bep_paths, unavailable_is_error=True, workspace=workspace)
     if freshness is None:
         return 0
     selected_outputs = sorted(
         doctor._selected_bep_artifact_outputs(freshness, workspace, args.remote_artifacts)
     )
-    blocked_labels = sorted(doctor._blocked_bep_artifact_labels(freshness, args.remote_artifacts))
+    blocked_labels = sorted(doctor._blocked_bep_artifact_labels(freshness, args.remote_artifacts).union(freshness.ambiguous_labels))
     staged = doctor._stage_bep_artifacts(
         freshness,
         workspace=workspace,

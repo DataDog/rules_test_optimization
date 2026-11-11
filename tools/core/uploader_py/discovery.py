@@ -12,12 +12,16 @@ Discovery happens before scheduling so workers never race filesystem traversal.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from pathlib import Path
 import time
 from typing import Callable, Iterable
 
+from topt_runtime.bep_execution import canonical_output_directory_key, find_test_output_directories
+
 from .models import FileTask, PayloadType
+from .json_utils import strict_json_loads
 
 
 _PAYLOAD_SUBDIRECTORIES = (
@@ -30,6 +34,21 @@ _PAYLOAD_SUFFIXES = frozenset({".json", ".msgpack"})
 
 class DiscoveryError(ValueError):
     """Configured testlogs discovery cannot be performed safely."""
+
+
+def read_target_label(output_dir: Path) -> str | None:
+    """Read an optional regular sidecar without following it outside its output."""
+    metadata_file = output_dir / "bazel_target_metadata.json"
+    try:
+        if metadata_file.is_symlink():
+            return None
+        if metadata_file.resolve(strict=True).parent != output_dir.resolve(strict=True):
+            return None
+        value = strict_json_loads(metadata_file.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    label = value.get("bazel.target") if isinstance(value, dict) else None
+    return label if isinstance(label, str) and label else None
 
 
 @dataclass(frozen=True)
@@ -109,7 +128,7 @@ def discover_file_tasks(
     outputs_by_key: dict[str, list[DiscoveredOutput]] = {}
     for scan_root in normalized_roots:
         for output_path in _find_test_outputs(scan_root.path, max_depth=max_depth):
-            output_key = output_path.relative_to(scan_root.path).as_posix()
+            output_key = canonical_output_directory_key(output_path.relative_to(scan_root.path).as_posix())
             outputs_by_key.setdefault(output_key, []).append(
                 DiscoveredOutput(
                     path=output_path,
@@ -267,19 +286,7 @@ def _normalize_scan_roots(scan_roots: Iterable[ScanRoot]) -> tuple[ScanRoot, ...
 
 
 def _find_test_outputs(root: Path, *, max_depth: int) -> tuple[Path, ...]:
-    found: list[Path] = []
-    for directory, subdirectories, _filenames in os.walk(root, followlinks=False):
-        current = Path(directory)
-        relative = current.relative_to(root)
-        depth = 0 if relative == Path(".") else len(relative.parts)
-        subdirectories.sort()
-        if current.name == "test.outputs":
-            found.append(current)
-            subdirectories.clear()
-            continue
-        if max_depth > 0 and depth >= max_depth:
-            subdirectories.clear()
-    return tuple(sorted(found, key=lambda path: path.as_posix()))
+    return find_test_output_directories(root, max_depth=max_depth)
 
 
 def _safe_payload_directory(path: Path, output: Path) -> bool:

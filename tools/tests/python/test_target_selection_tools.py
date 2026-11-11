@@ -63,7 +63,7 @@ class TargetSelectionTests(unittest.TestCase):
             labels = {path.resolve(): f"//pkg:t{i}" for i, path in enumerate(outputs)}
             freshness = doctor.BepFreshness(pairs, set(), [], set())
             # Metadata I/O is unrelated to the matching cost being measured.
-            with mock.patch.object(doctor, "_metadata_files", return_value=[Path("metadata")]), mock.patch.object(doctor, "_load_json", return_value={}):
+            with mock.patch.object(doctor, "_metadata_files", return_value=[Path("metadata")]), mock.patch.object(doctor, "_load_json", return_value={}), mock.patch.object(doctor, "_payload_files", return_value=[Path("payload.json")]):
                 selected = doctor._validate_expected_target_bep_freshness(
                     outputs, set(labels.values()), freshness, required=True,
                     label_by_output_dir=labels,
@@ -76,13 +76,62 @@ class TargetSelectionTests(unittest.TestCase):
         outputs = [Path("/logs/pkg/a/test.outputs"), Path("/logs/notpkg/a/test.outputs"), Path("/staged/opaque/test.outputs")]
         labels = {outputs[0].resolve(): "//pkg:a", outputs[1].resolve(): "//pkg:a", outputs[2].resolve(): "//other:a"}
         freshness = doctor.BepFreshness(pairs, set(), [], set())
-        with mock.patch.object(doctor, "_metadata_files", return_value=[Path("metadata")]), mock.patch.object(doctor, "_load_json", return_value={}):
+        with mock.patch.object(doctor, "_metadata_files", return_value=[Path("metadata")]), mock.patch.object(doctor, "_load_json", return_value={}), mock.patch.object(doctor, "_payload_files", return_value=[Path("payload.json")]):
             selected = doctor._validate_expected_target_bep_freshness(
                 outputs, set(labels.values()), freshness, required=True,
                 label_by_output_dir=labels,
                 output_key_by_output_dir={outputs[2].resolve(): "other/a/test.outputs"},
             )
         self.assertEqual([outputs[0], outputs[2]], selected)
+
+    def test_bep_index_matches_physical_retry_roots(self) -> None:
+        index = doctor._BepOutputIndex({("//pkg:test", "pkg/test/test_attempts/attempt_1.outputs/test.outputs")})
+        self.assertEqual({"//pkg:test"}, index.labels_for(Path("/logs/pkg/test/test_attempts/attempt_1.outputs"), None))
+        self.assertEqual(set(), index.labels_for(Path("/logs/notpkg/test/test_attempts/attempt_1.outputs"), None))
+
+    def test_literal_retry_like_target_is_not_selected_as_its_parent(self) -> None:
+        key = "pkg/foo/test_attempts/attempt_1.outputs/test.outputs"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / key
+            output.mkdir(parents=True)
+            (output / "bazel_target_metadata.json").write_text('{"bazel.target":"//pkg/foo/test_attempts:attempt_1.outputs"}')
+            discovery = DiscoveryResult((DiscoveredOutput(output, key, root, False),), (), ())
+            with self.assertRaises(expected_targets.ExpectedTargetsError):
+                expected_targets.select_expected_outputs(discovery, expected_targets.ExpectedTargetsPlan(("//pkg:foo",)))
+            literal = "//pkg/foo/test_attempts:attempt_1.outputs"
+            self.assertEqual(discovery.outputs, expected_targets.select_expected_outputs(
+                discovery, expected_targets.ExpectedTargetsPlan((literal,))).outputs)
+
+    def test_retry_ancestry_requires_physical_or_bep_provenance(self) -> None:
+        key = "pkg/foo/test_attempts/attempt_1.outputs/test.outputs"
+        plan = expected_targets.ExpectedTargetsPlan(("//pkg:foo",))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            physical = DiscoveredOutput(root / key.removesuffix("/test.outputs"), key, root, False)
+            discovered = DiscoveryResult((physical,), (), ())
+            self.assertEqual((physical,), expected_targets.select_expected_outputs(discovered, plan).outputs)
+            staged = DiscoveredOutput(root / "opaque/test.outputs", key, root, True)
+            discovered = DiscoveryResult((staged,), (), ())
+            with self.assertRaises(expected_targets.ExpectedTargetsError):
+                expected_targets.select_expected_outputs(discovered, plan)
+            self.assertEqual((staged,), expected_targets.select_expected_outputs(
+                discovered, plan, bep_outputs=(("//pkg:foo", key),)).outputs)
+            with self.assertRaisesRegex(expected_targets.ExpectedTargetsError, "BEP output target conflicts"):
+                expected_targets.select_expected_outputs(discovered, plan, bep_outputs=(("//other:test", key),))
+
+    def test_conflicting_physical_retry_sidecar_cannot_be_relabelled(self) -> None:
+        key = "pkg/foo/test_attempts/attempt_1.outputs/test.outputs"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / key.removesuffix("/test.outputs")
+            output.mkdir(parents=True)
+            metadata = output / "bazel_target_metadata.json"
+            metadata.write_text('{"bazel.target":"//other:test"}')
+            discovery = DiscoveryResult((DiscoveredOutput(output, key, root, False),), (), ())
+            with self.assertRaisesRegex(expected_targets.ExpectedTargetsError, "bazel.target metadata conflicts"):
+                expected_targets.select_expected_outputs(discovery, expected_targets.ExpectedTargetsPlan(("//pkg:foo",)))
+            self.assertEqual('{"bazel.target":"//other:test"}', metadata.read_text())
 
     def test_target_index_preserves_paths_attempts_and_ambiguity(self) -> None:
         index = expected_targets._TargetOutputIndex((
@@ -91,6 +140,9 @@ class TargetSelectionTests(unittest.TestCase):
         for key, labels in (
             ("pkg/foo/test.outputs", ["//pkg:foo"]),
             (r"pkg\foo\run_1_of_2\attempt_1\test.outputs", ["//pkg:foo"]),
+            ("pkg/foo/test_attempts/attempt_1.outputs/test.outputs", []),
+            ("pkg/foo/test_attempts/test.outputs", []),
+            ("pkg/foo/attempt_1.outputs/test.outputs", []),
             ("pkg/foo/shard_1_of_2/test.outputs", ["//pkg/foo:shard_1_of_2"]),
             ("pkg/other/nested/test.outputs", ["//pkg:other/nested"]),
             ("pkg/foobar/test.outputs", []),
