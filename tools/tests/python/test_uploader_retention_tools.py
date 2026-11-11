@@ -455,6 +455,18 @@ sys.exit(99)
             "DD_TEST_OPTIMIZATION_AGENTLESS_URL": f"http://127.0.0.1:{server.server_address[1]}",
             "DD_TEST_OPTIMIZATION_TMPDIR": str(root / "temporary"), "DD_TEST_OPTIMIZATION_PYTHON": sys.executable,
             "PYTHONPATH": str(resolve_runfile("tools/core/uploader_py/main.py").parents[1])})
+        if os.name == "nt":
+            # PowerShell needs executable extensions even when given an absolute
+            # path. Make native command discovery explicit in the isolated test.
+            env["PATHEXT"] = ".COM;.EXE;.BAT;.CMD"
+        if extension == "ps1" and case == "success":
+            python_path = sys.executable.replace("'", "''")
+            command = f"& '{python_path}' -c 'raise SystemExit(7)'; exit $LASTEXITCODE"
+            preflight = subprocess.run([launcher[0], "-NoProfile", "-Command", command],
+                cwd=root, env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(7, preflight.returncode,
+                f"Native PowerShell preflight failed; PATHEXT={env.get('PATHEXT', '<unset>')}\n"
+                + preflight.stdout + preflight.stderr)
         wrapper = resolve_runfile(f"tools/test_optimization/run_test_optimization_ci.{extension}")
         options = ["--upload"] if extension == "sh" else ["-Upload"]
         if case == "durable":
