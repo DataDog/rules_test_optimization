@@ -74,3 +74,28 @@ class FileResult:
     source_bytes: int = field(default=0, compare=False)
     prepared_body_bytes: int = field(default=0, compare=False)
     test_events: int = 0
+    request_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RequestOutcome:
+    """One logical test request, counted once across its source contributors."""
+
+    request_id: str
+    source_ids: tuple[str, ...]
+    attempts: int
+    succeeded: bool | None  # None means prepared by dry-run; nothing was sent.
+    phase_times: tuple[tuple[str, float, float], ...] = field(default=(), compare=False)
+    prepared_body_bytes: int = field(default=0, compare=False)
+
+    @property
+    def retries(self) -> int:
+        return max(0, self.attempts - 1)
+
+
+@dataclass(frozen=True)
+class WorkItemOutcome:
+    """Committed outcomes from one flush of a bounded source cohort."""
+
+    results: tuple[FileResult, ...] = ()
+    requests: tuple[RequestOutcome, ...] = ()

@@ -497,6 +497,7 @@ Rule: `dd_payload_uploader(...)`
 | `keep_payloads` | bool | `False` | Keep payload files after successful upload |
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
 | `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
+| `batch_test_payloads` | bool | `False` | Opt in to bounded test batches with event-local runtime IDs; Python uploader only |
 | `workers` | int | `8` | Maximum independent payload-file workers in Python mode; `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
 | `use_python_uploader` | bool | `True` | Use the default cross-platform Python uploader; set to `False` only for temporary rollback to the legacy platform runtime |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
@@ -908,6 +909,7 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_LOG_LEVEL` | `ERROR`, `WARN`, `INFO` (default), or `DEBUG`; see [log levels](#log-levels) |
 | `DD_TEST_OPTIMIZATION_DEBUG` | Legacy verbose logging switch, used when `DD_TEST_OPTIMIZATION_LOG_LEVEL` is unset |
 | `DD_TEST_OPTIMIZATION_GZIP` | Gzip test payloads before upload |
+| `DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS` | Override `batch_test_payloads`; accepts `1`/`0`, `true`/`false`, or `yes`/`no`. Enabled values require the Python uploader |
 | `DD_TEST_OPTIMIZATION_WORKERS` | Override the maximum independent payload-file workers in Python mode; must be a positive integer |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | Override uploader max wait |
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | Override uploader quiescence wait |

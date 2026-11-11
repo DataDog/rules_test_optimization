@@ -225,6 +225,47 @@ precedence. Leave
 `use_python_uploader` unset for the Python implementation. Set it to `False`
 only for temporary rollback to the legacy Bash or PowerShell implementation.
 
+#### Opt-in test batching
+
+Set `batch_test_payloads = True` on the uploader, or pass
+`"batch_test_payloads": True` through `uploader_kwargs`, to combine compatible
+small test sources. The runtime override
+`DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS=1` enables the same behavior; `0`
+disables it even when the rule attribute is enabled. Accepted boolean values
+are `1`/`0`, `true`/`false`, and `yes`/`no`, ignoring case and outer whitespace.
+The default is disabled. Legacy uploaders reject an enabled setting.
+
+Each worker owns at most 64 original sources and one active batch. Requests
+stay below the existing uncompressed byte guard, including envelope overhead.
+Large sources keep the ordinary per-file split path. Expanding a runtime ID
+across events is checked against the byte budget before mutation; sources that
+would exceed it keep their original envelope and the per-file path. Context changes or any
+other envelope difference flush the batch. Coverage and telemetry stay separate.
+
+The shared envelope retains common metadata. Each event carries its own
+`content.meta["runtime-id"]`; an event's existing value takes precedence over
+its type or global default. No runtime ID remains in the shared envelope.
+This representation needs intake compatibility validation before rollout.
+
+HTTP success acknowledges all whole sources in that request. A rejected batch
+with status 400, 413, or 422 gets one per-source pass to isolate the rejection.
+Authentication, transport, rate-limit, and server failures use the existing
+retry policy without a per-source fan-out. Rejected or interrupted sources
+remain recoverable, and `keep_payloads` preserves original bytes. Dry-run makes
+no HTTP request and leaves all sources unchanged.
+
+File and chunk counters still describe original sources. Request counters
+count each shared request and retry once. Source preparation timings and raw
+bytes are counted once per source; shared request timings and encoded body
+bytes are counted once per request, including a rejected batch before fallback.
+The additive `batching` report
+section records logical requests and their source IDs, including a rejected
+batch that later succeeds through individual uploads. Source schema warnings
+retain their warning and per-file upload behavior; they never silently drop a
+source from a mixed batch.
+If the outbound schema is missing or unsupported, the uploader uses ordinary
+per-file uploads and reports one `batching_schema_unavailable` warning.
+
 If your repository is small, the same helper can live in the root package. In
 large monorepos, prefer `//tools/test_optimization` or another lightweight
 package to avoid loading unrelated root package wiring when running doctor or

@@ -7,6 +7,13 @@
 
 set -euo pipefail
 
+BATCH_TEST_PAYLOADS=$(printf '%s' "${DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS:-}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+case "$BATCH_TEST_PAYLOADS" in
+    ''|0|false|no) ;;
+    1|true|yes) echo '[dd-uploader] error: batch_test_payloads requires use_python_uploader = True' >&2; exit 2 ;;
+    *) echo '[dd-uploader] error: DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS must be true or false' >&2; exit 2 ;;
+esac
+
 # NOTE: This is a template file. Placeholders like __DDTPL_QUIESCENT_SEC__ are replaced
 # by Starlark during rule execution. Double braces { and } are literal braces
 # (escaped for Python .format() compatibility).

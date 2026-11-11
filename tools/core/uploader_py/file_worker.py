@@ -29,7 +29,7 @@ from topt_runtime.bep_execution import test_result_event_count
 
 from .codeowners import CodeOwnersMatch, CodeOwnersMatcher
 from .endpoints import EndpointSet
-from .enrichment import ContextPlan, enrich_test_payload, payload_repo_key
+from .enrichment import ContextSelection, ContextPlan, enrich_test_payload, payload_repo_key
 from .json_utils import strict_json_dumps, strict_json_loads
 from .metrics import PhaseRecorder
 from .models import (
@@ -110,6 +110,7 @@ class WorkerRuntime:
     clock: Callable[[], float] = field(default=time.monotonic, repr=False, compare=False)
     cpu_clock: Callable[[], float] = field(default=time.thread_time, repr=False, compare=False)
     measurements: PhaseRecorder | None = field(default=None, repr=False, compare=False)
+    batch_schema: dict[str, Any] | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -312,10 +313,18 @@ def _process_test(
         return _skipped(task, "test_payload_without_events")
 
     warnings: list[str] = []
-    failure = _enrich_and_validate_test(task, runtime, payload, warnings)
+    failure, _context = _enrich_and_validate_test(task, runtime, payload, warnings)
     if failure is not None:
         return failure
 
+    return upload_prepared_test(task, runtime, transport, task_directory, payload, warnings)
+
+
+def upload_prepared_test(
+    task: FileTask, runtime: WorkerRuntime, transport: WorkerTransport,
+    task_directory: Path, payload: dict[str, Any], warnings: list[str],
+) -> FileResult:
+    """Use the existing split pipeline without reading or enriching twice."""
     try:
         with _phase(runtime, "encoding_split"):
             chunks = prepare_test_chunks(payload, task_directory)
@@ -480,7 +489,7 @@ def _enrich_and_validate_test(
     runtime: WorkerRuntime,
     payload: dict[str, Any],
     warnings: list[str],
-) -> FileResult | None:
+) -> tuple[FileResult | None, ContextSelection]:
     """Enrich one mutable test payload and validate its prepared shape."""
     with _phase(runtime, "enrichment"):
         bazel_metadata, sidecar_warning = _load_bazel_metadata(task)
@@ -518,7 +527,7 @@ def _enrich_and_validate_test(
             )
         except (TypeError, ValueError, OSError) as exc:
             _debug(runtime, task, f"enrichment failed with {type(exc).__name__}")
-            return _failed(task, "test_enrichment_failed", type(exc).__name__)
+            return _failed(task, "test_enrichment_failed", type(exc).__name__), context_selection
 
         warnings.extend(enrichment.warning_codes)
         _debug(
@@ -587,9 +596,9 @@ def _enrich_and_validate_test(
                     warning_codes=_unique_codes(warnings),
                     failure_code="enrichment_tags_missing",
                     failure_message=",".join(missing_tags),
-                )
+                ), context_selection
             _debug(runtime, task, "expected enrichment tags validated")
-    return None
+    return None, context_selection
 
 
 def _prepare_test_requests(

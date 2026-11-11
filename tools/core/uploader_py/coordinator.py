@@ -26,6 +26,8 @@ from .discovery import DiscoveryResult
 from .endpoints import EndpointSet
 from .file_worker import WorkerRuntime, process_file
 from .metrics import PhaseRecorder
+from .batch_worker import process_test_cohort
+from .batching import BatchCompatibilityError, schema_for_event_runtime_ids
 from .models import FileStatus
 from .reporting import AggregateReport
 from .resources import LoadedResources
@@ -58,6 +60,7 @@ class CoordinatorSettings:
     codeowners_file: Path | None = None
     invocation_cwd: Path | None = None
     launcher_directory: Path | None = None
+    batch_test_payloads: bool = False
 
     @classmethod
     def from_config(cls, config: UploaderConfig) -> "CoordinatorSettings":
@@ -77,6 +80,7 @@ class CoordinatorSettings:
             codeowners_file=config.codeowners_file,
             invocation_cwd=config.invocation_cwd,
             launcher_directory=config.launcher_directory,
+            batch_test_payloads=config.batch_test_payloads,
         )
 
 
@@ -177,6 +181,14 @@ def run_discovered_tasks(
             resources=resources,
             logger=logger,
         )
+    batch_schema = None
+    if settings.batch_test_payloads:
+        try:
+            batch_schema = schema_for_event_runtime_ids(resources.schema)
+        except BatchCompatibilityError:
+            pass
+        if batch_schema is None and logger is not None:
+            logger.warning("batching_schema_unavailable: using ordinary per-file uploads because the outbound CITESTCYCLE schema is unavailable")
 
     temporary_cleanup_errors: list[str] = []
     interrupted = False
@@ -196,6 +208,7 @@ def run_discovered_tasks(
             uploader_version=settings.uploader_version,
             api_key=settings.api_key,
             schema=resources.schema,
+            batch_schema=batch_schema,
             dry_run=settings.dry_run,
             validate_enrichment=settings.validate_enrichment,
             expected_enriched_tags=settings.expected_enriched_tags,
@@ -220,6 +233,7 @@ def run_discovered_tasks(
                 runtime=runtime,
                 transport_factory=create_transport,
                 process_file=process_file,
+                process_cohort=process_test_cohort if batch_schema is not None else None,
                 logger=logger,
                 measurements=measurements,
             )
@@ -229,6 +243,8 @@ def run_discovered_tasks(
             cancelled = exc.cancelled
 
     additional_warnings: tuple[str, ...] = ()
+    if settings.batch_test_payloads and batch_schema is None:
+        additional_warnings += ("batching_schema_unavailable",)
     if temporary_cleanup_errors:
         additional_warnings += ("invocation_temp_cleanup_failed",)
         if logger is not None:
@@ -269,6 +285,7 @@ def run_discovered_tasks(
         results=worker_run.results,
         cancelled=cancelled,
         initialization_warning_codes=initialization_warnings,
+        requests=worker_run.requests,
     )
     if logger is not None:
         stats = report.statistics()
