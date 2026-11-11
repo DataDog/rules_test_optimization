@@ -1287,8 +1287,8 @@ mkdir -p "$BEP_EMPTY_CONTROL_OUTPUT"
 BEP_JSON="$TMP_WS/test_bep_freshness.json"
 cat > "$BEP_JSON" <<'JSON_EOF'
 {"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"local"},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/fresh_attempt/payload_test/test.outputs"},{"name":"diagnostic.remote","uri":"bytestream://remote-cas/blobs/abcdef/456"}]}}
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_local_attempt/payload_test/test.outputs"}]}}
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_remote_attempt/payload_test/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":2,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_local_attempt/payload_test/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":3,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_remote_attempt/payload_test/test.outputs"}]}}
 JSON_EOF
 
 BEP_DRY_RUN_LOG="$TMP_WS/uploader_bep_filter_dry_run.log"
@@ -1750,8 +1750,8 @@ fi
 
 BEP_CACHED_ONLY_JSON="$TMP_WS/test_bep_cached_only.json"
 cat > "$BEP_CACHED_ONLY_JSON" <<'JSON_EOF'
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_local_attempt/payload_test/test.outputs"}]}}
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_remote_attempt/payload_test/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":2,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_local_attempt/payload_test/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":3,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/cached_remote_attempt/payload_test/test.outputs"}]}}
 JSON_EOF
 BEP_CACHED_ONLY_UPLOAD_START="$(log_line_count)"
 BEP_CACHED_ONLY_UPLOAD_LOG="$TMP_WS/uploader_bep_cached_only_upload.log"

@@ -56,6 +56,29 @@ class BepExecutionTests(unittest.TestCase):
         conflicting_carrier = replace(first, carriers=(("shard0/test.outputs", "another-carrier"),))
         self.assertEqual(frozenset({"shard0/test.outputs"}), ambiguous_execution_outputs((first, conflicting_carrier)))
 
+    def test_integration_cached_outputs_have_distinct_execution_coordinates(self):
+        from uploader_test_support import resolve_runfile
+        doctor = _load_module("doctor_integration_execution_scope", "tools/core/test_optimization_doctor.py")
+        for name in ("run_mock_server_tests.sh", "run_mock_server_tests.ps1"):
+            source = resolve_runfile("tools/tests/integration/" + name).read_text()
+            cached = [json.loads(line) for line in source.splitlines()
+                if line.startswith('{"id":{"testResult"')
+                and '"label":"//same_label:bep_payload_test"' in line
+                and any(key in line for key in ("cached_local_attempt", "cached_remote_attempt"))]
+            self.assertGreaterEqual(len(cached), 2)
+            for event in cached:
+                with self.subTest(script=name, event=event):
+                    fresh = {"id": {"testResult": {"label": "//same_label:bep_payload_test", "run": 1, "shard": 1, "attempt": 1}},
+                        "testResult": {"status": "PASSED", "testActionOutput": [{"name": "test.outputs",
+                            "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/fresh_attempt/payload_test/test.outputs"}]}}
+                    with tempfile.TemporaryDirectory() as tmp:
+                        bep = Path(tmp) / "events.json"
+                        bep.write_text(json.dumps(fresh) + "\n" + json.dumps(event) + "\n")
+                        parsed = doctor._parse_bep_freshness([bep], workspace=Path(tmp))
+                    self.assertFalse(parsed.ambiguous_outputs)
+                    self.assertEqual(1, len(parsed.eligible_outputs))
+                    self.assertEqual(1, len(parsed.cached_outputs))
+
     def test_parser_deduplicates_same_file_and_uuid_copy_but_preserves_other_documents(self):
         doctor = _load_module("doctor_execution_scope", "tools/core/test_optimization_doctor.py")
         with tempfile.TemporaryDirectory() as tmp:
