@@ -439,9 +439,13 @@ sys.exit(99)
 ''')
         script.chmod(0o700)
         bazel = script
-        if os.name == "nt":
-            bazel = root / "fake-bazel.cmd"
-            bazel.write_text(f'@"{sys.executable}" "{script}" %*\n')
+        if extension == "ps1":
+            # Use a PowerShell script rather than a CMD file association. This
+            # exercises the same explicit Python command on every platform.
+            bazel = root / "fake-bazel.ps1"
+            python_path = sys.executable.replace("'", "''")
+            script_path = str(script).replace("'", "''")
+            bazel.write_text(f"& '{python_path}' '{script_path}' @args\nexit $LASTEXITCODE\n")
         env = {key: value for key, value in os.environ.items() if not key.startswith(("DD_", "DATADOG_")) and key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}}
         env.update({"BAZEL": str(bazel), "RETENTION_TEST_CASE": case, "BUILD_WORKSPACE_DIRECTORY": str(root),
             "RETENTION_UPLOADER_PID_FILE": str(root / "uploader.pid"),
