@@ -445,7 +445,10 @@ sys.exit(99)
             bazel = root / "fake-bazel.ps1"
             python_path = sys.executable.replace("'", "''")
             script_path = str(script).replace("'", "''")
-            bazel.write_text(f"& '{python_path}' '{script_path}' @args\nexit $LASTEXITCODE\n")
+            # Export the native result explicitly; the wrapper reads it after
+            # the script pipeline returns.
+            bazel.write_text(f"& '{python_path}' '{script_path}' @args\n"
+                "$global:LASTEXITCODE = $LASTEXITCODE\nexit $global:LASTEXITCODE\n")
         env = {key: value for key, value in os.environ.items() if not key.startswith(("DD_", "DATADOG_")) and key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}}
         env.update({"BAZEL": str(bazel), "RETENTION_TEST_CASE": case, "BUILD_WORKSPACE_DIRECTORY": str(root),
             "RETENTION_UPLOADER_PID_FILE": str(root / "uploader.pid"),
