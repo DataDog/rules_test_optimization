@@ -60,7 +60,7 @@ class TargetSelectionTests(unittest.TestCase):
         for count in (100, 1000, 10000):
             pairs = _CountedPairs((f"//pkg:t{i}", f"pkg/t{i}/test.outputs") for i in range(count))
             outputs = [Path(f"/logs/pkg/t{i}/test.outputs") for i in range(count)]
-            labels = {path: f"//pkg:t{i}" for i, path in enumerate(outputs)}
+            labels = {path.resolve(): f"//pkg:t{i}" for i, path in enumerate(outputs)}
             freshness = doctor.BepFreshness(pairs, set(), [], set())
             # Metadata I/O is unrelated to the matching cost being measured.
             with mock.patch.object(doctor, "_metadata_files", return_value=[Path("metadata")]), mock.patch.object(doctor, "_load_json", return_value={}):
@@ -74,7 +74,7 @@ class TargetSelectionTests(unittest.TestCase):
     def test_bep_index_preserves_suffix_boundaries_and_staged_keys(self) -> None:
         pairs = {("//pkg:a", "pkg/a/test.outputs"), ("//other:a", "other/a/test.outputs")}
         outputs = [Path("/logs/pkg/a/test.outputs"), Path("/logs/notpkg/a/test.outputs"), Path("/staged/opaque/test.outputs")]
-        labels = {outputs[0]: "//pkg:a", outputs[1]: "//pkg:a", outputs[2]: "//other:a"}
+        labels = {outputs[0].resolve(): "//pkg:a", outputs[1].resolve(): "//pkg:a", outputs[2].resolve(): "//other:a"}
         freshness = doctor.BepFreshness(pairs, set(), [], set())
         with mock.patch.object(doctor, "_metadata_files", return_value=[Path("metadata")]), mock.patch.object(doctor, "_load_json", return_value={}):
             selected = doctor._validate_expected_target_bep_freshness(
