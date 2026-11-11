@@ -1004,3 +1004,25 @@ sync repository rule or uploader runtime paths above):
   | `KEEP_TMP` | `0` | `1` keeps the generated workspaces after the run |
   | `BAZEL` | `./bazelw` | Bazel launcher |
   | `BAZEL_VERSION` | `.bazelversion` | Bazel version passed as `USE_BAZEL_VERSION` |
+
+### Runtime expected-target files
+
+The doctor and Python uploader accept `--expected-targets-file=/path/to/targets.json`
+to avoid passing a long label list on the command line. Both read the existing
+schema-version-1 format:
+
+```json
+{"schema_version": 1, "targets": ["//pkg:a.topt", "//pkg:b.topt"]}
+```
+
+Relative paths use the caller's working directory (`BUILD_WORKING_DIRECTORY`
+when launched by `bazel run`), not the generated tool's runfiles directory.
+The file must contain sorted, unique, fully expanded local labels. It is merged
+with repeated `--expected-target` arguments into a sorted union; a label present
+in both inputs appears once. Duplicates within either input remain errors.
+If the rule configures expected targets, the runtime union must match that set.
+Runtime selection still requires a nonempty set and its context entries. The
+file is read before payload processing or HTTP. Missing/unreadable files,
+invalid UTF-8/JSON and invalid labels fail validation. Keep the invocation's
+file unchanged across doctor and upload. The legacy Bash/PowerShell uploader
+rollback does not support this new flag.

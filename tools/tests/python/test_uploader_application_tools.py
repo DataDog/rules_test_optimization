@@ -169,6 +169,29 @@ class ApplicationTests(unittest.TestCase):
             cwd=root,
         )
 
+    def test_runtime_target_file_limits_payloads_through_public_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            paths = []
+            for name in ("selected", "unselected"):
+                output = root / "bazel-testlogs" / "pkg" / name / "test.outputs"
+                paths.append(_write_payload(output, "tests", "events.json", {"events": [{"content": {"meta": {"event.id": name}}}]}))
+            target_file = root / "targets λ.json"
+            target_file.write_text('{"schema_version":1,"targets":["//pkg:selected"]}')
+            report_file = root / "report.json"
+            config = self._config(root, extra_arguments=(
+                f"--expected-targets-file={target_file}", f"--report-json={report_file}"))
+            rc = run_uploader(config,
+                resolver=RunfilesResolver.from_environment(environ={}, cwd=root),
+                endpoints=build_endpoints(config),
+                logger=configure_logging(debug=False, stream=StringIO()), stream=StringIO())
+            self.assertEqual(0, rc)
+            report = json.loads(report_file.read_text())
+            self.assertEqual(1, report["files"]["succeeded"])
+            self.assertEqual(2, report["files"]["discovered"])
+            self.assertEqual(1, report["files"]["eligible"])
+            self.assertTrue(all(path.is_file() for path in paths))
+
     def test_dry_run_prepares_all_types_prints_stats_and_writes_schema_v1(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

@@ -45,6 +45,7 @@ def load_expected_targets(
     resolver: RunfilesResolver,
     runtime_targets: Iterable[str] = (),
     runtime_selection: bool = False,
+    runtime_targets_file: Path | None = None,
 ) -> ExpectedTargetsPlan:
     """Merge generated and runtime targets into one validated selection."""
     static = tuple(_validate_label(label) for label in static_targets)
@@ -71,7 +72,8 @@ def load_expected_targets(
         raise ExpectedTargetsError(
             "runtime --expected-target arguments contain duplicate target labels"
         )
-    runtime = tuple(sorted(runtime))
+    file_targets = _load_target_file(runtime_targets_file) if runtime_targets_file is not None else ()
+    runtime = tuple(sorted(set(runtime).union(file_targets)))
     if runtime:
         if configured and set(configured) != set(runtime):
             raise ExpectedTargetsError(
@@ -81,7 +83,7 @@ def load_expected_targets(
         return ExpectedTargetsPlan(runtime, source)
     if runtime_selection:
         raise ExpectedTargetsError(
-            "runtime selection requires at least one --expected-target argument"
+            "runtime selection requires at least one --expected-target argument or a nonempty --expected-targets-file"
         )
     return ExpectedTargetsPlan(configured, configured_source)
 
@@ -97,19 +99,9 @@ def select_expected_outputs(
         return discovery
     outputs_by_target: dict[str, list[str]] = {target: [] for target in plan.targets}
     target_by_output_key: dict[str, str] = {}
+    index = _TargetOutputIndex(plan.targets)
     for output in discovery.outputs:
-        matches = [
-            target
-            for target in plan.targets
-            if _output_belongs_to_target(output.output_key, target)
-        ]
-        if len(matches) > 1:
-            most_specific = max(len(_target_output_parts(target)) for target in matches)
-            matches = [
-                target
-                for target in matches
-                if len(_target_output_parts(target)) == most_specific
-            ]
+        matches = index.matches(output.output_key)
         if len(matches) > 1:
             raise ExpectedTargetsError(
                 f"test.outputs path matches multiple expected targets: {output.output_key}"
@@ -191,15 +183,27 @@ def _validate_label(value: object) -> str:
     return value
 
 
-def _output_belongs_to_target(output_key: str, label: str) -> bool:
-    expected_parts = _target_output_parts(label)
-    output_parts = PurePosixPath(output_key.replace("\\", "/")).parts
-    if not output_parts or output_parts[-1] != "test.outputs":
-        return False
-    if output_parts[: len(expected_parts)] != expected_parts:
-        return False
-    attempt_parts = output_parts[len(expected_parts) : -1]
-    return all(_BAZEL_TEST_ATTEMPT_DIRECTORY.fullmatch(part) for part in attempt_parts)
+class _TargetOutputIndex:
+    """Match deepest target roots without scanning the target catalog per output."""
+
+    def __init__(self, targets: Iterable[str]) -> None:
+        self._labels_by_parts: dict[tuple[str, ...], list[str]] = {}
+        for label in targets:
+            self._labels_by_parts.setdefault(_target_output_parts(label), []).append(label)
+
+    def matches(self, output_key: str) -> list[str]:
+        parts = PurePosixPath(output_key.replace("\\", "/")).parts
+        if not parts or parts[-1] != "test.outputs":
+            return []
+        # Once a suffix is not a Bazel attempt component, no shallower target
+        # can own this output. Check the exact (deepest) root first.
+        for length in range(len(parts) - 1, 0, -1):
+            labels = self._labels_by_parts.get(parts[:length])
+            if labels:
+                return labels
+            if not _BAZEL_TEST_ATTEMPT_DIRECTORY.fullmatch(parts[length - 1]):
+                break
+        return []
 
 
 def _target_output_parts(label: str) -> tuple[str, ...]:

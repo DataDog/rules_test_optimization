@@ -1707,6 +1707,21 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         config_path.write_text(json.dumps(config), encoding="utf-8")
         return config_path
 
+    def test_doctor_runtime_target_file_reaches_full_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_doctor_config(root, [])
+            self._write_doctor_output(root, "module", "//pkg:target")
+            targets = root / "targets space λ.json"
+            targets.write_text('{"schema_version":1,"targets":["//pkg:target"]}')
+            report = root / "report.json"
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}):
+                rc = self.mod.main(["--config", str(config),
+                    "--expected-targets-file", str(targets),
+                    "--freshness-mode=disabled", "--report-json", str(report)])
+            self.assertEqual(0, rc)
+            self.assertEqual(["//pkg:target"], json.loads(report.read_text())["targets"]["expected"])
+
     def test_resolve_expected_targets_from_generated_file(self) -> None:
         """Validate dynamic target files are strict, sorted, and selected."""
         with tempfile.TemporaryDirectory() as tmp:
