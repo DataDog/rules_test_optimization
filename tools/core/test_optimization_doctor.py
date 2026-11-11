@@ -1323,11 +1323,19 @@ def _stage_bep_artifacts(
     selected_labels: set[str] | None = None,
     downloader: str = "",
     downloader_timeout_sec: float = 300.0,
+    owned_run_roots: list[Path] | None = None,
 ) -> list[StagedBepArtifact]:
-    """Materialize fresh BEP artifacts into local test.outputs directories."""
+    """Materialize fresh BEP artifacts into local test.outputs directories.
+
+    With owned_run_roots, the caller owns the run directory before any data is
+    written, including errors or interruption between extraction and commit.
+    Otherwise this function cleans its run directory on failure.
+    """
     warned: set[str] = set()
     staged: list[StagedBepArtifact] = []
     run_staging_dir = _create_staging_run_dir(staging_dir)
+    if owned_run_roots is not None:
+        owned_run_roots.append(run_staging_dir)
 
     def warn_once(message: str) -> None:
         if message not in warned:
@@ -1469,18 +1477,20 @@ def _stage_bep_artifacts(
             shutil.rmtree(run_staging_dir, ignore_errors=True)
         return sorted(staged, key=lambda item: str(item.output_dir))
     except BaseException:
-        shutil.rmtree(run_staging_dir, ignore_errors=True)
+        if owned_run_roots is None:
+            shutil.rmtree(run_staging_dir, ignore_errors=True)
         raise
 
 
-def _cleanup_staged_bep_run_roots(staged: Iterable[StagedBepArtifact], *, staging_base: Path) -> None:
+def _cleanup_staged_bep_run_roots(staged: Iterable[StagedBepArtifact], *, staging_base: Path, owned_run_roots: Iterable[Path] = ()) -> None:
     """Remove owned per-run staging roots after staged outputs are no longer needed."""
     runs_root = (staging_base / "__runs").resolve()
-    roots = sorted({item.staging_root.resolve() for item in staged})
+    owned_roots = {root.resolve() for root in owned_run_roots}
+    roots = sorted({item.staging_root.resolve() for item in staged}.union(owned_roots))
     for root in roots:
         if root.parent.resolve() != runs_root:
             _fail(f"refusing to clean BEP staging root outside run directory: {root}")
-        owned = False
+        owned = root in owned_roots
         for item in staged:
             if item.staging_root.resolve() != root:
                 continue

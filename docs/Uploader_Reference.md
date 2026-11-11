@@ -684,6 +684,64 @@ small Bash and PowerShell launchers resolve `DD_TEST_OPTIMIZATION_PYTHON`, then
 Python. That legacy Bash path still requires `jq` for BEP freshness parsing,
 schema validation, enrichment, and oversized-payload splitting.
 
+### Retain unresolved outputs
+
+The default Python uploader preserves unresolved source data before deleting
+its owned BEP staging directories. This includes failed uploads, unprocessed
+sources after interruption, their Bazel sidecars, and the non-secret context
+needed to inspect them. Completed downloads also survive a later preparation
+failure. Sources in owned fresh staging remain recoverable when freshness
+rejects them; this does not authorize uploading them or select cached local
+outputs. The catalog records missing expected targets alongside shard deficits.
+An acknowledged source still follows `keep_payloads`;
+with that setting enabled, retained files are marked `debug_original` because
+they can also contain accepted events.
+
+During uploads, the CI wrappers use `<report-dir>/retained` when `--report-dir` (`-ReportDir` in
+PowerShell) points outside the wrapper's temporary root. Each invocation gets
+its own directory and publishes `catalog.json` after verifying the copies. A
+support-bundle-only report directory created inside the temporary root does not
+select a durable destination. An explicit `--retained-outputs-dir`
+(`-RetainedOutputsDir`) overrides the default.
+
+For a standalone uploader, configure the destination explicitly; `--report-json`
+alone does not select one:
+
+```bash
+bazel run //tools/test_optimization:dd_upload_payloads -- \
+  --bep-json=.topt/test.bep.json --freshness-source=bep --freshness-mode=required \
+  --retained-outputs-dir=.topt/retained
+```
+
+The uploader also accepts `DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR`. An explicit
+CLI value wins; a relative destination is resolved against the workspace.
+Destinations inside staging, source-output directories, or the wrapper's
+temporary root are rejected.
+
+Without a durable destination, unresolved files remain in their original
+location and owned staging roots are preserved. The wrapper keeps its entire
+temporary root when needed data remains there or finalization cannot be
+verified, including a missing or corrupt handoff after an abnormal exit. It
+prints the path even without `--report-dir` or `--keep-tmp`. Copy, disk, or
+catalog failures retain the original roots and return a nonzero uploader result;
+the wrappers preserve the earlier test/doctor failure when one already exists.
+Successful runs with no retained data clean up normally.
+
+The additive `retention` report section gives the source count, catalog path,
+original roots, and whether a durable destination was configured. Existing
+source/request counters and exit policies keep their meanings. A catalog does
+not turn failed tests, rejected uploads, or incomplete shard evidence into a
+successful result. Dry-run sends nothing, leaves source bytes unchanged, and
+keeps its existing disposable-copy cleanup behavior.
+
+Retained data is for private inspection and operator-directed recovery. It has
+no automatic replay command. Files can be pending subsets after a partial
+upload; debug originals can include events already accepted. For an ephemeral
+runner, configure private CI artifacts to include the entire retained directory,
+including its catalog and contexts, with the repository's access and expiry
+policy. A temporary path alone does not survive a later job. The standalone
+legacy Bash/PowerShell uploaders do not provide this Python retention contract.
+
 ### Legacy execution-log fallback
 
 Existing integrations that already generate `--execution_log_json_file` can keep

@@ -41,6 +41,7 @@ sh_test(
         "test_uploader_metrics_tools.py",
         "test_uploader_reporting_tools.py",
         "test_uploader_resources_tools.py",
+        "test_uploader_retention_tools.py",
         "test_uploader_telemetry_tools.py",
         "test_uploader_tools.py",
         "test_uploader_transport_tools.py",

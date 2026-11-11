@@ -14,6 +14,7 @@ UPLOAD_TARGET="${DD_TEST_OPTIMIZATION_UPLOAD_TARGET:-//:dd_upload_payloads}"
 DOCTOR_REPORT_JSON="${DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON:-}"
 UPLOADER_REPORT_JSON="${DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON:-}"
 REPORT_DIR="${DD_TEST_OPTIMIZATION_REPORT_DIR:-}"
+RETAINED_OUTPUTS_DIR="${DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR:-}"
 SUPPORT_BUNDLE="${DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE:-}"
 SUPPORT_BUNDLE_COLLECTOR="${DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR:-}"
 DO_UPLOAD=0
@@ -21,6 +22,7 @@ KEEP_TMP="${DD_TEST_OPTIMIZATION_KEEP_TMP:-0}"
 TARGETS=()
 TEST_ARGS=()
 UPLOAD_REPORT_JSON=""
+finalization_required=0
 
 usage() {
   cat <<'EOF'
@@ -38,6 +40,8 @@ Options:
   --uploader-report-json PATH
                            Write the uploader machine-readable report to PATH.
   --report-dir PATH        Write doctor/uploader reports under PATH.
+  --retained-outputs-dir PATH
+                           Preserve unresolved payloads outside disposable staging.
   --upload-target LABEL    Uploader target. Defaults to //:dd_upload_payloads.
   --support-bundle PATH    Write a redacted support diagnostics zip to PATH.
   --support-bundle-collector PATH
@@ -105,6 +109,14 @@ while (($#)); do
     --upload-target)
       UPLOAD_TARGET="${2:?--upload-target requires a value}"
       shift 2
+      ;;
+    --retained-outputs-dir)
+      RETAINED_OUTPUTS_DIR="${2:?--retained-outputs-dir requires a value}"
+      shift 2
+      ;;
+    --retained-outputs-dir=*)
+      RETAINED_OUTPUTS_DIR="${1#--retained-outputs-dir=}"
+      shift
       ;;
     --upload-target=*)
       UPLOAD_TARGET="${1#--upload-target=}"
@@ -197,6 +209,7 @@ if [[ "$DO_UPLOAD" -eq 1 ]]; then
   UPLOAD_REPORT_JSON="$UPLOADER_REPORT_JSON"
 fi
 command_manifest_json="$tmp_root/support-command-manifest.json"
+retention_status_json="$tmp_root/uploader-retention-status.json"
 
 cleanup() {
   create_support_bundle
@@ -204,7 +217,28 @@ cleanup() {
     echo "keeping Test Optimization temporary files: $tmp_root" >&2
     return
   fi
-  rm -rf "$tmp_root"
+  if [[ "$finalization_required" == "1" ]]; then
+    local python
+    if [[ ! -f "$retention_status_json" ]] || ! python="$(resolve_python)" || ! "$python" - "$retention_status_json" "$tmp_root" "$artifact_staging_dir" <<'PY'
+import json
+from pathlib import Path
+import sys
+try:
+    status = json.loads(Path(sys.argv[1]).read_text())
+    valid = (type(status.get("schema_version")) is int and status["schema_version"] == 1
+        and status.get("wrapper_temp_root") == str(Path(sys.argv[2]).resolve())
+        and status.get("cleanup_safe") is True
+        and not any((Path(sys.argv[3]) / "__runs").glob("*")))
+except (OSError, ValueError, TypeError, AttributeError):
+    valid = False
+sys.exit(0 if valid else 1)
+PY
+    then
+      echo "keeping Test Optimization temporary files: $tmp_root (unresolved or unverified retention)" >&2
+      return
+    fi
+  fi
+  rm -rf -- "$tmp_root"
 }
 trap cleanup EXIT
 
@@ -259,7 +293,7 @@ write_command_manifest() {
   for bep_arg in "${bep_args[@]}"; do
     bep_files+=("${bep_arg#--bep-json=}")
   done
-  "$python" - "$command_manifest_json" "$BAZEL" "$BAZEL_CONFIG" "$DOCTOR_TARGET" "$UPLOAD_TARGET" "$artifact_staging_dir" "$REPORT_DIR" "$DOCTOR_REPORT_JSON" "$UPLOADER_REPORT_JSON" "$UPLOAD_REPORT_JSON" "$DO_UPLOAD" "${#TEST_ARGS[@]}" "${TEST_ARGS[@]}" "${#bep_files[@]}" "${bep_files[@]}" "${TARGETS[@]}" <<'PY'
+  "$python" - "$command_manifest_json" "$BAZEL" "$BAZEL_CONFIG" "$DOCTOR_TARGET" "$UPLOAD_TARGET" "$artifact_staging_dir" "$REPORT_DIR" "$DOCTOR_REPORT_JSON" "$UPLOADER_REPORT_JSON" "$UPLOAD_REPORT_JSON" "$DO_UPLOAD" "${#TEST_ARGS[@]}" ${TEST_ARGS[@]+"${TEST_ARGS[@]}"} "${#bep_files[@]}" "${bep_files[@]}" "${TARGETS[@]}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -391,6 +425,7 @@ if [[ -n "$DOCTOR_REPORT_JSON" ]]; then
   doctor_runtime_args+=("--report-json=$DOCTOR_REPORT_JSON")
 fi
 
+finalization_required=1
 if run_bazel run "--config=$BAZEL_CONFIG" "$DOCTOR_TARGET" -- "${doctor_runtime_args[@]}"; then
   doctor_status=0
 else
@@ -412,7 +447,33 @@ else
   fi
   uploader_runtime_args+=(--dry-run --validate-enrichment)
 fi
-if run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${uploader_runtime_args[@]}"; then
+# A support-bundle-only report under tmp_root is not a durable destination.
+if [[ "$DO_UPLOAD" == "1" && -z "$RETAINED_OUTPUTS_DIR" && -n "$REPORT_DIR" ]] && python="$(resolve_python)"; then
+  if retention_candidate="$("$python" - "$REPORT_DIR" "$tmp_root" <<'PY'
+from pathlib import Path
+import sys
+report, temporary = (Path(value).resolve() for value in sys.argv[1:])
+print(report / "retained" if not report.is_relative_to(temporary) else "")
+PY
+)"
+  then
+    RETAINED_OUTPUTS_DIR="$retention_candidate"
+  else
+    echo "warning: could not select a durable retention destination; original outputs will be preserved when needed" >&2
+  fi
+fi
+wrapper_env_root="$tmp_root"
+if command -v cygpath >/dev/null 2>&1; then
+  wrapper_env_root="$(cygpath -am "$tmp_root")"
+  retention_status_json="$(cygpath -am "$retention_status_json")"
+  if [[ -n "$RETAINED_OUTPUTS_DIR" ]]; then
+    RETAINED_OUTPUTS_DIR="$(cygpath -am "$RETAINED_OUTPUTS_DIR")"
+  fi
+fi
+if DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT="$wrapper_env_root" \
+  DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE="$retention_status_json" \
+  DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR="$RETAINED_OUTPUTS_DIR" \
+  run_bazel run "--config=$BAZEL_CONFIG" "$UPLOAD_TARGET" -- "${uploader_runtime_args[@]}"; then
   :
 else
   uploader_status=$?
