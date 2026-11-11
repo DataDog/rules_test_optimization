@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import base64
 from contextlib import closing
+from contextlib import nullcontext
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
 from functools import partial
@@ -39,6 +40,7 @@ from urllib.request import (
     proxy_bypass_environment,
 )
 
+from .metrics import PhaseRecorder
 from .endpoints import parse_http_url
 from .logging_utils import redact_url
 
@@ -521,6 +523,14 @@ class HttpTransport:
         )
         self._opener = build_opener(*handlers)
 
+    def set_measurements(self, measurements: PhaseRecorder | None) -> None:
+        """Attach the current file owner's recorder; never share it across workers."""
+        self._measurements = measurements
+
+    def _measure(self, name: str):
+        measurements = getattr(self, "_measurements", None)
+        return measurements.phase(name) if measurements is not None else nullcontext()
+
     def set_log_context(
         self,
         task_id: str,
@@ -559,14 +569,19 @@ class HttpTransport:
         content_encoding: str | None = None,
     ) -> HttpResult:
         """POST an exact JSON body, optionally compressed with stdlib gzip."""
-        prepared_request = prepare_json_request(
-            url,
-            headers,
-            body,
-            gzip_body=gzip_body,
-            content_encoding=content_encoding,
-        )
-        return self._post(prepared_request)
+        with self._measure("request_encoding_transport"):
+            prepared_request = prepare_json_request(
+                url,
+                headers,
+                body,
+                gzip_body=gzip_body,
+                content_encoding=content_encoding,
+            )
+        measurements = getattr(self, "_measurements", None)
+        if measurements is not None:
+            measurements.add_bytes("prepared_body_bytes", int(prepared_request.headers["Content-Length"]))
+        with self._measure("http"):
+            return self._post(prepared_request)
 
     def post_prepared_multipart(
         self,
@@ -575,12 +590,17 @@ class HttpTransport:
         prepared: PreparedMultipartBody,
     ) -> HttpResult:
         """POST a task-local multipart body, reopening it for every retry."""
-        prepared_request = prepare_spooled_multipart_request(
-            url,
-            headers,
-            prepared,
-        )
-        return self._post(prepared_request)
+        with self._measure("request_encoding_transport"):
+            prepared_request = prepare_spooled_multipart_request(
+                url,
+                headers,
+                prepared,
+            )
+        measurements = getattr(self, "_measurements", None)
+        if measurements is not None:
+            measurements.add_bytes("prepared_body_bytes", int(prepared_request.headers["Content-Length"]))
+        with self._measure("http"):
+            return self._post(prepared_request)
 
     def _post(
         self,

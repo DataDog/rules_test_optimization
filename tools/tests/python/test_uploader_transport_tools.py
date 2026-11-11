@@ -129,6 +129,31 @@ class HttpTransportTests(unittest.TestCase):
             server.records[1]["headers"]["x-datadog-evp-subdomain"],  # type: ignore[attr-defined]
         )
 
+    def test_measurements_record_prepared_bytes_and_http_without_extra_encoding(self) -> None:
+        from uploader_py.metrics import PhaseRecorder
+
+        wall = iter((0.0, 1.0, 1.0, 6.0))
+        cpu = iter((0.0, 0.5, 0.5, 0.75))
+        recorder = PhaseRecorder(lambda: next(wall), lambda: next(cpu))
+        transport = HttpTransport(max_attempts=1)
+        transport.set_measurements(recorder)
+        bodies = []
+
+        def opened(request, **_kwargs):
+            bodies.append(request.data.read())
+            return _Response()
+
+        with mock.patch.object(transport._opener, "open", side_effect=opened):
+            result = transport.post_json("https://example.invalid/events", {}, b'{"events":[]}', gzip_body=True)
+        self.assertTrue(result.succeeded)
+        self.assertEqual(b'{"events":[]}', gzip.decompress(bodies[0]))
+        self.assertEqual({"prepared_body_bytes": len(bodies[0])}, dict(recorder.byte_counts()))
+        phases = {name: (wall, cpu) for name, wall, cpu in recorder.snapshot()}
+        self.assertEqual((1.0, 0.5), phases["request_encoding_transport"])
+        self.assertEqual((5.0, 0.25), phases["http"])
+        transport.set_measurements(None)
+        self.assertIsNone(transport._measurements)
+
     def test_gzip_and_exact_content_length(self) -> None:
         original = b'{"events":[{"value":"payload"}]}'
         with _server({"status": 200}) as (server, base):

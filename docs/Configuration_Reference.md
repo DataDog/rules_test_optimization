@@ -856,6 +856,43 @@ selection, uploads, or exit codes. Errors remain visible at every level.
 Bazel's own output, compiler subprocess diagnostics, and test/tracer logs
 keep their own controls. This setting does not enable `DD_TRACE_DEBUG` or add GitLab sections.
 
+## Uploader measurements
+
+The Python uploader adds `performance` to its schema-version-1 JSON report.
+Existing fields keep their meanings. No extra flag or dependency is needed;
+the legacy Bash and PowerShell uploaders do not emit these measurements.
+
+| Field | Meaning |
+| --- | --- |
+| `invocation_wall_seconds` | Elapsed time from uploader startup through staging cleanup; excludes rendering the final report and releasing the workspace lock. |
+| `invocation_phases` | Wall and main-thread CPU time for locking, resource loading, freshness, discovery/matching, worker and transport setup, and staging cleanup. |
+| `worker_phases` | Sums of worker wall and thread CPU time for reading/parsing, enrichment, validation, encoding/splitting, request preparation, delivery, and source cleanup. Phases that do not run are absent. |
+| `process_cpu_seconds` | User and system CPU consumed by this process over the measured invocation, including its threads. |
+| `processed_source_bytes` | Total size observed for processed source files before reading; files whose size cannot be read contribute zero. Includes skipped and failed sources. |
+| `prepared_body_bytes` | Encoded HTTP body bytes prepared once per logical request, including compression and multipart overhead where enabled. Includes dry-run preparation; excludes HTTP headers and retransmissions. |
+| `execution_environment` | Python implementation/version, host CPU count, affinity count where supported, and raw cgroup-v2 mount-root CPU observations where readable. Missing observations are `null`. |
+
+Worker wall times overlap when workers run concurrently. `file_pipeline`
+includes its child phases, and `delivery` includes transport preparation and
+`http`; do not add those durations together or compare their sum directly with
+invocation elapsed time. `http` includes retries, retry waits, opening bodies,
+and HTTP-library work, so it is not a measurement of network latency alone.
+Thread CPU helps identify work competing for Python execution time; process CPU
+also includes other threads. These measurements alone do not establish a GIL
+bottleneck.
+
+Cgroup observations are sampled once at startup, outside the per-file path.
+They are not throttling deltas or the effective CPU quota: an ancestor cgroup
+may impose a stricter limit. `effective_cpu_quota` remains `null`; host CPU count
+must not be used as the container's available CPU count.
+
+At `INFO`, one reporter emits aggregate progress every five seconds and stops
+when the worker pool exits, including failure and interruption. It logs no
+payload contents or credentials. Per-file diagnostics remain at `DEBUG`;
+`WARN` and `ERROR` suppress progress without changing selection or delivery.
+Planned/succeeded/failed request counters describe logical requests; attempted
+requests include retries. Prepared bytes are not a wire-traffic counter.
+
 ## Uploader runtime environment variables
 
 The doctor and/or uploader runtimes read these variables at `bazel run` time:

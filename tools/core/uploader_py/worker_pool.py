@@ -11,6 +11,7 @@ The pool owns queueing and metrics while file workers remain mutually independen
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 import logging
 from queue import Empty, Queue
@@ -18,6 +19,7 @@ import threading
 import time
 from typing import Callable, Iterable, Protocol, TypeVar
 
+from .metrics import PhaseRecorder
 from .models import FileResult, FileStatus, FileTask
 
 
@@ -64,6 +66,7 @@ def run_file_workers(
     transport_factory: Callable[[], TransportType],
     process_file: FileProcessor[RuntimeType, TransportType],
     logger: logging.Logger | None = None,
+    measurements: PhaseRecorder | None = None,
 ) -> WorkerPoolRun:
     """Process each source exactly once through one complete worker pipeline.
 
@@ -81,7 +84,8 @@ def run_file_workers(
 
     worker_count = min(workers, len(planned_tasks))
     try:
-        worker_transports = tuple(transport_factory() for _ in range(worker_count))
+        with measurements.phase("transport_setup") if measurements is not None else nullcontext():
+            worker_transports = tuple(transport_factory() for _ in range(worker_count))
     except Exception as exc:
         raise WorkerPoolError(
             f"failed to initialize worker transport: {type(exc).__name__}"
@@ -93,9 +97,11 @@ def run_file_workers(
     shutdown_event = threading.Event()
     active_workers = 0
     peak_active_workers = 0
+    completed_sources = 0
+    attempted_requests = 0
 
     def worker_loop(transport: TransportType) -> None:
-        nonlocal active_workers, peak_active_workers
+        nonlocal active_workers, peak_active_workers, completed_sources, attempted_requests
         if logger is not None:
             logger.debug("worker=%s started", threading.current_thread().name)
         while True:
@@ -158,6 +164,9 @@ def run_file_workers(
                     with activity_lock:
                         active_workers -= 1
                 result_queue.put(result)
+                with activity_lock:
+                    completed_sources += 1
+                    attempted_requests += result.requests_attempted
                 if logger is not None:
                     logger.debug(
                         "task=%s type=%s file=%s worker=%s completed status=%s "
@@ -197,10 +206,35 @@ def run_file_workers(
             started_thread.join()
         task_queue.join()
 
+    progress_stop = threading.Event()
+    progress_entered = threading.Event()
+    progress_thread = None
+
+    def snapshot() -> tuple[int, int, int]:
+        with activity_lock:
+            return completed_sources, active_workers, attempted_requests
+
+    def report_progress() -> None:
+        # Entry proves Thread's own startup bookkeeping is complete; ident
+        # alone is published earlier and cannot safely authorize join().
+        progress_entered.set()
+        _report_progress(progress_stop, logger, snapshot, len(planned_tasks))
+
     try:
         for thread in worker_threads:
             thread.start()
             started_threads.append(thread)
+        if logger is not None and logger.isEnabledFor(logging.INFO):
+            try:
+                progress_thread = threading.Thread(
+                    target=report_progress,
+                    name="topt-upload-progress",
+                )
+                progress_thread.start()
+            except (RuntimeError, OSError):
+                # Diagnostics must not consume the threads required to upload.
+                # Workers already own their slots; lack of a reporter is safe.
+                logger.warning("progress reporter unavailable; uploads continue")
         for task in planned_tasks:
             task_queue.put(task)
             if logger is not None:
@@ -242,6 +276,14 @@ def run_file_workers(
             f"worker pool coordinator failed: {type(exc).__name__}"
         ) from exc
 
+    finally:
+        progress_stop.set()
+        # start() can be interrupted after the native thread started but before
+        # it returned to us. Join that reporter too.
+        if progress_thread is not None and progress_thread.ident is not None:
+            progress_entered.wait()
+            progress_thread.join()
+
     return _collect_run(
         planned_tasks,
         result_queue,
@@ -249,6 +291,25 @@ def run_file_workers(
         peak_active_workers=peak_active_workers,
         require_complete=True,
     )
+
+
+def _report_progress(
+    stop: threading.Event,
+    logger: logging.Logger,
+    snapshot: Callable[[], tuple[int, int, int]],
+    total: int,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """One invocation-owned reporter; shutdown wakes its wait immediately."""
+    started = clock()
+    while not stop.wait(5.0):
+        completed, active, requests = snapshot()
+        elapsed = max(0.0, clock() - started)
+        rate = completed / elapsed if elapsed else 0.0
+        logger.info(
+            "progress: completed=%d/%d active=%d requests_attempted=%d files_per_sec=%.2f",
+            completed, total, active, requests, rate,
+        )
 
 
 def _collect_run(

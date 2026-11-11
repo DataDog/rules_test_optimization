@@ -11,6 +11,7 @@ This boundary keeps invocation-wide state out of independent worker pipelines.
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 import logging
 from pathlib import Path
@@ -24,6 +25,7 @@ from .credentials import check_api_key_fingerprint
 from .discovery import DiscoveryResult
 from .endpoints import EndpointSet
 from .file_worker import WorkerRuntime, process_file
+from .metrics import PhaseRecorder
 from .models import FileStatus
 from .reporting import AggregateReport
 from .resources import LoadedResources
@@ -163,16 +165,18 @@ def run_discovered_tasks(
     transport_factory: Callable[[], object] | None = None,
     clock: Callable[[], float] = time.monotonic,
     identifier_factory: Callable[[], str] = lambda: str(uuid.uuid4()),
+    measurements: PhaseRecorder | None = None,
 ) -> AggregateReport:
     """Run already-authorized tasks; workers never mutate coordinator state."""
     started = clock()
-    worker_inputs = _prepare_worker_inputs(
-        discovery,
-        settings=settings,
-        endpoints=endpoints,
-        resources=resources,
-        logger=logger,
-    )
+    with measurements.phase("worker_setup") if measurements is not None else nullcontext():
+        worker_inputs = _prepare_worker_inputs(
+            discovery,
+            settings=settings,
+            endpoints=endpoints,
+            resources=resources,
+            logger=logger,
+        )
 
     temporary_cleanup_errors: list[str] = []
     interrupted = False
@@ -201,6 +205,7 @@ def run_discovered_tasks(
             telemetry_session_id=identifier_factory(),
             telemetry_plan=worker_inputs.telemetry,
             logger=logger,
+            clock=clock,
         )
         create_transport = transport_factory or (
             lambda: HttpTransport(
@@ -216,6 +221,7 @@ def run_discovered_tasks(
                 transport_factory=create_transport,
                 process_file=process_file,
                 logger=logger,
+                measurements=measurements,
             )
         except WorkerPoolInterrupted as exc:
             worker_run = exc.run

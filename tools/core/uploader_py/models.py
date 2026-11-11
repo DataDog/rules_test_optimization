@@ -11,7 +11,7 @@ Explicit result models replace shared counters and make aggregation deterministi
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
@@ -70,3 +70,6 @@ class FileResult:
     warning_codes: tuple[str, ...] = ()
     failure_code: str | None = None
     failure_message: str | None = None
+    phase_times: tuple[tuple[str, float, float], ...] = field(default=(), compare=False)
+    source_bytes: int = field(default=0, compare=False)
+    prepared_body_bytes: int = field(default=0, compare=False)
