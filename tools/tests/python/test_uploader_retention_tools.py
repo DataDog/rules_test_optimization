@@ -440,15 +440,14 @@ sys.exit(99)
         script.chmod(0o700)
         bazel = script
         if extension == "ps1":
-            # Use a PowerShell script rather than a CMD file association. This
-            # exercises the same explicit Python command on every platform.
-            bazel = root / "fake-bazel.ps1"
-            python_path = sys.executable.replace("'", "''")
-            script_path = str(script).replace("'", "''")
-            # Export the native result explicitly; the wrapper reads it after
-            # the script pipeline returns.
-            bazel.write_text(f"& '{python_path}' '{script_path}' @args\n"
-                "$global:LASTEXITCODE = $LASTEXITCODE\nexit $global:LASTEXITCODE\n")
+            # Exercise a native executable, as with bazel.exe. Python treats the
+            # first verb as a script; each adapter restores the Bazel argv shape.
+            bazel = Path(sys.executable)
+            for verb in ("test", "run", "info"):
+                (root / verb).write_text("import runpy, sys\n"
+                    f"sys.argv.insert(1, {verb!r})\n"
+                    f"runpy.run_path({str(script)!r}, run_name='__main__')\n",
+                    encoding="utf-8")
         env = {key: value for key, value in os.environ.items() if not key.startswith(("DD_", "DATADOG_")) and key.lower() not in {"http_proxy", "https_proxy", "all_proxy", "no_proxy"}}
         env.update({"BAZEL": str(bazel), "RETENTION_TEST_CASE": case, "BUILD_WORKSPACE_DIRECTORY": str(root),
             "RETENTION_UPLOADER_PID_FILE": str(root / "uploader.pid"),
