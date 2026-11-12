@@ -190,9 +190,16 @@ class RetentionTests(unittest.TestCase):
 
     def test_completed_remote_carrier_survives_preparation_or_freshness_failure(self):
         """Real HTTP download/extraction, no uploader transport or backend calls."""
-        for case in ("staging_failure", "planning_failure", "freshness_excluded", "interrupt_after_download", "interrupt_before_commit", "interrupt_after_commit", "optional_success"):
+        for case in (
+            "staging_failure", "planning_failure", "freshness_excluded",
+            "interrupt_after_download", "interrupt_before_commit", "interrupt_after_commit",
+            "extraction_io_failure", "commit_io_failure", "io_after_download",
+            "extraction_io_failure_required", "commit_io_failure_required", "io_after_download_required",
+            "optional_success",
+        ):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp).resolve()
+                failure = case.removesuffix("_required")
                 raw = b'{"events":[{"type":"test","content":{"meta":{"test.name":"pending"}}}]}'
                 buffer = io.BytesIO()
                 with zipfile.ZipFile(buffer, "w") as bundle:
@@ -224,7 +231,7 @@ class RetentionTests(unittest.TestCase):
                         "doctor_runtime_path": str(resolve_runfile("tools/core/test_optimization_doctor.py"))}))
                     arguments = ["--config", str(config_path), "--artifact-source=bep", "--freshness-source=bep", "--freshness-mode=" + ("optional" if case == "optional_success" else "required"),
                         f"--bep-json={bep}", f"--artifact-staging-dir={root / 'staging'}", f"--retained-outputs-dir={root / 'retained'}",
-                        "--remote-artifacts=" + ("required" if case == "staging_failure" else "download")]
+                        "--remote-artifacts=" + ("required" if case == "staging_failure" or case.endswith("_required") else "download")]
                     if case == "optional_success":
                         arguments.append("--dry-run")
                     config = parse_uploader_config(arguments,
@@ -234,6 +241,23 @@ class RetentionTests(unittest.TestCase):
                     transport_factory = mock.Mock() if case == "optional_success" else mock.Mock(side_effect=AssertionError("excluded/preflight sources must not be uploaded"))
                     diagnostics = io.StringIO()
                     with ExitStack() as patches:
+                        if failure.endswith("_io_failure") or failure == "io_after_download":
+                            load_doctor = freshness_runtime._load_doctor_runtime
+                            def load_io_failure_doctor(*args):
+                                doctor = load_doctor(*args)
+                                if failure == "io_after_download":
+                                    download = doctor._download_http_artifact
+                                    def failed_download(*args, **kwargs):
+                                        source = download(*args, **kwargs)
+                                        self.assertEqual(archive, source.read_bytes())
+                                        raise OSError(errno.ENOSPC, "I/O error after completed download")
+                                    patches.enter_context(mock.patch.object(doctor, "_download_http_artifact", failed_download))
+                                    return doctor
+                                owner, operation = (doctor.shutil, "copyfileobj") if failure == "extraction_io_failure" else (doctor, "_commit_staging_destination")
+                                patches.enter_context(mock.patch.object(owner, operation,
+                                    side_effect=OSError(errno.ENOSPC, "no space left for materialization")))
+                                return doctor
+                            patches.enter_context(mock.patch.object(freshness_runtime, "_load_doctor_runtime", load_io_failure_doctor))
                         if case.startswith("interrupt_"):
                             load_doctor = freshness_runtime._load_doctor_runtime
                             def load_interruptible_doctor(*args):
@@ -269,7 +293,7 @@ class RetentionTests(unittest.TestCase):
                         continue
                     transport_factory.assert_not_called()
                     catalogs = list((root / "retained").glob("*/catalog.json"))
-                    if case == "interrupt_after_download":
+                    if failure in {"interrupt_after_download", "extraction_io_failure", "commit_io_failure", "io_after_download"}:
                         self.assertFalse(json.loads((root / "staging/status.json").read_text())["cleanup_safe"])
                         self.assertFalse(catalogs)
                         pending = list((root / "staging/__runs").rglob("outputs.zip"))

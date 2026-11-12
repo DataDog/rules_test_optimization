@@ -1342,6 +1342,14 @@ def _stage_bep_artifacts(
             warned.add(message)
             _warn(message)
 
+    def discard_failed_destination(tmp: Path, exc: BaseException) -> None:
+        # An uploader-owned transfer or extraction may have already written
+        # recoverable bytes. Extraction wraps I/O errors; rejected ZIPs do not.
+        if owned_run_roots is None or not (
+            isinstance(exc, OSError) or isinstance(exc.__cause__, OSError)
+        ):
+            _discard_staging_destination(tmp)
+
     try:
         refs, ambiguous_output_keys = _dedupe_stageable_artifact_references(
             [ref for ref in freshness.artifact_references
@@ -1426,7 +1434,7 @@ def _stage_bep_artifacts(
                 else:
                     source = _resolve_bep_local_artifact_path(ref.fetch_value, workspace)
             except (BepArtifactStageError, OSError) as exc:
-                _discard_staging_destination(tmp_dst)
+                discard_failed_destination(tmp_dst, exc)
                 if remote_artifacts == "required":
                     _fail(str(exc))
                 warn_once(str(exc))
@@ -1461,7 +1469,7 @@ def _stage_bep_artifacts(
                     )
                 _commit_staging_destination(tmp_dst, dst)
             except (BepArtifactStageError, OSError) as exc:
-                _discard_staging_destination(tmp_dst)
+                discard_failed_destination(tmp_dst, exc)
                 if remote_artifacts == "required":
                     _fail(str(exc))
                 warn_once(str(exc))
@@ -1477,7 +1485,7 @@ def _stage_bep_artifacts(
                     fetch_value=ref.fetch_value,
                 )
             )
-        if not staged:
+        if not staged and (owned_run_roots is None or not any(run_staging_dir.rglob(".test.outputs.tmp-*"))):
             shutil.rmtree(run_staging_dir, ignore_errors=True)
         return sorted(staged, key=lambda item: str(item.output_dir))
     except BaseException:
