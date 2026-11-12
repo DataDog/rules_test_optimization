@@ -155,7 +155,8 @@ def retain_pending_outputs(
             labels.update(expected_targets)
             labels.update(task.target_label for task in discovery.tasks if task.target_label)
             deficits = {"missing_test_shards": [list(identity) for identity in missing_test_shards(preparation.plan.executions, proven, labels)],
-                "missing_expected_targets": sorted(set(expected_targets).difference(represented_test_targets(preparation.plan))),
+                "missing_expected_targets": (sorted(set(expected_targets).difference(represented_test_targets(preparation.plan)))
+                    if preparation.plan.selected_source == "bep" else []),
                 "missing_output_labels": sorted(preparation.plan.missing_output_labels),
                 "ambiguous_output_keys": sorted(preparation.plan.ambiguous_outputs),
                 "ambiguous_targets": sorted(preparation.plan.ambiguous_labels)}

@@ -185,11 +185,12 @@ def parse_uploader_config(
     config_path = Path(args.config)
     rule = load_rule_config(config_path)
     invocation_cwd = Path(cwd or Path.cwd()).absolute()
+    working_directory = Path(env.get("BUILD_WORKING_DIRECTORY") or invocation_cwd)
     runtime_targets_file = None
     if args.expected_targets_file is not None:
         runtime_targets_file = Path(args.expected_targets_file)
         if not runtime_targets_file.is_absolute():
-            runtime_targets_file = Path(env.get("BUILD_WORKING_DIRECTORY") or invocation_cwd) / runtime_targets_file
+            runtime_targets_file = working_directory / runtime_targets_file
     lock_workspace = env.get("BUILD_WORKSPACE_DIRECTORY") or str(invocation_cwd)
     workspace = Path(lock_workspace).resolve()
     launcher_directory = _optional_path(
@@ -370,8 +371,10 @@ def parse_uploader_config(
         ),
         ci=env.get("CI", "").strip().lower() not in {"", "0", "false", "no"},
         retained_outputs_dir=retained_outputs_dir,
-        wrapper_temp_root=_optional_path(env.get("DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT", "")),
-        retention_status_file=_optional_path(env.get("DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE", "")),
+        wrapper_temp_root=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT"]
+            if env.get("DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT") else None),
+        retention_status_file=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE"]
+            if env.get("DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE") else None),
     )
 
 

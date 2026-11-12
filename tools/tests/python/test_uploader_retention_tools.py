@@ -47,6 +47,35 @@ from topt_runtime.runfiles import RunfilesResolver  # noqa: E402
 
 
 class RetentionTests(unittest.TestCase):
+    def test_wrapper_handoff_paths_use_the_invocation_directory_not_runfiles(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            config = root / "config.json"
+            config.write_text('{"schema_version":1}')
+            working = root / "workspace/subdirectory"
+            env = {"BUILD_WORKSPACE_DIRECTORY": str(root / "workspace"),
+                "BUILD_WORKING_DIRECTORY": str(working),
+                "DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT": "temporary/wrapper",
+                "DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE": "temporary/wrapper/status.json"}
+            parsed = parse_uploader_config(["--config", str(config)], environ=env, cwd=root / "runfiles")
+            self.assertEqual(working / "temporary/wrapper", parsed.wrapper_temp_root)
+            self.assertEqual(working / "temporary/wrapper/status.json", parsed.retention_status_file)
+            env["DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT"] = str(root / "absolute")
+            parsed = parse_uploader_config(["--config", str(config)], environ=env, cwd=root / "runfiles")
+            self.assertEqual(root / "absolute", parsed.wrapper_temp_root)
+
+    def test_catalog_infers_missing_expected_targets_only_from_bep(self):
+        for source in ("none", "execution_log", "bep"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                discovery, report = self._inputs(root)
+                preparation = FreshnessPreparation(FreshnessPlan(selected_source=source), ())
+                outcome = retain_pending_outputs(discovery, report, preparation, None,
+                    destination=root / "retained", disposable_roots=(), expected_targets=("//pkg:test",),
+                    keep_payloads=False, reason_code="upload_failed")
+                missing = json.loads(outcome.catalog.read_text())["unfulfilled_requirements"]["missing_expected_targets"]
+                self.assertEqual(["//pkg:test"] if source == "bep" else [], missing)
+
     def test_retention_path_cli_overrides_environment_and_uses_workspace(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
