@@ -25,7 +25,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from validate_payload_schema import validate_payload as validate_schema_payload
 
-from topt_runtime.bep_execution import test_result_event_count
+from topt_runtime.bep_execution import test_result_event_count, completed_empty_test_session
 
 from .codeowners import CodeOwnersMatch, CodeOwnersMatcher
 from .endpoints import EndpointSet
@@ -354,6 +354,7 @@ def upload_prepared_test(
         payload_type=task.payload_type,
         events=_event_count(payload),
         test_events=test_result_event_count(payload),
+        empty_test_session=completed_empty_test_session(payload),
         chunks_created=len(requests),
         requests_planned=len(requests),
     )

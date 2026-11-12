@@ -19,7 +19,7 @@ import itertools
 from typing import Any, Iterator
 
 from validate_payload_schema import validate_payload as validate_schema_payload
-from topt_runtime.bep_execution import test_result_event_count
+from topt_runtime.bep_execution import test_result_event_count, completed_empty_test_session
 
 from .batching import BatchCompatibilityError, localize_runtime_ids
 from .file_worker import (
@@ -49,6 +49,7 @@ class _Source:
     envelope: bytes
     headers: dict[str, str]
     warnings: tuple[str, ...]
+    empty_test_session: bool = False
     source_bytes: int = 0
     phase_times: tuple[tuple[str, float, float], ...] = ()
 
@@ -122,7 +123,7 @@ def _prepare_small_source_content(
             key = (envelope_key, strict_json_dumps(dict(context.values), sort_keys=True, separators=(",", ":")).encode())
             if len(envelope) + len(events) + len(key[0]) + len(key[1]) > MAX_TEST_PAYLOAD_BYTES:
                 return _OrdinarySource(task, payload, warnings, measurements, source_bytes)
-            return _Source(task, events, len(payload["events"]), test_result_event_count(payload), key, envelope, headers, tuple(warnings))
+            return _Source(task, events, len(payload["events"]), test_result_event_count(payload), key, envelope, headers, tuple(warnings), empty_test_session=completed_empty_test_session(payload))
     except TestPayloadSplitError as exc:
         return replace(_failed(task, exc.code, str(exc)), events=len(payload["events"]),
             test_events=test_result_event_count(payload), warning_codes=tuple(warnings))
@@ -354,7 +355,7 @@ def _prepare_and_send(
             with _phase(runtime, "source_cleanup"):
                 deleted, cleanup_warning = _cleanup_source(source.task.source_path, runtime.keep_payloads) if success and not runtime.dry_run else (False, None)
             results.append(FileResult(source.task.task_id, source.task.display_path, PayloadType.TEST,
-                FileStatus.SUCCEEDED if success else FileStatus.FAILED, events=source.event_count, test_events=source.test_events,
+                FileStatus.SUCCEEDED if success else FileStatus.FAILED, events=source.event_count, test_events=source.test_events, empty_test_session=source.empty_test_session,
                 chunks_created=1, chunks_uploaded=int(response is not None and success), chunks_failed=int(not success),
                 requests_planned=1, requests_attempted=response.attempts if response else 0,
                 requests_succeeded=int(response is not None and success), requests_failed=int(not success),

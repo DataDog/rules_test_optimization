@@ -751,6 +751,8 @@ def _legacy_context(
         allow_cached_payload_uploads=config.freshness_disabled_explicitly,
         bep_files=tuple(str(path) for path in config.bep_json_files),
         freshness_selected_source=freshness_plan.selected_source,
+        freshness_strict_completeness=freshness_plan.require_test_results,
+        freshness_completeness_errors=freshness_plan.completeness_errors,
         freshness_eligible_outputs=len(freshness_plan.eligible_outputs),
         freshness_cached_outputs=len(freshness_plan.cached_outputs),
         freshness_remote_only_outputs=len(freshness_plan.remote_only_outputs),

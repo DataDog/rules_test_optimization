@@ -1,1 +1,5 @@
-{"id":{"testResult":{"label":"//pkg:path_prefix","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","testActionOutput":[{"name":"test.outputs","pathPrefix":["/tmp","execroot","main","bazel-out","k8-fastbuild","testlogs","pkg","path_prefix"]}]}}
+{"id": {"started": {}}, "started": {"uuid": "d4e2ca5ed6d78789faeb151114d9794f7799ead7b0ae7a1185354e2f89017307"}, "children": [{"targetCompleted": {"label": "//pkg:path_prefix", "configuration": {}}}, {"buildFinished": {}}]}
+{"id": {"targetCompleted": {"label": "//pkg:path_prefix", "configuration": {}}}, "completed": {"success": true}, "children": [{"testResult": {"label": "//pkg:path_prefix", "run": 1, "shard": 1, "attempt": 1}}, {"testSummary": {"label": "//pkg:path_prefix", "configuration": {}}}]}
+{"id": {"testResult": {"label": "//pkg:path_prefix", "run": 1, "shard": 1, "attempt": 1}}, "testResult": {"status": "PASSED", "testActionOutput": [{"name": "test.outputs", "pathPrefix": ["/tmp", "execroot", "main", "bazel-out", "k8-fastbuild", "testlogs", "pkg", "path_prefix"]}]}}
+{"id": {"testSummary": {"label": "//pkg:path_prefix", "configuration": {}}}, "testSummary": {"totalRunCount": 1, "runCount": 1, "shardCount": 1}}
+{"id": {"buildFinished": {}}, "finished": {"overallSuccess": true}, "lastMessage": true}

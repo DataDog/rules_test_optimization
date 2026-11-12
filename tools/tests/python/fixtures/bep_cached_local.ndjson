@@ -1,1 +1,5 @@
-{"id":{"testResult":{"label":"//pkg:target","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///tmp/execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/pkg/target/test.outputs"}]}}
+{"id": {"started": {}}, "started": {"uuid": "6868ec3a617694db1b1ea078bb68e9650531767daa43c2f23a181ce69b70f995"}, "children": [{"targetCompleted": {"label": "//pkg:target", "configuration": {}}}, {"buildFinished": {}}]}
+{"id": {"targetCompleted": {"label": "//pkg:target", "configuration": {}}}, "completed": {"success": true}, "children": [{"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}}, {"testSummary": {"label": "//pkg:target", "configuration": {}}}]}
+{"id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}}, "testResult": {"status": "PASSED", "cachedLocally": true, "testActionOutput": [{"name": "test.outputs", "uri": "file:///tmp/execroot/main/bazel-out/darwin_arm64-fastbuild/testlogs/pkg/target/test.outputs"}]}}
+{"id": {"testSummary": {"label": "//pkg:target", "configuration": {}}}, "testSummary": {"totalRunCount": 1, "runCount": 1, "shardCount": 1}}
+{"id": {"buildFinished": {}}, "finished": {"overallSuccess": true}, "lastMessage": true}

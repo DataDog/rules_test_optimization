@@ -35,6 +35,8 @@ class LegacyReportContext:
     allow_cached_payload_uploads: bool = False
     bep_files: tuple[str, ...] = ()
     freshness_selected_source: str = "none"
+    freshness_strict_completeness: bool = False
+    freshness_completeness_errors: tuple[tuple[str, str], ...] = ()
     freshness_eligible_outputs: int = 0
     freshness_cached_outputs: int = 0
     freshness_remote_only_outputs: int = 0
@@ -364,6 +366,8 @@ class AggregateReport:
             "bep": {
                 "files": list(context.bep_files),
                 "freshness_selected_source": context.freshness_selected_source,
+                "strict_completeness": context.freshness_strict_completeness,
+                "completeness_errors": [{"label": label, "message": message} for label, message in context.freshness_completeness_errors],
                 "eligible_outputs": context.freshness_eligible_outputs,
                 "cached_outputs": context.freshness_cached_outputs,
                 "remote_only_outputs": context.freshness_remote_only_outputs,

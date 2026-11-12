@@ -7,12 +7,14 @@
 
 """Verify retained bytes and publication order independently of HTTP delivery."""
 
+from uploader_test_support import complete_bep_json
 from dataclasses import replace
 from contextlib import ExitStack
 import errno
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
+import inspect
 from itertools import product
 import json
 import os
@@ -226,7 +228,7 @@ class RetentionTests(unittest.TestCase):
                             "testResult": {"status": "PASSED", "testActionOutput": [{"name": "test.outputs/outputs.zip", "pathPrefix": ["bazel-out", "config", "testlogs", "pkg", label],
                                 "uri": f"http://127.0.0.1:{server.server_address[1]}/testlogs/pkg/{label}/test.outputs/outputs.zip"}]}})
                     bep = root / "bep.ndjson"
-                    bep.write_text("\n".join(json.dumps(record) for record in records))
+                    bep.write_text(complete_bep_json("\n".join(json.dumps(record) for record in records), invocation=str(bep)))
                     config_path = root / "config.json"
                     config_path.write_text(json.dumps({"schema_version": 1, "max_wait_sec": 0, "quiescent_sec": 0,
                         "doctor_runtime_path": str(resolve_runfile("tools/core/test_optimization_doctor.py"))}))
@@ -288,6 +290,10 @@ class RetentionTests(unittest.TestCase):
                             exit_code = 130
                     expected_exit = 0 if case in {"freshness_excluded", "optional_success"} or (
                         case in io_failures and freshness_mode != "required" and remote_artifacts != "required") else 2
+                    if case in io_failures and freshness_mode in {"auto", "required"} and remote_artifacts == "download":
+                        # Missing materialization is now a postflight completeness
+                        # failure, after independently usable sources are processed.
+                        expected_exit = 1
                     self.assertEqual(130 if case.startswith("interrupt_") else expected_exit, exit_code, diagnostics.getvalue())
                     if case == "optional_success":
                         transport_factory.return_value.post_json.assert_not_called()
@@ -490,6 +496,7 @@ class RetentionTests(unittest.TestCase):
 import json, os
 from pathlib import Path
 import subprocess, sys, zipfile
+''' + inspect.getsource(complete_bep_json) + '''
 root = Path(__file__).parent
 case = os.environ["RETENTION_TEST_CASE"]
 if sys.argv[1] == "test":
@@ -503,8 +510,8 @@ if sys.argv[1] == "test":
                 bundle.writestr("payloads/tests/" + name + ".json", json.dumps({"events": [{"type": "test", "content": {"meta": {"test.name": name, "test.status": "pass"}}}]}))
         bundle.writestr("bazel_target_metadata.json", json.dumps({"bazel.target": "//pkg:test", "bazel.package": "pkg"}))
     bep = next(arg.split("=", 1)[1] for arg in sys.argv if arg.startswith("--build_event_json_file="))
-    Path(bep).write_text(json.dumps({"id": {"testResult": {"label": "//pkg:test", "run": 1, "shard": 0, "attempt": 1}},
-        "testResult": {"status": "PASSED", "testActionOutput": [{"name": "test.outputs/outputs.zip", "uri": archive.as_uri()}]}}))
+    Path(bep).write_text(complete_bep_json(json.dumps({"id": {"testResult": {"label": "//pkg:test", "run": 1, "shard": 0, "attempt": 1}},
+        "testResult": {"status": "PASSED", "testActionOutput": [{"name": "test.outputs/outputs.zip", "uri": archive.as_uri()}]}}), invocation=bep))
     sys.exit(7 if case == "precedence" else 0)
 if sys.argv[1] == "run":
     if "//:dd_test_optimization_doctor" in sys.argv:
