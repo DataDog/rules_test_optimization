@@ -273,12 +273,12 @@ def prepare_freshness(
     scan_roots: list[ScanRoot] = []
     if local_testlogs_root is not None:
         scan_roots.append(ScanRoot(local_testlogs_root))
-    staged_roots = tuple(
-        sorted(
-            {Path(item.staging_root).resolve() for item in staged_artifacts},
-            key=lambda path: path.as_posix(),
-        )
-    )
+    staged_root_paths = {Path(item.staging_root).resolve() for item in staged_artifacts}
+    if staging_owner is not None:
+        # Finalization must see incomplete owned roots even when preparation
+        # returns normally without publishing any test.outputs directory.
+        staged_root_paths.update(root.resolve() for root in staging_owner.run_roots if root.is_dir())
+    staged_roots = tuple(sorted(staged_root_paths, key=lambda path: path.as_posix()))
     scan_roots.extend(ScanRoot(root, staged=True) for root in staged_roots)
     if logger is not None:
         for artifact in staged_artifacts:

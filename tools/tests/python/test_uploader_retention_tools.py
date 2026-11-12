@@ -13,6 +13,7 @@ import errno
 import gzip
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
+from itertools import product
 import json
 import os
 from pathlib import Path
@@ -190,16 +191,16 @@ class RetentionTests(unittest.TestCase):
 
     def test_completed_remote_carrier_survives_preparation_or_freshness_failure(self):
         """Real HTTP download/extraction, no uploader transport or backend calls."""
-        for case in (
-            "staging_failure", "planning_failure", "freshness_excluded",
-            "interrupt_after_download", "interrupt_before_commit", "interrupt_after_commit",
-            "extraction_io_failure", "commit_io_failure", "io_after_download",
-            "extraction_io_failure_required", "commit_io_failure_required", "io_after_download_required",
-            "optional_success",
-        ):
-            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+        cases = [(case, "optional" if case == "optional_success" else "required",
+            "required" if case == "staging_failure" else "download") for case in (
+                "staging_failure", "planning_failure", "freshness_excluded",
+                "interrupt_after_download", "interrupt_before_commit", "interrupt_after_commit", "optional_success")]
+        io_failures = ("extraction_io_failure", "commit_io_failure", "io_after_download")
+        cases.extend(product(io_failures, ("required", "optional", "auto", "disabled"), ("download", "required")))
+        for case, freshness_mode, remote_artifacts in cases:
+            with self.subTest(case=case, freshness_mode=freshness_mode, remote_artifacts=remote_artifacts), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp).resolve()
-                failure = case.removesuffix("_required")
+                failure = case
                 raw = b'{"events":[{"type":"test","content":{"meta":{"test.name":"pending"}}}]}'
                 buffer = io.BytesIO()
                 with zipfile.ZipFile(buffer, "w") as bundle:
@@ -216,7 +217,7 @@ class RetentionTests(unittest.TestCase):
                     def log_message(self, *_args):
                         pass
                 server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-                thread = threading.Thread(target=server.serve_forever)
+                thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01})
                 thread.start()
                 try:
                     records = []
@@ -229,9 +230,9 @@ class RetentionTests(unittest.TestCase):
                     config_path = root / "config.json"
                     config_path.write_text(json.dumps({"schema_version": 1, "max_wait_sec": 0, "quiescent_sec": 0,
                         "doctor_runtime_path": str(resolve_runfile("tools/core/test_optimization_doctor.py"))}))
-                    arguments = ["--config", str(config_path), "--artifact-source=bep", "--freshness-source=bep", "--freshness-mode=" + ("optional" if case == "optional_success" else "required"),
+                    arguments = ["--config", str(config_path), "--artifact-source=bep", "--freshness-source=bep", "--freshness-mode=" + freshness_mode,
                         f"--bep-json={bep}", f"--artifact-staging-dir={root / 'staging'}", f"--retained-outputs-dir={root / 'retained'}",
-                        "--remote-artifacts=" + ("required" if case == "staging_failure" or case.endswith("_required") else "download")]
+                        "--remote-artifacts=" + remote_artifacts]
                     if case == "optional_success":
                         arguments.append("--dry-run")
                     config = parse_uploader_config(arguments,
@@ -285,7 +286,9 @@ class RetentionTests(unittest.TestCase):
                         except KeyboardInterrupt:
                             self.assertTrue(case.startswith("interrupt_"))
                             exit_code = 130
-                    self.assertEqual(130 if case.startswith("interrupt_") else (0 if case in {"freshness_excluded", "optional_success"} else 2), exit_code, diagnostics.getvalue())
+                    expected_exit = 0 if case in {"freshness_excluded", "optional_success"} or (
+                        case in io_failures and freshness_mode != "required" and remote_artifacts != "required") else 2
+                    self.assertEqual(130 if case.startswith("interrupt_") else expected_exit, exit_code, diagnostics.getvalue())
                     if case == "optional_success":
                         transport_factory.return_value.post_json.assert_not_called()
                         self.assertNotIn("bep_remote_only_outputs_skipped", diagnostics.getvalue())
