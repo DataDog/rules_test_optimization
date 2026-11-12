@@ -694,7 +694,7 @@ def _expected_target_outputs(testlogs_dir: Path | None, label: str, *, allow_mis
         if allow_missing:
             return []
         _fail(_missing_expected_target_message(label, target_root, "output root"))
-    output_dirs = _discover_output_dirs(target_root)
+    output_dirs = list(find_test_output_directories(target_root, root_is_target=True))
     if not output_dirs:
         if allow_missing:
             return []

@@ -29,6 +29,70 @@ def execution(*, invocation="one", configuration="config", run=1, shard=0, attem
 
 
 class BepExecutionTests(unittest.TestCase):
+    def test_global_discovery_ignores_named_ancestors_with_real_sidecars(self):
+        from test_python_tools import TestOptimizationDoctorTests
+        from test_uploader_application_tools import _write_payload
+        from uploader_py.discovery import ScanRoot, discover_file_tasks
+        from topt_runtime.bep_execution import find_test_output_directories
+        doctor = _load_module("doctor_global_named_ancestors", "tools/core/test_optimization_doctor.py")
+        for target, relative in (("//test.outputs/pkg:target", "test.outputs/pkg/target/test.outputs"),
+                ("//test.outputs:payloads", "test.outputs/payloads/test.outputs")):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                testlogs = root / "bazel-testlogs"
+                output = testlogs / relative
+                _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
+                (output / "bazel_target_metadata.json").write_text(json.dumps({
+                    "bazel.target": target, "bazel.go.payload_selection": "module"}))
+                self.assertEqual((output,), find_test_output_directories(testlogs))
+                self.assertEqual([output], doctor._discover_candidate_output_dirs(testlogs))
+                self.assertEqual(1, len(discover_file_tasks((ScanRoot(testlogs),)).tasks))
+                config = TestOptimizationDoctorTests._write_doctor_config(root, [])
+                with mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(testlogs), "BUILD_WORKSPACE_DIRECTORY": str(root)}):
+                    self.assertEqual(0, doctor.main(["--config", str(config), "--freshness-mode=disabled"]))
+
+    def test_core_only_outputs_win_over_names_inside_payloads(self):
+        from topt_runtime.bep_execution import find_test_output_directories
+        from test_uploader_application_tools import _write_payload
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "test.outputs/payloads/tests/test.outputs"
+            _write_payload(output, "tests", "nested/test.outputs/events.json", {"events": []})
+            self.assertEqual((output,), find_test_output_directories(root))
+
+    def test_target_named_test_outputs_keeps_its_real_output_directory(self):
+        from test_python_tools import TestOptimizationDoctorTests
+        from test_uploader_application_tools import _write_payload
+        from uploader_py.discovery import ScanRoot, discover_file_tasks
+        doctor = _load_module("doctor_literal_test_outputs_target", "tools/core/test_optimization_doctor.py")
+        for suffix in ("test.outputs", "shard_1_of_2/test.outputs"):
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                testlogs = root / "bazel-testlogs"
+                output = testlogs / "pkg/test.outputs" / suffix
+                _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
+                (output / "bazel_target_metadata.json").write_text(json.dumps({
+                    "bazel.target": "//pkg:test.outputs", "bazel.go.payload_selection": "module"}))
+                config = TestOptimizationDoctorTests._write_doctor_config(root, ["//pkg:test.outputs"])
+                with mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(testlogs), "BUILD_WORKSPACE_DIRECTORY": str(root)}):
+                    self.assertEqual(0, doctor.main(["--config", str(config), "--freshness-mode=disabled"]))
+                self.assertEqual([output], doctor._expected_target_outputs(testlogs, "//pkg:test.outputs"))
+                self.assertEqual(1, len(discover_file_tasks((ScanRoot(testlogs),)).tasks))
+
+    def test_named_packages_and_empty_output_root_remain_discoverable(self):
+        from topt_runtime.bep_execution import find_test_output_directories
+        doctor = _load_module("doctor_literal_test_outputs_package", "tools/core/test_optimization_doctor.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "test.outputs/pkg/target/test.outputs"
+            (output / "payloads/tests").mkdir(parents=True)
+            (output / "payloads/tests/events.json").write_text('{"events":[]}')
+            self.assertEqual([output], doctor._discover_candidate_output_dirs(root))
+            self.assertEqual((output,), find_test_output_directories(output))
+            empty = root / "empty/test.outputs"
+            empty.mkdir(parents=True)
+            self.assertEqual((empty,), find_test_output_directories(empty))
+
     def test_retry_cannot_satisfy_other_shards_runs_configurations_or_invocations(self):
         first = execution()
         for variation in ({"shard": 1}, {"run": 2}, {"configuration": "another"}, {"invocation": "two"}):
