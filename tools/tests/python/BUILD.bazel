@@ -12,7 +12,9 @@ load("@rules_shell//shell:sh_test.bzl", "sh_test")
 sh_test(
     name = "python_tools_test",
     size = "small",
-    timeout = "moderate",
+    # The full suite includes native PowerShell subprocesses; a passing Windows
+    # run takes nearly five minutes. Keep individual subprocess deadlines intact.
+    timeout = "long",
     srcs = ["run_python_tools_test.sh"],
     data = [
         "fixtures/bep_cached_local.ndjson",
