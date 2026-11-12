@@ -111,6 +111,9 @@ class ApplicationTests(unittest.TestCase):
                 self.assertEqual(1, report["files"]["succeeded"])
                 self.assertEqual(1, report["bep"]["cached_outputs"])
                 self.assertEqual(0, report["requests"]["attempted"])
+                performance = report.pop("performance")
+                self.assertIn("worker_phases", performance)
+                self.assertGreaterEqual(performance["process_cpu_seconds"]["user"], 0)
                 reports.append(report)
                 self.assertEqual(original, [path.read_bytes() for path in paths])
                 if level in ("ERROR", "WARN"):
@@ -296,20 +299,41 @@ class ApplicationTests(unittest.TestCase):
             )
             config = self._config(root)
             stream = StringIO()
-            clock = mock.Mock(side_effect=(100.0, 108.0, 110.0, 125.0))
+            now = [100.0]
 
-            exit_code = run_uploader(
-                config,
-                resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
-                endpoints=build_endpoints(config),
-                logger=configure_logging(debug=False, stream=StringIO()),
-                stream=stream,
-                clock=clock,
-            )
+            def advance_after(function, seconds):
+                def measured(*args, **kwargs):
+                    result = function(*args, **kwargs)
+                    now[0] += seconds
+                    return result
+                return measured
+
+            from uploader_py import application
+            report_path = root / "report.json"
+            config = self._config(root, extra_arguments=(f"--report-json={report_path}",))
+            with (
+                mock.patch.object(application, "prepare_freshness", side_effect=advance_after(application.prepare_freshness, 8)),
+                mock.patch.object(application, "_discover_payloads", side_effect=advance_after(application._discover_payloads, 2)),
+                mock.patch.object(application, "_cleanup_staging", side_effect=advance_after(application._cleanup_staging, 15)),
+            ):
+                exit_code = run_uploader(
+                    config,
+                    resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config),
+                    logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=stream,
+                    clock=lambda: now[0],
+                )
 
             self.assertEqual(0, exit_code)
             self.assertIn("elapsed=25.00s", stream.getvalue())
-            self.assertEqual(4, clock.call_count)
+            performance = json.loads(report_path.read_text())["performance"]
+            phases = performance["invocation_phases"]
+            self.assertEqual(8, phases["freshness"]["wall_seconds"])
+            self.assertEqual(2, phases["discovery_matching"]["wall_seconds"])
+            self.assertEqual(15, phases["staging_cleanup"]["wall_seconds"])
+            self.assertGreater(performance["processed_source_bytes"], 0)
+            self.assertGreater(performance["prepared_body_bytes"], 0)
 
     def test_agentless_upload_without_payloads_does_not_require_api_key(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

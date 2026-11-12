@@ -12,7 +12,7 @@ One report model prevents terminal output and machine-readable counters from dri
 from __future__ import annotations
 
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, TextIO
 
@@ -65,6 +65,9 @@ class AggregateReport:
     results: tuple[FileResult, ...]
     cancelled: int = 0
     initialization_warning_codes: tuple[str, ...] = ()
+    invocation_phase_times: tuple[tuple[str, float, float], ...] = field(default=(), compare=False)
+    process_cpu_seconds: tuple[float, float] | None = field(default=None, compare=False)
+    execution_environment: tuple[tuple[str, object], ...] = field(default=(), compare=False)
 
     @classmethod
     def create(
@@ -157,7 +160,31 @@ class AggregateReport:
             for result in self.results
             for warning in result.warning_codes
         )
+        performance = {}
+        if self.invocation_phase_times or any(result.phase_times for result in self.results):
+            worker_phases: dict[str, dict[str, float]] = {}
+            for result in self.results:
+                for name, wall, cpu in result.phase_times:
+                    total = worker_phases.setdefault(name, {"sum_worker_wall_seconds": 0.0, "sum_worker_thread_cpu_seconds": 0.0})
+                    total["sum_worker_wall_seconds"] += wall
+                    total["sum_worker_thread_cpu_seconds"] += cpu
+            performance = {"performance": {
+                "invocation_wall_seconds": self.elapsed_seconds,
+                "worker_phases": worker_phases,
+                "execution_environment": dict(self.execution_environment),
+                "invocation_phases": {
+                    name: {"wall_seconds": wall, "main_thread_cpu_seconds": cpu}
+                    for name, wall, cpu in self.invocation_phase_times
+                },
+                "processed_source_bytes": sum(result.source_bytes for result in self.results),
+                "prepared_body_bytes": sum(result.prepared_body_bytes for result in self.results),
+                "process_cpu_seconds": (
+                    {"user": self.process_cpu_seconds[0], "system": self.process_cpu_seconds[1]}
+                    if self.process_cpu_seconds is not None else None
+                ),
+            }}
         return {
+            **performance,
             "mode": self.mode,
             "result": self.result_name,
             "exit_code": self.exit_code,
@@ -220,7 +247,7 @@ class AggregateReport:
             counts = payload_types[name]
             return f"{counts['succeeded']}/{counts['failed']}/{counts['skipped']}"
 
-        return (
+        lines = (
             (
                 f"[dd-uploader] summary: mode={self.mode} result={self.result_name} "
                 f"exit_code={self.exit_code} workers={self.configured_workers} "
@@ -257,6 +284,23 @@ class AggregateReport:
                 f"deleted={files['deleted']} retained={files['retained']}"
             ),
         )
+        if "performance" in stats:
+            perf = stats["performance"]
+            lines += (
+                "[dd-uploader] performance: processed_source_bytes=%d prepared_body_bytes=%d"
+                % (perf["processed_source_bytes"], perf["prepared_body_bytes"]),
+                "[dd-uploader] phase times: worker wall/CPU sums overlap; inclusive parents contain children",
+            )
+            for name, values in sorted(perf["worker_phases"].items()):
+                lines += ("[dd-uploader] worker phase %s: sum_wall=%.3fs sum_thread_cpu=%.3fs" % (
+                    name, values["sum_worker_wall_seconds"], values["sum_worker_thread_cpu_seconds"]),)
+            for name, values in sorted(perf["invocation_phases"].items()):
+                lines += ("[dd-uploader] invocation phase %s: wall=%.3fs main_thread_cpu=%.3fs" % (
+                    name, values["wall_seconds"], values["main_thread_cpu_seconds"]),)
+            if perf["process_cpu_seconds"] is not None:
+                lines += ("[dd-uploader] process CPU: user=%.3fs system=%.3fs" % (
+                    perf["process_cpu_seconds"]["user"], perf["process_cpu_seconds"]["system"]),)
+        return lines
 
     def schema_v1_report(
         self,
@@ -347,6 +391,8 @@ class AggregateReport:
             "failures",
         ):
             report_document[key] = stats[key]
+        if "performance" in stats:
+            report_document["performance"] = stats["performance"]
         return report_document
 
 

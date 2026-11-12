@@ -130,6 +130,66 @@ def _large_test_payload(*markers: str) -> str:
 
 
 class FileWorkerTests(unittest.TestCase):
+    def test_escaping_parse_error_keeps_failed_source_measurements(self) -> None:
+        import itertools
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "nested.json"
+            original = b"[" * 2000 + b"0" + b"]" * 2000
+            source.write_bytes(original)
+            wall, cpu = itertools.count(), itertools.count(step=0.5)
+            # Python's JSON decoder has different nesting limits by version;
+            # force the escaping parser failure while retaining real file I/O.
+            with patch("uploader_py.file_worker.strict_json_loads", side_effect=RecursionError):
+                result = process_file(_test_task(source), _runtime(root, dry_run=True,
+                    clock=lambda: next(wall), cpu_clock=lambda: next(cpu)), _FakeTransport())
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertEqual("unhandled_worker_exception", result.failure_code)
+            self.assertEqual(len(original), result.source_bytes)
+            self.assertEqual({"file_pipeline", "read_parse"}, {p[0] for p in result.phase_times})
+            self.assertTrue(all(wall > 0 and cpu > 0 for _, wall, cpu in result.phase_times))
+            self.assertEqual(original, source.read_bytes())
+
+    def test_complete_pipeline_has_owned_phase_and_byte_measurements(self) -> None:
+        import itertools
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "events.json"
+            original = b'{"events":[{"content":{}}]}'
+            source.write_bytes(original)
+            wall, cpu = itertools.count(), itertools.count(step=0.5)
+            runtime = _runtime(root, dry_run=True, clock=lambda: next(wall), cpu_clock=lambda: next(cpu))
+            result = process_file(_test_task(source), runtime, _FakeTransport())
+            self.assertEqual(FileStatus.SUCCEEDED, result.status)
+            self.assertEqual(len(original), result.source_bytes)
+            self.assertGreater(result.prepared_body_bytes, 0)
+            phases = {name: (wall, cpu) for name, wall, cpu in result.phase_times}
+            self.assertTrue({"file_pipeline", "read_parse", "enrichment", "validation", "encoding_split", "request_encoding"}.issubset(phases))
+            self.assertTrue(all(wall > 0 and cpu > 0 for wall, cpu in phases.values()))
+            self.assertIsNone(runtime.measurements)
+            self.assertEqual(original, source.read_bytes())
+
+    def test_coverage_and_telemetry_attribute_preparation_time(self) -> None:
+        import itertools
+        cases = (
+            (PayloadType.COVERAGE, b'{"files":[]}'),
+            (PayloadType.TELEMETRY, b'{"api_version":"v2","request_type":"app-started","runtime_id":"runtime","application":{},"payload":[]}'),
+        )
+        for payload_type, body in cases:
+            with self.subTest(payload_type=payload_type), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root / "payload.json"
+                source.write_bytes(body)
+                wall, cpu = itertools.count(), itertools.count(step=0.5)
+                result = process_file(FileTask("task", source, "payload.json", payload_type),
+                    _runtime(root, dry_run=True, clock=lambda: next(wall), cpu_clock=lambda: next(cpu)), _FakeTransport())
+                self.assertEqual(FileStatus.SUCCEEDED, result.status)
+                phases = {name: (elapsed, cpu) for name, elapsed, cpu in result.phase_times}
+                self.assertGreater(phases["read_parse"][0], 0)
+                self.assertGreater(phases["request_encoding"][1], 0)
+                self.assertGreater(result.prepared_body_bytes, 0)
+                self.assertEqual(body, source.read_bytes())
+
     def test_non_finite_test_json_fails_before_enrichment_or_http(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

@@ -12,6 +12,7 @@ One worker owns enrichment through cleanup so files need no cross-worker sync.
 from __future__ import annotations
 
 import copy
+from contextlib import nullcontext
 from dataclasses import dataclass, field, replace
 import gzip
 import json
@@ -19,7 +20,8 @@ import logging
 from pathlib import Path
 import stat
 import tempfile
-from typing import Any, Mapping, Protocol
+import time
+from typing import Any, Callable, Mapping, Protocol
 
 from validate_payload_schema import validate_payload as validate_schema_payload
 
@@ -27,6 +29,7 @@ from .codeowners import CodeOwnersMatch, CodeOwnersMatcher
 from .endpoints import EndpointSet
 from .enrichment import ContextPlan, enrich_test_payload, payload_repo_key
 from .json_utils import strict_json_dumps, strict_json_loads
+from .metrics import PhaseRecorder
 from .models import (
     MAX_TEST_PAYLOAD_BYTES,
     FileResult,
@@ -102,6 +105,9 @@ class WorkerRuntime:
     telemetry_session_id: str = ""
     telemetry_plan: TelemetryPlan = field(default_factory=TelemetryPlan)
     logger: logging.Logger | None = field(default=None, repr=False, compare=False)
+    clock: Callable[[], float] = field(default=time.monotonic, repr=False, compare=False)
+    cpu_clock: Callable[[], float] = field(default=time.thread_time, repr=False, compare=False)
+    measurements: PhaseRecorder | None = field(default=None, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -169,8 +175,17 @@ def process_file(
     transport: WorkerTransport,
 ) -> FileResult:
     """Attach task-scoped transport diagnostics around one complete pipeline."""
+    measurements = PhaseRecorder(runtime.clock, runtime.cpu_clock)
+    runtime = replace(runtime, measurements=measurements)
+    try:
+        source_bytes = task.source_path.stat().st_size
+    except OSError:
+        source_bytes = 0  # The normal file pipeline reports the read failure.
     set_log_context = getattr(transport, "set_log_context", None)
     clear_log_context = getattr(transport, "clear_log_context", None)
+    set_measurements = getattr(transport, "set_measurements", None)
+    if callable(set_measurements):
+        set_measurements(measurements)
     if callable(set_log_context):
         set_log_context(
             task.task_id,
@@ -178,10 +193,24 @@ def process_file(
             task.display_path,
         )
     try:
-        return _process_file_with_context(task, runtime, transport)
+        with measurements.phase("file_pipeline"):
+            try:
+                result = _process_file_with_context(task, runtime, transport)
+            except Exception as exc:
+                result = _failed(task, "unhandled_worker_exception", type(exc).__name__)
+        return replace(result, phase_times=measurements.snapshot(), source_bytes=source_bytes,
+                       prepared_body_bytes=dict(measurements.byte_counts()).get("prepared_body_bytes", 0))
     finally:
+        if callable(set_measurements):
+            set_measurements(None)
         if callable(clear_log_context):
             clear_log_context()
+
+
+def _phase(runtime: WorkerRuntime, name: str):
+    # Direct helper callers need not collect measurements; every process_file
+    # invocation supplies a fresh recorder that only its owning worker mutates.
+    return runtime.measurements.phase(name) if runtime.measurements is not None else nullcontext()
 
 
 def _process_file_with_context(
@@ -271,7 +300,8 @@ def _process_test(
     if runtime.filter_prefix and not task.source_path.name.startswith("span_events_"):
         return _skipped(task, "prefix_filter")
 
-    payload, read_failure = _read_json_object(task.source_path, "test")
+    with _phase(runtime, "read_parse"):
+        payload, read_failure = _read_json_object(task.source_path, "test")
     if read_failure is not None:
         return _failed(task, *read_failure)
     assert payload is not None
@@ -285,7 +315,8 @@ def _process_test(
         return failure
 
     try:
-        chunks = prepare_test_chunks(payload, task_directory)
+        with _phase(runtime, "encoding_split"):
+            chunks = prepare_test_chunks(payload, task_directory)
     except TestPayloadSplitError as exc:
         return FileResult(
             task_id=task.task_id,
@@ -297,13 +328,14 @@ def _process_test(
             failure_code=exc.code,
             failure_message=str(exc),
         )
-    requests = _prepare_test_requests(
-        task,
-        runtime,
-        chunks,
-        task_directory,
-        warnings,
-    )
+    with _phase(runtime, "request_encoding"):
+        requests = _prepare_test_requests(
+            task,
+            runtime,
+            chunks,
+            task_directory,
+            warnings,
+        )
 
     test_result_fields = dict(
         task_id=task.task_id,
@@ -318,12 +350,15 @@ def _process_test(
         headers["X-Datadog-EVP-Subdomain"] = "citestcycle-intake"
     if runtime.dry_run:
         for request in requests:
-            prepare_json_request(
-                runtime.endpoints.test_url,
-                headers,
-                request.body,
-                content_encoding=request.content_encoding,
-            )
+            with _phase(runtime, "request_encoding_transport"):
+                prepared_request = prepare_json_request(
+                    runtime.endpoints.test_url,
+                    headers,
+                    request.body,
+                    content_encoding=request.content_encoding,
+                )
+            if runtime.measurements is not None:
+                runtime.measurements.add_bytes("prepared_body_bytes", int(prepared_request.headers["Content-Length"]))
         _debug(runtime, task, "dry-run completed without network or source cleanup")
         return FileResult(
             status=FileStatus.SUCCEEDED,
@@ -345,12 +380,13 @@ def _process_test(
             f"uploading test chunk {chunk.index}/{len(requests)} "
             f"({chunk.size_bytes} bytes)",
         )
-        http_result = transport.post_json(
-            runtime.endpoints.test_url,
-            headers,
-            request.body,
-            content_encoding=request.content_encoding,
-        )
+        with _phase(runtime, "delivery"):
+            http_result = transport.post_json(
+                runtime.endpoints.test_url,
+                headers,
+                request.body,
+                content_encoding=request.content_encoding,
+            )
         requests_attempted += http_result.attempts
         retries += http_result.retries
         _debug(
@@ -418,7 +454,8 @@ def _process_test(
             **test_result_fields,
         )
 
-    deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
+    with _phase(runtime, "source_cleanup"):
+        deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
     _debug(runtime, task, f"test cleanup completed source_deleted={deleted}")
     final_warnings = list(warnings)
     if cleanup_warning:
@@ -442,111 +479,113 @@ def _enrich_and_validate_test(
     warnings: list[str],
 ) -> FileResult | None:
     """Enrich one mutable test payload and validate its prepared shape."""
-    bazel_metadata, sidecar_warning = _load_bazel_metadata(task)
-    if sidecar_warning:
-        warnings.append(sidecar_warning)
-    repo_key = payload_repo_key(bazel_metadata)
-    context_selection = runtime.context_plan.select(repo_key)
-    if sidecar_warning:
-        sidecar_state = "invalid"
-    elif bazel_metadata is not None:
-        sidecar_state = "loaded"
-    else:
-        sidecar_state = "absent"
-    _debug(
-        runtime,
-        task,
-        "Bazel sidecar=%s context_repo=%s context_selected=%s context_warning=%s"
-        % (
-            sidecar_state,
-            repr(repo_key[:256]) if repo_key is not None else "none",
-            "yes" if context_selection.values is not None else "no",
-            context_selection.warning_code or "none",
-        ),
-    )
-    codeowners_cache: dict[str, CodeOwnersMatch] = {}
-    try:
-        enrichment = enrich_test_payload(
-            payload,
-            context_selection=context_selection,
-            bazel_metadata=bazel_metadata,
-            runtime_id=runtime.runtime_id,
-            rules_version=runtime.rules_version,
-            codeowners_matcher=runtime.codeowners_matcher,
-            codeowners_cache=codeowners_cache,
+    with _phase(runtime, "enrichment"):
+        bazel_metadata, sidecar_warning = _load_bazel_metadata(task)
+        if sidecar_warning:
+            warnings.append(sidecar_warning)
+        repo_key = payload_repo_key(bazel_metadata)
+        context_selection = runtime.context_plan.select(repo_key)
+        if sidecar_warning:
+            sidecar_state = "invalid"
+        elif bazel_metadata is not None:
+            sidecar_state = "loaded"
+        else:
+            sidecar_state = "absent"
+        _debug(
+            runtime,
+            task,
+            "Bazel sidecar=%s context_repo=%s context_selected=%s context_warning=%s"
+            % (
+                sidecar_state,
+                repr(repo_key[:256]) if repo_key is not None else "none",
+                "yes" if context_selection.values is not None else "no",
+                context_selection.warning_code or "none",
+            ),
         )
-    except (TypeError, ValueError, OSError) as exc:
-        _debug(runtime, task, f"enrichment failed with {type(exc).__name__}")
-        return _failed(task, "test_enrichment_failed", type(exc).__name__)
-
-    warnings.extend(enrichment.warning_codes)
-    _debug(
-        runtime,
-        task,
-        "enrichment completed events=%d codeowners_scanned=%d enriched=%d "
-        "existing=%d missing_source=%d unmatched=%d errors=%d"
-        % (
-            _event_count(payload),
-            enrichment.codeowners.scanned,
-            enrichment.codeowners.enriched,
-            enrichment.codeowners.skipped_existing,
-            enrichment.codeowners.skipped_missing_source,
-            enrichment.codeowners.skipped_unmatched,
-            enrichment.codeowners.skipped_errors,
-        ),
-    )
-    if _debug_enabled(runtime):
-        for source_path, match in codeowners_cache.items():
-            _debug(
-                runtime,
-                task,
-                "CODEOWNERS source=%r candidate=%r matched=%s owner_count=%d"
-                % (
-                    source_path[:256],
-                    match.candidate[:256] if match.candidate is not None else None,
-                    match.matched,
-                    len(match.owners),
-                ),
+        codeowners_cache: dict[str, CodeOwnersMatch] = {}
+        try:
+            enrichment = enrich_test_payload(
+                payload,
+                context_selection=context_selection,
+                bazel_metadata=bazel_metadata,
+                runtime_id=runtime.runtime_id,
+                rules_version=runtime.rules_version,
+                codeowners_matcher=runtime.codeowners_matcher,
+                codeowners_cache=codeowners_cache,
             )
-        try:
-            enriched_bytes = len(compact_json_bytes(payload))
-        except TestPayloadSplitError as exc:
-            _debug(runtime, task, f"enriched_bytes unavailable: {exc.code}")
-        else:
-            _debug(runtime, task, f"enriched_bytes={enriched_bytes}")
+        except (TypeError, ValueError, OSError) as exc:
+            _debug(runtime, task, f"enrichment failed with {type(exc).__name__}")
+            return _failed(task, "test_enrichment_failed", type(exc).__name__)
 
-    if runtime.schema is not None:
-        try:
-            validation = validate_schema_payload(payload, runtime.schema)
-        except (TypeError, ValueError, KeyError) as exc:
-            warnings.append("schema_validation_internal_error")
-            _debug(runtime, task, f"schema validation failed with {type(exc).__name__}")
-        else:
-            if not validation.valid:
-                warnings.append("schema_validation_failed")
+        warnings.extend(enrichment.warning_codes)
+        _debug(
+            runtime,
+            task,
+            "enrichment completed events=%d codeowners_scanned=%d enriched=%d "
+            "existing=%d missing_source=%d unmatched=%d errors=%d"
+            % (
+                _event_count(payload),
+                enrichment.codeowners.scanned,
+                enrichment.codeowners.enriched,
+                enrichment.codeowners.skipped_existing,
+                enrichment.codeowners.skipped_missing_source,
+                enrichment.codeowners.skipped_unmatched,
+                enrichment.codeowners.skipped_errors,
+            ),
+        )
+        if _debug_enabled(runtime):
+            for source_path, match in codeowners_cache.items():
                 _debug(
                     runtime,
                     task,
-                    f"schema validation reported {len(validation.errors)} error(s)",
+                    "CODEOWNERS source=%r candidate=%r matched=%s owner_count=%d"
+                    % (
+                        source_path[:256],
+                        match.candidate[:256] if match.candidate is not None else None,
+                        match.matched,
+                        len(match.owners),
+                    ),
                 )
-            if validation.warnings:
-                warnings.append("schema_validation_warning")
-    _debug(runtime, task, "warning-only schema validation completed")
+            try:
+                enriched_bytes = len(compact_json_bytes(payload))
+            except TestPayloadSplitError as exc:
+                _debug(runtime, task, f"enriched_bytes unavailable: {exc.code}")
+            else:
+                _debug(runtime, task, f"enriched_bytes={enriched_bytes}")
 
-    if runtime.validate_enrichment:
-        missing_tags = _missing_enriched_tags(payload, runtime.expected_enriched_tags)
-        if missing_tags:
-            return FileResult(
-                task_id=task.task_id,
-                source_path=task.display_path,
-                payload_type=task.payload_type,
-                status=FileStatus.FAILED,
-                events=_event_count(payload),
-                warning_codes=_unique_codes(warnings),
-                failure_code="enrichment_tags_missing",
-                failure_message=",".join(missing_tags),
-            )
-        _debug(runtime, task, "expected enrichment tags validated")
+    with _phase(runtime, "validation"):
+        if runtime.schema is not None:
+            try:
+                validation = validate_schema_payload(payload, runtime.schema)
+            except (TypeError, ValueError, KeyError) as exc:
+                warnings.append("schema_validation_internal_error")
+                _debug(runtime, task, f"schema validation failed with {type(exc).__name__}")
+            else:
+                if not validation.valid:
+                    warnings.append("schema_validation_failed")
+                    _debug(
+                        runtime,
+                        task,
+                        f"schema validation reported {len(validation.errors)} error(s)",
+                    )
+                if validation.warnings:
+                    warnings.append("schema_validation_warning")
+        _debug(runtime, task, "warning-only schema validation completed")
+
+        if runtime.validate_enrichment:
+            missing_tags = _missing_enriched_tags(payload, runtime.expected_enriched_tags)
+            if missing_tags:
+                return FileResult(
+                    task_id=task.task_id,
+                    source_path=task.display_path,
+                    payload_type=task.payload_type,
+                    status=FileStatus.FAILED,
+                    events=_event_count(payload),
+                    warning_codes=_unique_codes(warnings),
+                    failure_code="enrichment_tags_missing",
+                    failure_message=",".join(missing_tags),
+                )
+            _debug(runtime, task, "expected enrichment tags validated")
     return None
 
 
@@ -617,8 +656,9 @@ def _process_coverage(
     if runtime.filter_prefix and not task.source_path.name.startswith("coverage_"):
         return _skipped(task, "prefix_filter")
     try:
-        with task.source_path.open("rb") as handle:
-            handle.read(1)
+        with _phase(runtime, "read_parse"):
+            with task.source_path.open("rb") as handle:
+                handle.read(1)
     except OSError as exc:
         return _failed(task, "coverage_payload_read_failed", type(exc).__name__)
 
@@ -634,13 +674,14 @@ def _process_coverage(
     coverage_content_type = (
         "application/msgpack" if suffix == ".msgpack" else "application/json"
     )
-    prepared = prepare_coverage_multipart(
-        task_directory / "coverage_multipart.body",
-        event_body=_COVERAGE_EVENT_BODY,
-        coverage_path=task.source_path,
-        coverage_filename=coverage_filename,
-        coverage_content_type=coverage_content_type,
-    )
+    with _phase(runtime, "request_encoding"):
+        prepared = prepare_coverage_multipart(
+            task_directory / "coverage_multipart.body",
+            event_body=_COVERAGE_EVENT_BODY,
+            coverage_path=task.source_path,
+            coverage_filename=coverage_filename,
+            coverage_content_type=coverage_content_type,
+        )
     _debug(
         runtime,
         task,
@@ -651,11 +692,14 @@ def _process_coverage(
     if not runtime.endpoints.agentless:
         headers["X-Datadog-EVP-Subdomain"] = "citestcov-intake"
     if runtime.dry_run:
-        prepare_spooled_multipart_request(
-            runtime.endpoints.coverage_url,
-            headers,
-            prepared,
-        )
+        with _phase(runtime, "request_encoding_transport"):
+            prepared_request = prepare_spooled_multipart_request(
+                runtime.endpoints.coverage_url,
+                headers,
+                prepared,
+            )
+        if runtime.measurements is not None:
+            runtime.measurements.add_bytes("prepared_body_bytes", int(prepared_request.headers["Content-Length"]))
         _debug(
             runtime,
             task,
@@ -663,11 +707,12 @@ def _process_coverage(
         )
         return FileResult(status=FileStatus.SUCCEEDED, **coverage_result_fields)
 
-    http_result = transport.post_prepared_multipart(
-        runtime.endpoints.coverage_url,
-        headers,
-        prepared,
-    )
+    with _phase(runtime, "delivery"):
+        http_result = transport.post_prepared_multipart(
+            runtime.endpoints.coverage_url,
+            headers,
+            prepared,
+        )
     _debug(
         runtime,
         task,
@@ -688,7 +733,8 @@ def _process_coverage(
             **coverage_result_fields,
         )
 
-    deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
+    with _phase(runtime, "source_cleanup"):
+        deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
     _debug(runtime, task, f"coverage cleanup completed source_deleted={deleted}")
     return FileResult(
         status=FileStatus.SUCCEEDED,
@@ -713,10 +759,11 @@ def _process_telemetry(
             "unsupported_telemetry_payload_format",
             "telemetry payloads must be JSON",
         )
-    payload, source_bytes, read_failure = _read_json_object_with_raw(
-        task.source_path,
-        "telemetry",
-    )
+    with _phase(runtime, "read_parse"):
+        payload, source_bytes, read_failure = _read_json_object_with_raw(
+            task.source_path,
+            "telemetry",
+        )
     if read_failure is not None:
         return _failed(task, *read_failure)
     assert payload is not None
@@ -725,22 +772,24 @@ def _process_telemetry(
     # A partially successful prior run stores the sole rejected request in the
     # source file. The private marker prevents rule facts from being added a
     # second time and is removed before the retry reaches the backend.
-    retry_without_augmentation = payload.pop(_TELEMETRY_RETRY_MARKER, False) is True
-    if retry_without_augmentation:
-        source_bytes = _compact_json_line(payload)
-        directive = TelemetryDirective()
-    else:
-        directive = runtime.telemetry_plan.directive_for(task.source_path)
-    warnings: list[str] = []
-    source_body = _prepare_telemetry_source(
-        source_bytes,
-        payload,
-        directive,
-        runtime.telemetry_plan.provider_suffix,
-        task_directory,
-        warnings,
-    )
-    metadata_failure = _telemetry_metadata_failure(payload)
+    with _phase(runtime, "request_encoding"):
+        retry_without_augmentation = payload.pop(_TELEMETRY_RETRY_MARKER, False) is True
+        if retry_without_augmentation:
+            source_bytes = _compact_json_line(payload)
+            directive = TelemetryDirective()
+        else:
+            directive = runtime.telemetry_plan.directive_for(task.source_path)
+        warnings: list[str] = []
+        source_body = _prepare_telemetry_source(
+            source_bytes,
+            payload,
+            directive,
+            runtime.telemetry_plan.provider_suffix,
+            task_directory,
+            warnings,
+        )
+    with _phase(runtime, "validation"):
+        metadata_failure = _telemetry_metadata_failure(payload)
     if metadata_failure is not None:
         return FileResult(
             task_id=task.task_id,
@@ -755,18 +804,19 @@ def _process_telemetry(
     requests: list[_TelemetryRequest] = [
         _TelemetryRequest(source_body, _telemetry_headers(runtime, payload))
     ]
-    if directive.create_synthetic:
-        synthetic = _build_synthetic_telemetry(payload, directive, warnings)
-        if synthetic is not None:
-            _rewrite_telemetry_provider_tags(
-                synthetic,
-                runtime.telemetry_plan.provider_suffix,
-            )
-            synthetic_path = task_directory / "telemetry_synthetic.json"
-            synthetic_path.write_bytes(_compact_json_line(synthetic))
-            requests.append(
-                _TelemetryRequest(synthetic_path, _telemetry_headers(runtime, synthetic))
-            )
+    with _phase(runtime, "request_encoding"):
+        if directive.create_synthetic:
+            synthetic = _build_synthetic_telemetry(payload, directive, warnings)
+            if synthetic is not None:
+                _rewrite_telemetry_provider_tags(
+                    synthetic,
+                    runtime.telemetry_plan.provider_suffix,
+                )
+                synthetic_path = task_directory / "telemetry_synthetic.json"
+                synthetic_path.write_bytes(_compact_json_line(synthetic))
+                requests.append(
+                    _TelemetryRequest(synthetic_path, _telemetry_headers(runtime, synthetic))
+                )
     _debug(runtime, task, f"prepared {len(requests)} telemetry request(s)")
     if _debug_enabled(runtime):
         for index, request in enumerate(requests, start=1):
@@ -794,11 +844,14 @@ def _process_telemetry(
     )
     if runtime.dry_run:
         for request in requests:
-            prepare_json_request(
-                runtime.endpoints.telemetry_url,
-                request.headers,
-                request.body,
-            )
+            with _phase(runtime, "request_encoding_transport"):
+                prepared_request = prepare_json_request(
+                    runtime.endpoints.telemetry_url,
+                    request.headers,
+                    request.body,
+                )
+            if runtime.measurements is not None:
+                runtime.measurements.add_bytes("prepared_body_bytes", int(prepared_request.headers["Content-Length"]))
         _debug(runtime, task, "dry-run completed telemetry preparation without network")
         return FileResult(
             status=FileStatus.SUCCEEDED,
@@ -813,11 +866,12 @@ def _process_telemetry(
     failed_requests: list[_TelemetryRequest] = []
     first_failure: tuple[str, str] | None = None
     for request in requests:
-        http_result = transport.post_json(
-            runtime.endpoints.telemetry_url,
-            request.headers,
-            request.body,
-        )
+        with _phase(runtime, "delivery"):
+            http_result = transport.post_json(
+                runtime.endpoints.telemetry_url,
+                request.headers,
+                request.body,
+            )
         requests_attempted += http_result.attempts
         retries += http_result.retries
         _debug(
@@ -874,7 +928,8 @@ def _process_telemetry(
             **telemetry_result_fields,
         )
 
-    deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
+    with _phase(runtime, "source_cleanup"):
+        deleted, cleanup_warning = _cleanup_source(task.source_path, runtime.keep_payloads)
     _debug(runtime, task, f"telemetry cleanup completed source_deleted={deleted}")
     if cleanup_warning:
         warnings.append(cleanup_warning)

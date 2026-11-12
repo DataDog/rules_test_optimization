@@ -1638,6 +1638,14 @@ answer why payloads were or were not uploaded: expected/seen targets, BEP
 fresh/cached/remote-only outputs, artifact staging, discovered payloads,
 processed/skipped/failed payloads, and upload attempts.
 
+The Python uploader also writes a `performance` section in its schema-version-1
+JSON report. It separates invocation elapsed time, process CPU, and the sum of
+each worker's wall and thread CPU time. Use it to distinguish preparation work
+from HTTP delivery before tuning worker counts. At `INFO`, a single progress
+line reports completed files, active workers, and request counts every five
+seconds while uploads are running. See the [measurement reference](docs/Configuration_Reference.md#uploader-measurements)
+for phase and byte-counter meanings.
+
 For support tickets, prefer
 `.topt/reports/dd-test-optimization-support.zip`. For the simplest customer ask,
 run the doctor with `--support-bundle=<path>` and attach the resulting doctor-only

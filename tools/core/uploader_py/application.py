@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 import logging
+import os
 from pathlib import Path
 import sys
 import time
@@ -48,6 +49,7 @@ from .freshness import (
 )
 from .locking import WorkspaceLock, WorkspaceLockError
 from .logging_utils import redact_url
+from .metrics import PhaseRecorder, execution_environment
 from .models import FileStatus, PayloadType
 from .reporting import AggregateReport, LegacyReportContext, emit_report
 from .resources import LoadedResources, ResourceError, ResourceInputs, load_resources
@@ -118,6 +120,9 @@ def _run_uploader_with_lock(
 ) -> int:
     """Hold the workspace lock through preflight, cleanup, and reporting."""
     started = clock()
+    phases = PhaseRecorder(clock)
+    process_started = os.times()
+    environment = execution_environment()
     expected_targets_plan = ExpectedTargetsPlan()
     freshness_plan = FreshnessPlan()
     freshness_preparation: FreshnessPreparation | None = None
@@ -131,7 +136,8 @@ def _run_uploader_with_lock(
 
     try:
         # The public wrapper keeps the lock through final report emission.
-        workspace_lock.acquire()
+        with phases.phase("workspace_lock"):
+            workspace_lock.acquire()
         expected_targets_plan = load_expected_targets(
             static_targets=config.rule.expected_targets,
             expected_targets_file_paths=(
@@ -143,19 +149,21 @@ def _run_uploader_with_lock(
             runtime_targets_file=config.runtime_expected_targets_file,
             runtime_selection=config.rule.runtime_selection,
         )
-        resources = _load_resources(config, resolver, logger)
+        with phases.phase("resource_loading"):
+            resources = _load_resources(config, resolver, logger)
         local_root = resolve_local_testlogs_root(
             explicit=config.testlogs_dir,
             workspace=config.workspace,
             cwd=Path.cwd(),
         )
-        freshness_preparation = prepare_freshness(
-            config,
-            resolver=resolver,
-            local_testlogs_root=local_root,
-            expected_targets=expected_targets_plan.targets,
-            logger=logger,
-        )
+        with phases.phase("freshness"):
+            freshness_preparation = prepare_freshness(
+                config,
+                resolver=resolver,
+                local_testlogs_root=local_root,
+                expected_targets=expected_targets_plan.targets,
+                logger=logger,
+            )
         freshness_plan = freshness_preparation.plan
         logger.debug(
             "freshness prepared: selected_source=%s scan_roots=%s "
@@ -180,23 +188,24 @@ def _run_uploader_with_lock(
             raise DiscoveryError(
                 "FAIL_ON_ERROR is set and no local or staged testlogs root was found"
             )
-        raw_discovery = _discover_payloads(
-            config,
-            freshness_preparation,
-            no_expected_payloads=no_expected_payloads,
-            logger=logger,
-        )
+        with phases.phase("discovery_matching"):
+            raw_discovery = _discover_payloads(
+                config,
+                freshness_preparation,
+                no_expected_payloads=no_expected_payloads,
+                logger=logger,
+            )
 
-        expected_discovery = select_expected_outputs(
-            raw_discovery,
-            expected_targets_plan,
-            allow_missing=freshness_plan.selected_source == "bep",
-        )
-        freshness_selection = filter_discovery_for_freshness(
-            expected_discovery,
-            freshness_plan,
-            freshness_mode=config.freshness_mode,
-        )
+            expected_discovery = select_expected_outputs(
+                raw_discovery,
+                expected_targets_plan,
+                allow_missing=freshness_plan.selected_source == "bep",
+            )
+            freshness_selection = filter_discovery_for_freshness(
+                expected_discovery,
+                freshness_plan,
+                freshness_mode=config.freshness_mode,
+            )
         eligible_discovery = freshness_selection.discovery
         freshness_skipped_outputs = freshness_selection.skipped_outputs
         freshness_skipped_count = len(freshness_skipped_outputs)
@@ -220,6 +229,7 @@ def _run_uploader_with_lock(
             logger=logger,
             transport_factory=transport_factory,
             clock=clock,
+            measurements=phases,
         )
         workers_completed = True
         report = replace(
@@ -297,24 +307,32 @@ def _run_uploader_with_lock(
             exc,
         )
     finally:
-        report, report_reason = _cleanup_staging(
-            freshness_preparation,
-            report,
-            report_reason,
-            config=config,
-            discovery=raw_discovery,
-            started=started,
-            clock=clock,
-            logger=logger,
-        )
+        with phases.phase("staging_cleanup"):
+            report, report_reason = _cleanup_staging(
+                freshness_preparation,
+                report,
+                report_reason,
+                config=config,
+                discovery=raw_discovery,
+                started=started,
+                clock=clock,
+                logger=logger,
+            )
 
     assert report is not None
     # The coordinator measures only worker preparation and delivery. Final
     # invocation statistics must also include locking, BEP staging, discovery
     # quiescence, resource loading, and staging cleanup.
+    process_finished = os.times()
     report = replace(
         report,
         elapsed_seconds=max(0.0, clock() - started),
+        invocation_phase_times=phases.snapshot(),
+        execution_environment=tuple(sorted(environment.items())),
+        process_cpu_seconds=(
+            max(0.0, process_finished.user - process_started.user),
+            max(0.0, process_finished.system - process_started.system),
+        ),
     )
     report_context = _legacy_context(
         config,
