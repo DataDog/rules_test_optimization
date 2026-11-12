@@ -159,7 +159,10 @@ one pass while the wrapper preserves the earlier failure as the job result.
 
 The doctor must see JSON payloads, Bazel target metadata, Git metadata, and only
 valid Go payload-selection states. `module`, `module_override`, and
-`full_bundle_disabled` are valid. `full_bundle_no_match` is a rollout blocker
+`full_bundle_disabled` are valid. A new package inside its configured Go module
+can report `full_bundle_importpath_miss`; the doctor accepts it after checking
+the recorded module boundary. Add that value to an explicit doctor allowlist
+when the rollout permits this fallback. `full_bundle_no_match` is a rollout blocker
 unless the target was explicitly configured to allow it.
 
 Upload-time enrichment validation proves that tags expected in Datadog are

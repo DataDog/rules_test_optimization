@@ -392,7 +392,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_CONTEXT_JSON` | unset | Legacy explicit override for one readable `context.json` path. It still wins when set, but mixed-runtime workspaces should prefer bundling all context targets in uploader `data`. |
 | `DD_TEST_OPTIMIZATION_BEP_JSON` | unset | Optional explicit path to one BEP JSON file from the matching `bazel test --build_event_json_file=...` invocation. Prefer repeatable `--bep-json` flags when a wrapper runs multiple Bazel test invocations. The uploader does not auto-discover default BEP paths because stale BEP files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE` | `auto` | Cache-safety source: `auto`, `bep`, or `execution_log`. `auto` prefers BEP and uses execution-log filtering only as a legacy fallback when configured. |
-| `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | `auto` | Cache-safety mode: `auto`, `required`, `optional`, or `disabled`. In CI, `auto` fails closed when no freshness source is available. |
+| `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | `auto` | Cache-safety mode: `auto`, `required`, `optional`, or `disabled`. In CI, `auto` fails closed when no freshness source is available. With a selected BEP, it applies strict completeness checks even outside CI. |
 | `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | unset | Optional path for the doctor machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the doctor target's `--` separator. |
 | `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | unset | Optional path for the uploader machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the uploader target's `--` separator. |
 | `DD_TEST_OPTIMIZATION_REPORT_DIR` | unset | Optional wrapper report directory. CI wrappers write `doctor-report.json` plus `uploader-dry-run-report.json` without upload or `uploader-upload-report.json` with upload. |
@@ -806,29 +806,36 @@ or set `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` for the uploader run.
 The doctor and default Python uploader associate fresh outputs with the BEP
 invocation, target, configuration, test run, shard, and attempt. A cached shard
 does not require a new payload and cannot satisfy a different fresh shard. Each
-fresh shard needs a typed test-result event; coverage, telemetry, and session,
-module, or suite end events do not satisfy that requirement.
+fresh shard needs a typed test-result event, or a PASSED result bound to Mini's
+explicit completed zero-tests session (`test.session.empty_reason=zero_tests`
+and a successful exit). Coverage, telemetry and generic hierarchy end events
+do not satisfy that requirement.
 
 All available fresh attempts are processed, including failed attempts in Bazel's
 `test_attempts/attempt_N.outputs` directories. A later populated retry may satisfy
 an earlier failed attempt of that same shard. An earlier populated attempt cannot
 hide a later missing result. An empty output directory is not positive evidence
-that a shard selected zero tests; topology and empty-shard completion detection
-are not provided by this accounting check.
+that a shard selected zero tests.
+
+Strict BEP validation also checks announced events, summary run/shard/attempt
+counts, BuildFinished and the final `last_message`. A completed build with
+failed tests remains valid input. When Bazel retrieves a retry from cache, it
+may emit one cached result while retaining historical attempt counts in the
+summary. Those counts are bounds for cached history; announced events,
+run/shard coverage and fresh-result evidence still need to be complete.
 
 Retry ancestry requires a physical previous-attempt directory or a matching BEP
 output mapping. A literal target with retry-like names is not attributed to its
 parent, and a contradictory `bazel.target` sidecar is rejected before upload.
 
-| Explicit freshness mode | Missing test results for a selected or identified shard |
+| Effective freshness mode | Missing test results for a selected or identified shard |
 | --- | --- |
-| `required` | Fail after processing other authorized usable payloads, regardless of `fail_on_error`. |
+| `required` or `auto` with a selected BEP | Fail after processing other authorized usable payloads, regardless of `fail_on_error`. |
 | `optional` | Fail when `fail_on_error = True`; otherwise report a warning. |
 | `disabled` | No BEP completeness guarantee; other validation policies still apply. |
 
-This changes the default-attribute behavior for integrations that explicitly use
-`--freshness-mode=required`: leaving `fail_on_error` false no longer suppresses a
-known missing-shard failure. Supply an exact expected-target catalog for the
+Under strict BEP validation, leaving `fail_on_error` false cannot suppress a
+known missing-shard or incomplete-stream failure. Supply an exact expected-target catalog for the
 strongest available check. Without one, only fresh sidecars or recognized test
 payloads with a unique BEP association identify instrumented targets. A target
 with no such evidence cannot be inferred to require Test Optimization payloads.
@@ -840,9 +847,12 @@ about an output's source, the affected output is blocked rather than guessed;
 other unambiguous outputs still proceed. Preserve separate artifact snapshots
 when combining invocations whose targets overlap.
 
-`auto` keeps its existing component-specific behavior: when BEP is configured,
-the doctor requires its evidence, while the uploader uses CI and configured-source discovery to select
-its existing policy. Choose `required` explicitly for this strict shard check.
+With a selected BEP, `auto` and `required` use the same strict checks in doctor
+and the default Python uploader. Without a BEP, the doctor keeps its local
+diagnostics; the uploader requires a supported source in CI and otherwise
+keeps best-effort local discovery. An execution log filters outputs but cannot
+prove BEP topology. Choose `required` for integrations that must always supply
+a freshness source.
 The standalone legacy Bash and PowerShell uploaders retain target-level
 accounting gated by `fail_on_error`; they do not implement the Python uploader's
 strict per-shard check. Run the doctor first and preserve its exit status when
