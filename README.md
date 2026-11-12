@@ -1562,6 +1562,15 @@ platform-incompatible `SKIPPED` BEP results, but validates payloads only from
 fresh outputs. An invocation whose expected targets are all cached or skipped
 is therefore a successful no-op. The uploader applies the same freshness filter
 and never uploads cached outputs.
+
+The default Python uploader accounts for each fresh BEP shard and test run,
+including earlier retry output directories. With `--freshness-mode=required`,
+missing test-result events now fail after other usable payloads are processed,
+even if `fail_on_error` remains false. Coverage, telemetry, and hierarchy-end
+events do not prove that a shard's test results were collected. See
+[shard accounting](docs/Uploader_Reference.md#shards-runs-and-retries) for the
+retry policy, selection limits, and legacy-runtime behavior.
+
 The default freshness source/mode is `auto`: when BEP is explicitly configured,
 the uploader uses it; otherwise it can use an explicitly configured legacy
 execution-log fallback. Artifact discovery defaults to local `bazel-testlogs`

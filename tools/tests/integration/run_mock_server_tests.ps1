@@ -1372,8 +1372,8 @@ filegroup(
   $bepJson = Join-Path $tempRoot "same_label_bep.json"
   @'
 {"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"local"},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/fresh_attempt/test.outputs"},{"name":"diagnostic.remote","uri":"bytestream://remote-cas/blobs/abcdef/456"}]}}
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_local_attempt/test.outputs"}]}}
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_remote_attempt/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":2,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_local_attempt/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":3,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_remote_attempt/test.outputs"}]}}
 '@ | Set-Content -LiteralPath $bepJson -Encoding UTF8
 
   $env:TESTLOGS_DIR = $bepTestlogsDir
@@ -1421,8 +1421,8 @@ filegroup(
   }
 @"
 {"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"strategy":"local"},"testActionOutput":[{"name":"test.outputs","uri":"$bepStagedArtifactUri","pathPrefix":["bazel-out","x64_windows-fastbuild","testlogs","same_label","fresh_attempt"]},{"name":"diagnostic.remote","uri":"bytestream://remote-cas/blobs/abcdef/456"}]}}
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_local_attempt/test.outputs"}]}}
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_remote_attempt/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":2,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_local_attempt/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":3,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_remote_attempt/test.outputs"}]}}
 "@ | Set-Content -LiteralPath $bepStagedJson -Encoding UTF8
 	  if (Test-Path -LiteralPath $bepStagedLocalFresh) {
 	    throw "staged BEP scenario did not remove fresh local test.outputs from copied scan root"
@@ -1761,8 +1761,8 @@ cp "$BEP_REMOTE_ZIP_SOURCE" "$out"
 
 	  $bepCachedOnlyJson = Join-Path $tempRoot "cached_only_bep.json"
 	  @'
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_local_attempt/test.outputs"}]}}
-{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":1,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_remote_attempt/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":2,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","cachedLocally":true,"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_local_attempt/test.outputs"}]}}
+{"id":{"testResult":{"label":"//same_label:bep_payload_test","run":3,"shard":1,"attempt":1}},"testResult":{"status":"PASSED","executionInfo":{"cachedRemotely":true},"testActionOutput":[{"name":"test.outputs","uri":"file:///execroot/main/bazel-out/x64_windows-fastbuild/testlogs/same_label/cached_remote_attempt/test.outputs"}]}}
 '@ | Set-Content -LiteralPath $bepCachedOnlyJson -Encoding UTF8
 	  $bepCachedOnlyTranscript = Join-Path $tempRoot "bep_cached_only_upload.transcript.txt"
 	  $bepCachedOnlyStart = @(Read-JsonLog -Path $mockLog).Count

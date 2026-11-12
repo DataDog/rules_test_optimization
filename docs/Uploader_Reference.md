@@ -694,6 +694,53 @@ passing `--execution_log_json_file=.topt/bazel-execution-log.json` to `bazel tes
 is not enough by itself; also pass `--execution-log-json=.topt/bazel-execution-log.json`
 or set `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` for the uploader run.
 
+### Shards, runs, and retries
+
+The doctor and default Python uploader associate fresh outputs with the BEP
+invocation, target, configuration, test run, shard, and attempt. A cached shard
+does not require a new payload and cannot satisfy a different fresh shard. Each
+fresh shard needs a typed test-result event; coverage, telemetry, and session,
+module, or suite end events do not satisfy that requirement.
+
+All available fresh attempts are processed, including failed attempts in Bazel's
+`test_attempts/attempt_N.outputs` directories. A later populated retry may satisfy
+an earlier failed attempt of that same shard. An earlier populated attempt cannot
+hide a later missing result. An empty output directory is not positive evidence
+that a shard selected zero tests; topology and empty-shard completion detection
+are not provided by this accounting check.
+
+Retry ancestry requires a physical previous-attempt directory or a matching BEP
+output mapping. A literal target with retry-like names is not attributed to its
+parent, and a contradictory `bazel.target` sidecar is rejected before upload.
+
+| Explicit freshness mode | Missing test results for a selected or identified shard |
+| --- | --- |
+| `required` | Fail after processing other authorized usable payloads, regardless of `fail_on_error`. |
+| `optional` | Fail when `fail_on_error = True`; otherwise report a warning. |
+| `disabled` | No BEP completeness guarantee; other validation policies still apply. |
+
+This changes the default-attribute behavior for integrations that explicitly use
+`--freshness-mode=required`: leaving `fail_on_error` false no longer suppresses a
+known missing-shard failure. Supply an exact expected-target catalog for the
+strongest available check. Without one, only fresh sidecars or recognized test
+payloads with a unique BEP association identify instrumented targets. A target
+with no such evidence cannot be inferred to require Test Optimization payloads.
+
+Use one BEP file per invocation. Repeating a file is idempotent, as is an identical
+copy with the same build UUID. Different invocations remain distinct even when
+their target names overlap. If they reuse an output path, or carriers disagree
+about an output's source, the affected output is blocked rather than guessed;
+other unambiguous outputs still proceed. Preserve separate artifact snapshots
+when combining invocations whose targets overlap.
+
+`auto` keeps its existing component-specific behavior: when BEP is configured,
+the doctor requires its evidence, while the uploader uses CI and configured-source discovery to select
+its existing policy. Choose `required` explicitly for this strict shard check.
+The standalone legacy Bash and PowerShell uploaders retain target-level
+accounting gated by `fail_on_error`; they do not implement the Python uploader's
+strict per-shard check. Run the doctor first and preserve its exit status when
+using either rollback runtime.
+
 ### `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` behavior (including `0`)
 
 `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` controls how long the uploader waits for

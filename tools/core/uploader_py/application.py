@@ -20,6 +20,7 @@ import time
 from typing import Callable, TextIO
 
 from topt_runtime.runfiles import RunfilesResolver
+from topt_runtime.bep_execution import exclusively_cached_labels
 
 from .config import ConfigError, UploaderConfig, validate_upload_credentials
 from .coordinator import CoordinatorSettings, run_discovered_tasks
@@ -185,6 +186,8 @@ def _run_uploader_with_lock(
             and config.fail_on_error
             and not no_expected_payloads
         ):
+            if freshness_plan.ambiguous_labels.intersection(expected_targets_plan.targets):
+                raise FreshnessError("BEP freshness is ambiguous: target reported as both platform-skipped and executed")
             raise DiscoveryError(
                 "FAIL_ON_ERROR is set and no local or staged testlogs root was found"
             )
@@ -200,11 +203,13 @@ def _run_uploader_with_lock(
                 raw_discovery,
                 expected_targets_plan,
                 allow_missing=freshness_plan.selected_source == "bep",
+                bep_outputs=freshness_plan.eligible_outputs,
             )
             freshness_selection = filter_discovery_for_freshness(
                 expected_discovery,
                 freshness_plan,
                 freshness_mode=config.freshness_mode,
+                expected_targets=expected_targets_plan.targets,
             )
         eligible_discovery = freshness_selection.discovery
         freshness_skipped_outputs = freshness_selection.skipped_outputs
@@ -246,13 +251,18 @@ def _run_uploader_with_lock(
             )
         else:
             try:
-                validate_fresh_outputs_accounted(
+                freshness_warning = validate_fresh_outputs_accounted(
                     freshness_plan,
                     eligible_discovery,
                     report.results,
                     expected_targets=expected_targets_plan.targets,
                     fail_on_error=config.fail_on_error,
+                    identified_targets=freshness_selection.identified_targets,
+                    ambiguous_outputs=freshness_selection.ambiguous_outputs,
                 )
+                if freshness_warning:
+                    logger.warning("%s", freshness_warning)
+                    report = replace(report, initialization_warning_codes=report.initialization_warning_codes + ("bep_missing_test_evidence",))
             except FreshnessError as exc:
                 logger.error("%s", exc)
                 report = replace(report, exit_code=exc.exit_code)
@@ -525,14 +535,16 @@ def _no_expected_payloads(
 ) -> bool:
     """Return whether BEP accounts for every target without a fresh payload."""
     expected_labels = frozenset(expected.targets)
-    cached_labels = frozenset(label for label, _key in freshness.cached_outputs)
-    accounted_labels = cached_labels.union(freshness.skipped_targets)
+    cached_labels = frozenset(exclusively_cached_labels(freshness.executions)) if freshness.executions else frozenset(label for label, _key in freshness.cached_outputs)
+    accounted_labels = cached_labels.intersection(expected_labels).union(freshness.skipped_targets)
     return bool(
         expected_labels
         and accounted_labels == expected_labels
         and not freshness.eligible_outputs
         and not freshness.remote_only_outputs
         and not freshness.missing_output_labels
+        and not freshness.ambiguous_labels.intersection(expected_labels)
+        and not any(not execution.cached and execution.identity[1] in expected_labels for execution in freshness.executions)
     )
 
 

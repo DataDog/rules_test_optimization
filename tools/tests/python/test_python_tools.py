@@ -1675,7 +1675,7 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         output = root / "pkg" / "target" / "test.outputs"
         payload_dir = output / "payloads" / "tests"
         payload_dir.mkdir(parents=True)
-        (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
+        (payload_dir / "span_events_1.json").write_text('{"events":[{"type":"test","content":{}}]}', encoding="utf-8")
         (output / "bazel_target_metadata.json").write_text(
             json.dumps({
                 "bazel.target": target,
@@ -2046,10 +2046,10 @@ class TestOptimizationDoctorTests(unittest.TestCase):
             )
 
             stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
-                self.mod._parse_bep_freshness([bep])
+            with contextlib.redirect_stderr(stderr):
+                freshness = self.mod._parse_bep_freshness([bep])
 
-        self.assertIn("both platform-skipped and executed", stderr.getvalue())
+        self.assertEqual(frozenset({"//pkg:target"}), freshness.ambiguous_labels)
 
     def test_bep_freshness_rejects_cached_result_for_skipped_target_without_outputs(self) -> None:
         """Treat every cached TestResult as execution evidence, even without outputs."""
@@ -2070,10 +2070,10 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 )
 
                 stderr = io.StringIO()
-                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
-                    self.mod._parse_bep_freshness([bep])
+                with contextlib.redirect_stderr(stderr):
+                    freshness = self.mod._parse_bep_freshness([bep])
 
-            self.assertIn("both platform-skipped and executed", stderr.getvalue())
+            self.assertEqual(frozenset({"//pkg:target"}), freshness.ambiguous_labels)
 
     def _remote_outputs_zip_freshness(self, root: Path, *, label: str = "//pkg:remote_only") -> object:
         """Create BEP freshness for one remote stageable outputs.zip carrier."""
@@ -2655,7 +2655,7 @@ $rows | ConvertTo-Json -Compress
             )
             zip_path.parent.mkdir(parents=True)
             with zipfile.ZipFile(zip_path, "w") as archive:
-                archive.writestr("payloads/tests/span_events_1.json", "{}")
+                archive.writestr("payloads/tests/span_events_1.json", '{"events":[{"type":"test","content":{}}]}')
                 archive.writestr(
                     "bazel_target_metadata.json",
                     json.dumps({
@@ -2777,7 +2777,8 @@ $rows | ConvertTo-Json -Compress
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             served_root = root / "http"
-            self._write_outputs_zip(served_root / "outputs.zip", target="//pkg:remote_only")
+            self._write_outputs_zip(served_root / "outputs.zip", target="//pkg:remote_only",
+                payload_content='{"events":[{"type":"test","content":{}}]}')
             config_path = self._write_doctor_config(root, [])
             bep = root / "freshness.bep.json"
             with _serve_directory(served_root) as base_url:
@@ -4282,7 +4283,7 @@ $rows | ConvertTo-Json -Compress
             self.assertEqual(1, len(staged))
             self.assertTrue((staged[0].output_dir / "payloads" / "tests" / "span_events_1.json").is_file())
 
-    def test_stage_bep_artifacts_rejects_ambiguous_carriers_in_required_mode(self) -> None:
+    def test_stage_bep_artifacts_blocks_known_ambiguous_carriers_in_required_mode(self) -> None:
         """Validate duplicate BEP carriers for one output key fail closed in strict mode."""
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4314,13 +4315,13 @@ $rows | ConvertTo-Json -Compress
             )
             freshness = self.mod._parse_bep_freshness([bep])
 
-            with self.assertRaises(SystemExit):
-                self.mod._stage_bep_artifacts(
-                    freshness,
-                    workspace=root,
-                    staging_dir=root / ".topt" / "bep-artifacts",
-                    remote_artifacts="required",
-                )
+            staged = self.mod._stage_bep_artifacts(
+                freshness, workspace=root,
+                staging_dir=root / ".topt" / "bep-artifacts",
+                remote_artifacts="required",
+            )
+            self.assertEqual([], staged)
+            self.assertIn("pkg/target/test.outputs", freshness.ambiguous_outputs)
 
     def test_stage_bep_artifacts_downloads_http_outputs_zip_without_downloader(self) -> None:
         """Validate native HTTP outputs.zip staging logs a redacted successful download."""
@@ -5269,8 +5270,8 @@ Path(out).mkdir(parents=True)
                     f"{fixture} contains unsanitized BEP content matching {pattern!r}",
                 )
 
-    def test_parse_bep_freshness_rejects_conflicting_output_state(self) -> None:
-        """Validate overlapping BEP files cannot report the same output as fresh and cached."""
+    def test_parse_bep_freshness_marks_conflicting_output_state(self) -> None:
+        """Keep conflicting keys blocked while other output evidence remains usable."""
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             fresh_bep = tmp_path / "fresh.bep.json"
@@ -5279,8 +5280,8 @@ Path(out).mkdir(parents=True)
             self._write_bep(fresh_bep, [self._bep_test_result("//pkg:target", output)])
             self._write_bep(cached_bep, [self._bep_test_result("//pkg:target", output, cached_locally=True)])
 
-            with self.assertRaises(SystemExit):
-                self.mod._parse_bep_freshness([fresh_bep, cached_bep])
+            freshness = self.mod._parse_bep_freshness([fresh_bep, cached_bep])
+            self.assertEqual(frozenset({"pkg/target/test.outputs"}), freshness.ambiguous_outputs)
 
     def test_parse_bep_freshness_records_remote_only_outputs(self) -> None:
         """Validate required mode can fail before local scanning for remote-only outputs."""
@@ -6845,6 +6846,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
             (_NON_SIBLING_DOCTOR_RUNTIME_RLOC, _DOCTOR_RUNTIME_RLOC),
             ("tools/core/topt_runtime/__init__.py", "tools/core/topt_runtime/__init__.py"),
             ("tools/core/topt_runtime/log_levels.py", "tools/core/topt_runtime/log_levels.py"),
+            ("tools/core/topt_runtime/bep_execution.py", "tools/core/topt_runtime/bep_execution.py"),
         ]:
             dest = runfiles_dir / rloc
             dest.parent.mkdir(parents=True, exist_ok=True)

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import importlib.util
+import hashlib
 import json
 import math
 import os
@@ -30,6 +31,10 @@ import urllib.request
 from urllib.parse import unquote, urlparse
 import uuid
 import zipfile
+from topt_runtime.bep_execution import (
+    BepTestExecution, ambiguous_execution_outputs, missing_test_shards,
+    canonical_output_directory_key, find_test_output_directories, test_result_event_count, exclusively_cached_labels,
+)
 from topt_runtime.log_levels import enabled, resolve_log_level
 
 
@@ -121,6 +126,9 @@ class BepFreshness:
         missing_output_mappings: set[str],
         artifact_references: list[BepArtifactReference] | None = None,
         skipped_targets: set[str] | None = None,
+        executions: list[BepTestExecution] | None = None,
+        ambiguous_outputs: set[str] | None = None,
+        ambiguous_labels: set[str] | None = None,
     ) -> None:
         self.eligible_outputs = eligible_outputs
         self.cached_outputs = cached_outputs
@@ -128,6 +136,12 @@ class BepFreshness:
         self.missing_output_mappings = missing_output_mappings
         self.artifact_references = artifact_references or []
         self.skipped_targets = skipped_targets or set()
+        self.executions = executions or []
+        self.ambiguous_outputs = ambiguous_execution_outputs(self.executions).union(
+            key for _, key in eligible_outputs.intersection(cached_outputs)).union(ambiguous_outputs or ())
+        self.ambiguous_labels = frozenset(ambiguous_labels or ())
+        self.ambiguous_outputs = self.ambiguous_outputs.union(key for execution in self.executions if execution.identity[1] in self.ambiguous_labels for key in execution.output_keys)
+        self.identified_labels: set[str] = set()
 
 
 class StagedBepArtifact:
@@ -680,7 +694,7 @@ def _expected_target_outputs(testlogs_dir: Path | None, label: str, *, allow_mis
         if allow_missing:
             return []
         _fail(_missing_expected_target_message(label, target_root, "output root"))
-    output_dirs = _discover_output_dirs(target_root)
+    output_dirs = list(find_test_output_directories(target_root, root_is_target=True))
     if not output_dirs:
         if allow_missing:
             return []
@@ -808,7 +822,7 @@ def _local_artifact_path_from_reference(value: str) -> Path:
     return Path(raw)
 
 
-def _bep_test_output_key(path_value: str) -> str:
+def _bep_test_output_key(path_value: str, *, artifact_name: str = "") -> str:
     """Normalize a BEP output reference to a bazel-testlogs-relative test.outputs key."""
     if not path_value:
         return ""
@@ -825,17 +839,38 @@ def _bep_test_output_key(path_value: str) -> str:
         normalized = normalized[2:]
     normalized = normalized.lstrip("/")
 
+    # File.name supplies the relative path inside undeclared outputs. Use it
+    # before heuristic directory spellings: target names and payload paths may
+    # themselves contain test.outputs or retry-shaped components.
+    if artifact_name.startswith("test.outputs/"):
+        suffix = artifact_name[len("test.outputs/"):]
+        if suffix and normalized.endswith("/" + suffix):
+            root = normalized[:-len(suffix)].rstrip("/")
+            key = canonical_output_directory_key(root)
+            if key.endswith("/test.outputs"):
+                return key.lstrip("/")
+
     marker = "/test.outputs/"
-    if marker in normalized:
-        normalized = normalized.split(marker, 1)[0] + "/test.outputs"
-    elif normalized.endswith("/test.outputs"):
+    retry_log = re.search(r"(?:^|/)test_attempts/attempt_([0-9]+)[.](?:log|xml)$", normalized)
+    if normalized.endswith("/test.outputs"):
         pass
-    elif normalized.endswith("/outputs.zip"):
-        normalized = normalized.rsplit("/", 1)[0] + "/test.outputs"
     elif normalized.endswith("/test.log") or normalized.endswith("/test.xml"):
         normalized = normalized.rsplit("/", 1)[0] + "/test.outputs"
+    elif retry_log:
+        normalized = normalized[:retry_log.start()] + "/test_attempts/attempt_" + retry_log[1] + ".outputs/test.outputs"
+    elif canonical_output_directory_key(normalized).endswith("/test.outputs"):
+        normalized = canonical_output_directory_key(normalized)
+    elif marker in normalized:
+        normalized = normalized.rsplit(marker, 1)[0] + "/test.outputs"
+    elif normalized.endswith("/outputs.zip"):
+        normalized = normalized.rsplit("/", 1)[0] + "/test.outputs"
     else:
-        return ""
+        retries = list(re.finditer(r"(?:^|/)test_attempts/attempt_[0-9]+[.]outputs(?:/|$)", normalized))
+        if retries:
+            normalized = normalized[:retries[-1].end()].rstrip("/") + "/test.outputs"
+        else:
+            return ""
+
 
     return normalized.lstrip("/")
 
@@ -1301,10 +1336,14 @@ def _stage_bep_artifacts(
 
     try:
         refs, ambiguous_output_keys = _dedupe_stageable_artifact_references(
-            freshness.artifact_references,
+            [ref for ref in freshness.artifact_references
+             if (selected_labels is None or ref.label in selected_labels)
+             and ref.label not in freshness.ambiguous_labels
+             and ref.output_key not in freshness.ambiguous_outputs],
             workspace=workspace,
             remote_artifacts=remote_artifacts,
         )
+        freshness.ambiguous_outputs = freshness.ambiguous_outputs.union(key for _, key in ambiguous_output_keys)
         if ambiguous_output_keys:
             label, output_key = sorted(ambiguous_output_keys)[0]
             message = f"BEP has multiple distinct stageable carriers for {label} {output_key}"
@@ -1511,12 +1550,9 @@ def _apply_staged_bep_artifacts_to_freshness(
     """Merge successfully staged artifacts into BEP freshness state."""
     staged_pairs = {(item.label, item.output_key) for item in staged}
     conflicting = staged_pairs.intersection(freshness.cached_outputs)
-    if conflicting:
-        label, output_key = sorted(conflicting)[0]
-        _fail(
-            "BEP freshness is ambiguous after staging: the same test output is both "
-            f"fresh and cached: {label} {output_key}"
-        )
+    # Retain the ambiguity until postflight so proven sibling outputs can be
+    # processed. Consumers must never authorize these keys for upload.
+    freshness.ambiguous_outputs = freshness.ambiguous_outputs.union(key for _, key in conflicting)
     freshness.eligible_outputs.update(staged_pairs)
     if staged_pairs:
         freshness.remote_only_outputs = [
@@ -1562,10 +1598,61 @@ def _output_dir_target_label(output_dir: Path, target_by_output_dir: dict[Path, 
     return fallback
 
 
+def _bep_carrier_identity(ref: BepArtifactReference, workspace: Path) -> str:
+    if ref.remote_only:
+        return "remote:" + ref.fetch_value
+    try:
+        return "local:" + str(_resolve_bep_local_artifact_path(ref.fetch_value, workspace))
+    except BepArtifactStageError:
+        path = Path(_strip_file_uri(ref.fetch_value))
+        return "local:" + str((path if path.is_absolute() else workspace / path).resolve())
+
+
+def _bep_document_identity(path: Path, lines: list[str], seen_uuids: dict[str, str]) -> str | None:
+    """Canonical input scope; duplicate UUID copies must contain identical input."""
+    for line in lines:
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue  # The normal parser reports this with its source location.
+        started = event.get("started") if isinstance(event, dict) else None
+        uuid = started.get("uuid") if isinstance(started, dict) else None
+        if isinstance(uuid, str) and uuid:
+            digest = hashlib.sha256()
+            for raw in lines:
+                digest.update(raw.encode("utf-8"))
+                digest.update(b"\n")
+            fingerprint = digest.hexdigest()
+            if uuid in seen_uuids:
+                if seen_uuids[uuid] != fingerprint:
+                    _fail("BEP documents with the same build UUID contain conflicting records")
+                return None
+            seen_uuids[uuid] = fingerprint
+            return "uuid:" + uuid
+    return "file:" + str(path.resolve())
+
+
+def _bep_execution_identity(invocation: str, result_id: dict[str, Any]) -> tuple:
+    configuration = result_id.get("configuration", {})
+    configuration_id = configuration.get("id", "") if isinstance(configuration, dict) else ""
+    if not isinstance(configuration_id, str):
+        _fail("invalid BEP TestResult configuration identity")
+    indexes = []
+    for name, default in (("run", 1), ("shard", 0), ("attempt", 1)):
+        index = result_id.get(name, default)
+        if isinstance(index, bool) or not isinstance(index, int) or index < (0 if name == "shard" else 1):
+            _fail(f"invalid BEP TestResult {name}: {index!r}")
+        indexes.append(index)
+    return (invocation, result_id["label"], configuration_id, *indexes)
+
+
 def _parse_bep_freshness(
     bep_files: list[Path],
     *,
     unavailable_is_error: bool = True,
+    workspace: Path | None = None,
 ) -> BepFreshness | None:
     """Parse BEP JSON files and return concrete fresh/cached output mappings."""
     eligible_outputs: set[tuple[str, str]] = set()
@@ -1575,8 +1662,17 @@ def _parse_bep_freshness(
     artifact_references: list[BepArtifactReference] = []
     skipped_targets: set[str] = set()
     test_result_labels: set[str] = set()
+    executions: list[BepTestExecution] = []
+    seen_files: set[Path] = set()
+    seen_uuids: dict[str, str] = {}
+    ambiguous_output_mappings: set[str] = set()
+    workspace = workspace or Path.cwd()
 
     for bep_file in bep_files:
+        canonical_file = bep_file.resolve()
+        if canonical_file in seen_files:
+            continue
+        seen_files.add(canonical_file)
         if not bep_file.is_file():
             if not unavailable_is_error:
                 _warn(
@@ -1595,6 +1691,10 @@ def _parse_bep_freshness(
                 )
                 return None
             _fail(f"failed to read BEP JSON file {bep_file}: {exc}")
+
+        invocation = _bep_document_identity(bep_file, lines, seen_uuids)
+        if invocation is None:
+            continue
 
         for line_number, raw_line in enumerate(lines, start=1):
             if not raw_line.strip():
@@ -1635,12 +1735,18 @@ def _parse_bep_freshness(
             result = _coalesced_field(event, "testResult", "test_result", {})
             if not isinstance(result, dict):
                 continue
+            status = result.get("status", "NO_STATUS")
+            if isinstance(status, int) and not isinstance(status, bool) and 0 <= status <= 8:
+                status = ("NO_STATUS", "PASSED", "FLAKY", "TIMEOUT", "FAILED", "INCOMPLETE", "REMOTE_FAILURE", "FAILED_TO_BUILD", "TOOL_HALTED_BEFORE_TESTING")[status]
+            if not isinstance(status, str):
+                _fail("invalid BEP TestResult status: expected an enum string or number")
             cached_locally = bool(_coalesced_field(result, "cachedLocally", "cached_locally", False))
             execution_info = _coalesced_field(result, "executionInfo", "execution_info", {})
             cached_remotely = bool(
                 _coalesced_field(execution_info, "cachedRemotely", "cached_remotely", False)
             )
             outputs = _coalesced_field(result, "testActionOutput", "test_action_output", [])
+            reference_start = len(artifact_references)
             mapped_any = False
             remote_any = False
             event_fresh_pairs: set[tuple[str, str]] = set()
@@ -1651,9 +1757,11 @@ def _parse_bep_freshness(
                 canonical_candidates = _bep_canonical_output_key_candidates(output, output_candidates)
                 output_keys = [
                     key
-                    for key in (_bep_test_output_key(candidate) for candidate in canonical_candidates)
+                    for key in (_bep_test_output_key(candidate, artifact_name=output.get("name", "") if isinstance(output, dict) and isinstance(output.get("name"), str) else "") for candidate in canonical_candidates)
                     if key
                 ]
+                if len(set(output_keys)) > 1:
+                    ambiguous_output_mappings.update(output_keys)
                 output_key = output_keys[0] if output_keys else ""
                 output_mapped_any = False
                 output_has_test_outputs_hint = False
@@ -1715,6 +1823,13 @@ def _parse_bep_freshness(
                         )
                     )
 
+            executions.append(BepTestExecution(
+                _bep_execution_identity(invocation, test_result_id),
+                cached=cached_locally or cached_remotely,
+                status=status,
+                output_keys=frozenset(key for _, key in event_fresh_pairs.union(event_cached_pairs)),
+                carriers=tuple(sorted((ref.output_key, _bep_carrier_identity(ref, workspace)) for ref in artifact_references[reference_start:] if ref.output_key and ref.fetch_is_stageable_carrier)),
+            ))
             cached_outputs.update(event_cached_pairs)
             if not remote_any:
                 eligible_outputs.update(event_fresh_pairs)
@@ -1722,23 +1837,7 @@ def _parse_bep_freshness(
             if not mapped_any and not remote_any and not (cached_locally or cached_remotely):
                 missing_output_mappings.add(label)
 
-    conflicting_outputs = eligible_outputs.intersection(cached_outputs)
-    if conflicting_outputs:
-        label, output_key = sorted(conflicting_outputs)[0]
-        _fail(
-            "BEP freshness is ambiguous: the same test output is reported as both "
-            f"fresh and cached: {label} {output_key}. Use one BEP file per Bazel test "
-            "invocation and do not pass overlapping stale BEP files."
-        )
-
     conflicting_labels = skipped_targets.intersection(test_result_labels)
-    if conflicting_labels:
-        label = sorted(conflicting_labels)[0]
-        _fail(
-            "BEP freshness is ambiguous: the same target is reported as both "
-            f"platform-skipped and executed: {label}. Use one BEP file per Bazel "
-            "test invocation and do not pass overlapping stale BEP files."
-        )
 
     return BepFreshness(
         eligible_outputs=eligible_outputs,
@@ -1747,6 +1846,9 @@ def _parse_bep_freshness(
         missing_output_mappings=missing_output_mappings,
         artifact_references=artifact_references,
         skipped_targets=skipped_targets,
+        executions=executions,
+        ambiguous_outputs=ambiguous_output_mappings,
+        ambiguous_labels=conflicting_labels,
     )
 
 
@@ -1773,7 +1875,7 @@ class _BepOutputIndex:
     def labels_for(self, output_dir: Path, explicit_key: str | None) -> set[str]:
         if explicit_key:
             return self._labels_by_key.get(explicit_key, set())
-        path = str(output_dir).replace("\\", "/").rstrip("/")
+        path = canonical_output_directory_key(str(output_dir)).rstrip("/")
         labels = set(self._labels_by_key.get(path, ()))
         for offset, character in enumerate(path):
             if character == "/":
@@ -1789,12 +1891,13 @@ def _validate_expected_target_bep_freshness(
     required: bool,
     output_key_by_output_dir: dict[Path, str] | None = None,
     label_by_output_dir: dict[Path, str] | None = None,
+    require_bazel_metadata: bool = True,
 ) -> list[Path]:
     """Return fresh expected-target outputs while accepting BEP-proven cache hits."""
     if not required:
         return output_dirs
     output_key_by_output_dir = output_key_by_output_dir or {}
-    label_by_output_dir = label_by_output_dir or {}
+    label_by_output_dir = {} if label_by_output_dir is None else label_by_output_dir
     for remote in freshness.remote_only_outputs:
         if not expected_targets or remote.label in expected_targets:
             _fail(
@@ -1803,9 +1906,10 @@ def _validate_expected_target_bep_freshness(
                 f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
             )
 
+    freshness.identified_labels.update(expected_targets)
     bep_fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
     bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
-    cached_only_labels = bep_cached_labels.difference(bep_fresh_labels)
+    cached_only_labels = exclusively_cached_labels(freshness.executions) if freshness.executions else bep_cached_labels.difference(bep_fresh_labels)
     output_index = _BepOutputIndex(freshness.eligible_outputs)
     fresh_output_dirs = []
     fresh_labels = set()
@@ -1814,17 +1918,22 @@ def _validate_expected_target_bep_freshness(
         candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
         if not candidate_labels:
             continue
+        if not _payload_files(output_dir) and not _msgpack_payload_files(output_dir):
+            continue
         metadata_files = _metadata_files(output_dir)
         label = ""
-        if not metadata_files:
+        if not metadata_files and require_bazel_metadata:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
                 "bazel_target_metadata.json is missing."
             )
-        metadata = _load_json(metadata_files[0])
+        metadata = _load_json(metadata_files[0]) if metadata_files else {}
         if isinstance(metadata, dict):
             label = _metadata_target_label(metadata, None) or ""
         label = label_by_output_dir.get(output_dir.resolve(), label)
+        if not label and not require_bazel_metadata and len(candidate_labels) == 1:
+            label = next(iter(candidate_labels))
+            label_by_output_dir[output_dir.resolve()] = label
         if not label:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
@@ -1863,12 +1972,13 @@ def _validate_discovered_bep_freshness(
     required: bool,
     output_key_by_output_dir: dict[Path, str] | None = None,
     label_by_output_dir: dict[Path, str] | None = None,
+    require_bazel_metadata: bool = True,
 ) -> list[Path]:
     """Return discovered output dirs proven fresh by matching BEP TestResult outputs."""
     if not required:
         return output_dirs
     output_key_by_output_dir = output_key_by_output_dir or {}
-    label_by_output_dir = label_by_output_dir or {}
+    label_by_output_dir = {} if label_by_output_dir is None else label_by_output_dir
 
     local_labels: set[str] = set()
     for output_dir in output_dirs:
@@ -1883,23 +1993,6 @@ def _validate_discovered_bep_freshness(
                 if label:
                     local_labels.add(label)
 
-    for remote in freshness.remote_only_outputs:
-        if remote.label in local_labels:
-            _fail(
-                "BEP references remote-only test outputs for "
-                f"{remote.label}: {_display_artifact_reference(remote.artifact)}. Rerun bazel test with "
-                f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
-            )
-
-    missing_local_labels = sorted(local_labels.intersection(freshness.missing_output_mappings))
-    if missing_local_labels:
-        _fail(
-            "BEP required freshness cannot authorize discovered Test Optimization output "
-            f"for {missing_local_labels[0]} because the fresh TestResult did not contain "
-            "a mappable test.outputs reference. Rerun bazel test with "
-            f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
-        )
-
     output_index = _BepOutputIndex(freshness.eligible_outputs)
     fresh_output_dirs = []
     for output_dir in output_dirs:
@@ -1908,21 +2001,50 @@ def _validate_discovered_bep_freshness(
         if not candidate_labels:
             continue
         metadata_files = _metadata_files(output_dir)
-        if not metadata_files:
+        if not _payload_files(output_dir) and not _msgpack_payload_files(output_dir):
+            for metadata_file in metadata_files:
+                metadata = _load_json(metadata_file)
+                label = _metadata_target_label(metadata, None) if isinstance(metadata, dict) else None
+                if label in candidate_labels:
+                    freshness.identified_labels.add(label)
+            continue
+        if not metadata_files and require_bazel_metadata:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
                 "bazel_target_metadata.json is missing."
             )
-        metadata = _load_json(metadata_files[0])
+        metadata = _load_json(metadata_files[0]) if metadata_files else {}
         label = _metadata_target_label(metadata, None) if isinstance(metadata, dict) else None
         label = label_by_output_dir.get(output_dir.resolve(), label)
+        if not label and not require_bazel_metadata and len(candidate_labels) == 1:
+            label = next(iter(candidate_labels))
+            label_by_output_dir[output_dir.resolve()] = label
         if not label:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
                 "bazel_target_metadata.json does not contain bazel.target."
             )
         if label in candidate_labels:
+            if metadata_files:
+                freshness.identified_labels.add(label)
             fresh_output_dirs.append(output_dir)
+
+    for remote in freshness.remote_only_outputs:
+        if remote.label in freshness.identified_labels:
+            _fail(
+                "BEP references remote-only test outputs for "
+                f"{remote.label}: {_display_artifact_reference(remote.artifact)}. Rerun bazel test with "
+                f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
+            )
+
+    missing_local_labels = sorted(freshness.identified_labels.intersection(freshness.missing_output_mappings))
+    if missing_local_labels:
+        _fail(
+            "BEP required freshness cannot authorize discovered Test Optimization output "
+            f"for {missing_local_labels[0]} because the fresh TestResult did not contain "
+            "a mappable test.outputs reference. Rerun bazel test with "
+            f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
+        )
 
     if not fresh_output_dirs:
         cached_local_labels = {
@@ -1945,7 +2067,7 @@ def _validate_discovered_bep_freshness(
 
 
 def _discover_output_dirs(testlogs_dir: Path) -> list[Path]:
-    return sorted(path for path in testlogs_dir.rglob("test.outputs") if path.is_dir())
+    return list(find_test_output_directories(testlogs_dir))
 
 
 def _discover_candidate_output_dirs(testlogs_dir: Path) -> list[Path]:
@@ -2074,6 +2196,7 @@ def _validate_outputs(
     allowed_payload_selections: set[str] | None = None,
     expected_payload_selection_by_target: dict[str, str] | None = None,
     target_by_output_dir: dict[Path, str] | None = None,
+    test_result_outputs: dict[Path, str] | None = None,
 ) -> dict[str, int]:
     """Validate local test.outputs payloads and return payload-selection counts."""
     allowed_selections = _effective_allowed_payload_selections(
@@ -2088,6 +2211,8 @@ def _validate_outputs(
     metadata_count = 0
     selection_summary: dict[str, int] = {}
     for output_dir in output_dirs:
+        has_test_events = False
+        output_label = target_lookup.get(output_dir.resolve())
         payloads = _payload_files(output_dir)
         msgpack_payloads = _msgpack_payload_files(output_dir)
         metadata = _metadata_files(output_dir)
@@ -2104,7 +2229,9 @@ def _validate_outputs(
         if require_json_payloads and not payloads:
             _fail(f"missing JSON payloads under {output_dir}")
         for payload in payloads:
-            _load_json(payload)
+            doc = _load_json(payload)
+            if output_dir / "payloads" / "tests" in payload.parents and isinstance(doc, dict):
+                has_test_events = has_test_events or test_result_event_count(doc) > 0
 
         if require_bazel_metadata and not metadata:
             _fail(f"missing bazel_target_metadata.json under {output_dir}")
@@ -2125,6 +2252,7 @@ def _validate_outputs(
                 selection_summary[selection] = selection_summary.get(selection, 0) + 1
 
             target_label = _metadata_target_label(doc, target_lookup.get(output_dir.resolve()))
+            output_label = output_label or target_label
             if target_label and target_label in expected_selections:
                 expected = expected_selections[target_label]
                 if selection != expected:
@@ -2132,6 +2260,9 @@ def _validate_outputs(
                         f"{metadata_file} has bazel.go.payload_selection={selection!r} for "
                         f"{target_label}; expected {expected!r}"
                     )
+
+        if test_result_outputs is not None and has_test_events and output_label:
+            test_result_outputs[output_dir.resolve()] = output_label
 
     if require_json_payloads and payload_count == 0:
         _fail("no JSON payload files were found under selected test.outputs directories")
@@ -2926,6 +3057,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 freshness = _parse_bep_freshness(
                     bep_files,
                     unavailable_is_error=staging_enabled or args.freshness_mode != "optional",
+                    workspace=workspace,
                 )
                 _update_diagnostic_bep(report, freshness)
         elif strict_bep_required:
@@ -3010,6 +3142,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                     required=required,
                     output_key_by_output_dir=output_key_by_output_dir,
                     label_by_output_dir=label_by_output_dir,
+                    require_bazel_metadata=config["require_bazel_metadata"],
                 )
             else:
                 output_dirs = _validate_discovered_bep_freshness(
@@ -3018,17 +3151,19 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                     required=required,
                     output_key_by_output_dir=output_key_by_output_dir,
                     label_by_output_dir=label_by_output_dir,
+                    require_bazel_metadata=config["require_bazel_metadata"],
                 )
 
+            target_by_output_dir.update(label_by_output_dir)
+        if freshness is not None and freshness.ambiguous_labels.intersection(expected_targets):
+            _fail("BEP freshness is ambiguous: target reported as both platform-skipped and executed")
         if not output_dirs:
             non_fresh_expected_targets = False
             if expected_targets and freshness is not None:
                 bep_fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
                 bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
                 non_fresh_expected_targets = set(expected_targets).issubset(
-                    bep_cached_labels.difference(bep_fresh_labels).union(
-                        freshness.skipped_targets
-                    )
+                    (exclusively_cached_labels(freshness.executions) if freshness.executions else bep_cached_labels.difference(bep_fresh_labels)).union(freshness.skipped_targets)
                 )
             if non_fresh_expected_targets:
                 _update_diagnostic_output_summary(report, [])
@@ -3053,6 +3188,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             ),
         )
         allowed_payload_selections = set(config.get("allowed_payload_selections") or [])
+        test_result_outputs: dict[Path, str] = {}
         selection_summary = _validate_outputs(
             output_dirs,
             require_json_payloads=config["require_json_payloads"],
@@ -3062,7 +3198,27 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             allowed_payload_selections=allowed_payload_selections or None,
             expected_payload_selection_by_target=config.get("expected_payload_selection_by_target", {}),
             target_by_output_dir=target_by_output_dir,
+            test_result_outputs=test_result_outputs,
         )
+        if freshness is not None:
+            selected_labels = freshness.identified_labels.union(expected_targets).union(
+                entry["label"] for entry in report["outputs"] if entry["label"])
+            observed_keys = {entry["output_key"] for entry in report["outputs"]}
+            ambiguous_keys = freshness.ambiguous_outputs.intersection(observed_keys).union(
+                key for execution in freshness.executions if execution.identity[1] in selected_labels
+                for key in execution.output_keys if key in freshness.ambiguous_outputs)
+            if freshness.ambiguous_labels.intersection(selected_labels):
+                _fail("BEP freshness is ambiguous: target reported as both platform-skipped and executed")
+            if ambiguous_keys:
+                _fail("BEP freshness has ambiguous execution provenance for " + sorted(ambiguous_keys)[0])
+            if args.freshness_mode in {"required", "auto"}:
+                proven = {(label, output_key_by_output_dir.get(path) or _local_test_output_key(path, testlogs_dir=testlogs_dir))
+                          for path, label in test_result_outputs.items()}
+                freshness.identified_labels.update(test_result_outputs.values())
+                missing = missing_test_shards(freshness.executions, proven, freshness.identified_labels.union(expected_targets))
+                if missing:
+                    invocation, label, configuration, run, shard = missing[0]
+                    _fail(f"fresh shard produced no test-result evidence: {label} configuration={configuration!r} run={run} shard={shard} invocation={invocation}")
         report["summary"]["payload_selection"] = dict(sorted(selection_summary.items()))
         _summary(
             "payload selection summary: "

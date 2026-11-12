@@ -17,9 +17,10 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Iterable
 
+from topt_runtime.bep_execution import is_retry_output_directory
 from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
-from .discovery import DiscoveryResult, count_tasks_by_payload_type
+from .discovery import DiscoveryResult, count_tasks_by_payload_type, read_target_label
 from .json_utils import strict_json_loads
 
 
@@ -93,6 +94,7 @@ def select_expected_outputs(
     plan: ExpectedTargetsPlan,
     *,
     allow_missing: bool = False,
+    bep_outputs: Iterable[tuple[str, str]] = (),
 ) -> DiscoveryResult:
     """Filter discovered outputs and stamp tasks with their expected target."""
     if not plan.targets:
@@ -100,8 +102,13 @@ def select_expected_outputs(
     outputs_by_target: dict[str, list[str]] = {target: [] for target in plan.targets}
     target_by_output_key: dict[str, str] = {}
     index = _TargetOutputIndex(plan.targets)
+    bep_labels_by_key: dict[str, set[str]] = {}
+    for label, key in bep_outputs:
+        bep_labels_by_key.setdefault(key, set()).add(label)
     for output in discovery.outputs:
-        matches = index.matches(output.output_key)
+        physical_retry = is_retry_output_directory(output.path.parent.name, output.path.name)
+        bep_labels = bep_labels_by_key.get(output.output_key, set())
+        matches = index.matches(output.output_key, allow_retry_pairs=physical_retry or bool(bep_labels))
         if len(matches) > 1:
             raise ExpectedTargetsError(
                 f"test.outputs path matches multiple expected targets: {output.output_key}"
@@ -109,6 +116,12 @@ def select_expected_outputs(
         if not matches:
             continue
         target = matches[0]
+        if len(bep_labels) == 1 and bep_labels != {target}:
+            raise ExpectedTargetsError("BEP output target conflicts with expected target: " + output.output_key)
+        if physical_retry or (bep_labels and "/test_attempts/" in output.output_key):
+            declared = read_target_label(output.path)
+            if declared and declared != target:
+                raise ExpectedTargetsError("bazel.target metadata conflicts with expected target: " + output.output_key)
         outputs_by_target[target].append(output.output_key)
         target_by_output_key[output.output_key] = target
 
@@ -191,17 +204,22 @@ class _TargetOutputIndex:
         for label in targets:
             self._labels_by_parts.setdefault(_target_output_parts(label), []).append(label)
 
-    def matches(self, output_key: str) -> list[str]:
+    def matches(self, output_key: str, *, allow_retry_pairs: bool = False) -> list[str]:
         parts = PurePosixPath(output_key.replace("\\", "/")).parts
         if not parts or parts[-1] != "test.outputs":
             return []
         # Once a suffix is not a Bazel attempt component, no shallower target
         # can own this output. Check the exact (deepest) root first.
-        for length in range(len(parts) - 1, 0, -1):
+        length = len(parts) - 1
+        while length > 0:
             labels = self._labels_by_parts.get(parts[:length])
             if labels:
                 return labels
-            if not _BAZEL_TEST_ATTEMPT_DIRECTORY.fullmatch(parts[length - 1]):
+            if _BAZEL_TEST_ATTEMPT_DIRECTORY.fullmatch(parts[length - 1]):
+                length -= 1
+            elif allow_retry_pairs and length >= 2 and is_retry_output_directory(parts[length - 2], parts[length - 1]):
+                length -= 2
+            else:
                 break
         return []
 

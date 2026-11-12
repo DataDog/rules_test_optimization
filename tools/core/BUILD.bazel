@@ -41,6 +41,7 @@ filegroup(
     name = "diagnostic_runtime",
     srcs = [
         "topt_runtime/__init__.py",
+        "topt_runtime/bep_execution.py",
         "topt_runtime/log_levels.py",
     ],
     visibility = ["//visibility:public"],

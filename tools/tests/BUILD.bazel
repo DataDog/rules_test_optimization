@@ -19,6 +19,8 @@ exports_files(
     [
         "example_stub_repo.bzl",
         "integration/mock_dd_server.py",
+        "integration/run_mock_server_tests.ps1",
+        "integration/run_mock_server_tests.sh",
         "integration/run_bzlmod_go_integration.sh",
         "integration/run_workspace_go_integration.sh",
     ],
