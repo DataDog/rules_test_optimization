@@ -235,12 +235,16 @@ disables it even when the rule attribute is enabled. Accepted boolean values
 are `1`/`0`, `true`/`false`, and `yes`/`no`, ignoring case and outer whitespace.
 The default is disabled. Legacy uploaders reject an enabled setting.
 
-Each worker owns at most 64 original sources and one active batch. Requests
-stay below the existing uncompressed byte guard, including envelope overhead.
-Large sources keep the ordinary per-file split path. Expanding a runtime ID
-across events is checked against the byte budget before mutation; sources that
-would exceed it keep their original envelope and the per-file path. Context changes or any
-other envelope difference flush the batch. Coverage and telemetry stay separate.
+Preparation streams compatible groups of at most 64 original sources into the
+existing worker pool. Each group keeps both its request body and its retained
+event, envelope and compatibility-key buffers within the uncompressed byte guard.
+The bounded queue holds at most two prepared jobs per worker. Incompatible,
+warning-bearing and large sources remain independently schedulable, so they
+keep the configured upload parallelism. No source is parsed or enriched twice.
+Expanding a runtime ID across events is checked before mutation; sources that
+would exceed the request budget keep their original envelope and the per-file
+path. Context changes or any other envelope difference flush the batch.
+Coverage and telemetry stay separate.
 
 The shared envelope retains common metadata and the first source's global
 `runtime-id`, as required by the canonical schema. Each event carries its

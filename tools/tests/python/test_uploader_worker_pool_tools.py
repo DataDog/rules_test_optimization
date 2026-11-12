@@ -25,6 +25,7 @@ add_uploader_runtime_to_path()
 
 from uploader_py.models import FileResult, FileStatus, FileTask, PayloadType  # noqa: E402
 from uploader_py.worker_pool import (  # noqa: E402
+    PreparedWorkItem,
     WorkerPoolError,
     WorkerPoolInterrupted,
     run_file_workers,
@@ -45,15 +46,22 @@ def _tasks(count: int) -> tuple[FileTask, ...]:
 
 class WorkerPoolTests(unittest.TestCase):
     def test_bounded_task_queue_applies_backpressure(self) -> None:
+        for prepared in (False, True):
+            with self.subTest(prepared=prepared):
+                self._assert_bounded_task_queue(prepared=prepared)
+
+    def _assert_bounded_task_queue(self, *, prepared: bool) -> None:
         first_started = threading.Event()
         release_first = threading.Event()
         blocked_put_observed = threading.Event()
         completed_runs = []
+        prepared_ids = []
 
         class ObservedQueue(Queue):
             def put(self, item, block=True, timeout=None):
                 if self.maxsize > 0 and self.full():
-                    blocked_put_observed.set()
+                    if not prepared or len(prepared_ids) == 4:
+                        blocked_put_observed.set()
                 return super().put(item, block=block, timeout=timeout)
 
         def processor(task, _runtime, _transport):
@@ -67,6 +75,11 @@ class WorkerPoolTests(unittest.TestCase):
                 status=FileStatus.SUCCEEDED,
             )
 
+        def prepare(tasks, _runtime):
+            for task in tasks:
+                prepared_ids.append(task.task_id)
+                yield PreparedWorkItem((task,))
+
         def run_pool() -> None:
             completed_runs.append(
                 run_file_workers(
@@ -75,6 +88,7 @@ class WorkerPoolTests(unittest.TestCase):
                     runtime=object(),
                     transport_factory=object,
                     process_file=processor,
+                    prepare_work=prepare if prepared else None,
                 )
             )
 
@@ -85,6 +99,8 @@ class WorkerPoolTests(unittest.TestCase):
                 self.assertTrue(first_started.wait(timeout=2))
                 self.assertTrue(blocked_put_observed.wait(timeout=2))
                 self.assertTrue(runner.is_alive())
+                if prepared:
+                    self.assertEqual(4, len(prepared_ids))
             finally:
                 release_first.set()
                 runner.join(timeout=3)
@@ -92,6 +108,26 @@ class WorkerPoolTests(unittest.TestCase):
         self.assertFalse(runner.is_alive())
         self.assertEqual(1, len(completed_runs))
         self.assertEqual(6, len(completed_runs[0].results))
+
+    def test_invalid_prepared_sources_are_rejected_and_the_iterator_is_closed(self) -> None:
+        tasks = _tasks(2)
+        invalid_groups = ((), (tasks[0], tasks[0]), _tasks(3)[2:])
+        for group in invalid_groups:
+            with self.subTest(group=group):
+                closed = threading.Event()
+
+                def prepare(_tasks, _runtime):
+                    try:
+                        yield PreparedWorkItem(group)
+                    finally:
+                        closed.set()
+
+                processor = mock.Mock(side_effect=AssertionError("invalid sources must not enter a worker"))
+                with self.assertRaises(WorkerPoolError):
+                    run_file_workers(tasks, workers=1, runtime=object(), transport_factory=object,
+                        process_file=processor, prepare_work=prepare)
+                processor.assert_not_called()
+                self.assertTrue(closed.is_set())
 
     def test_keyboard_interrupt_drains_unowned_tasks_and_joins_workers(self) -> None:
         tasks = _tasks(8)

@@ -8,7 +8,9 @@
 """Protect event identity and exact envelope partitioning for test batches."""
 
 from copy import deepcopy
+from functools import partial
 import gzip
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
 import json
@@ -19,6 +21,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import tracemalloc
 from types import SimpleNamespace
 import unittest
 from unittest import mock
@@ -32,12 +35,12 @@ from uploader_py.application import run_uploader  # noqa: E402
 from uploader_py.config import ConfigError, parse_uploader_config  # noqa: E402
 from uploader_py.endpoints import build_endpoints  # noqa: E402
 from uploader_py.logging_utils import configure_logging  # noqa: E402
-from uploader_py.batch_worker import process_test_cohort  # noqa: E402
+from uploader_py.batch_worker import prepare_test_work_items  # noqa: E402
 from uploader_py.file_worker import process_file  # noqa: E402
 from uploader_py.models import FileResult, FileStatus, FileTask, PayloadType, WorkItemOutcome  # noqa: E402
 from uploader_py.reporting import AggregateReport  # noqa: E402
 from uploader_py.transport import HttpResult, prepare_json_request  # noqa: E402
-from uploader_py.worker_pool import WorkerPoolInterrupted, run_file_workers  # noqa: E402
+from uploader_py.worker_pool import PreparedWorkItem, WorkerPoolInterrupted, run_file_workers  # noqa: E402
 from topt_runtime.runfiles import RunfilesResolver  # noqa: E402
 from test_uploader_file_worker_tools import _runtime as _base_runtime, _FakeTransport  # noqa: E402
 from test_python_tools import _render_uploader_runtime_template  # noqa: E402
@@ -180,7 +183,7 @@ class BatchWorkerTests(unittest.TestCase):
                 side_effect=lambda _stop, _logger, snapshot, _total: snapshots.append(snapshot)):
                 run = run_file_workers(self._tasks(root), workers=1, runtime=_runtime(root),
                     transport_factory=lambda: transport, process_file=process_file,
-                    process_cohort=process_test_cohort,
+                    prepare_work=prepare_test_work_items,
                     logger=configure_logging(debug=False, stream=StringIO()))
             self.assertEqual((2, 0, 1), snapshots[0]())
             self.assertEqual(1, sum(request.attempts for request in run.requests))
@@ -235,7 +238,7 @@ class BatchWorkerTests(unittest.TestCase):
 
     def _run(self, tasks, runtime, transport):
         run = run_file_workers(tasks, workers=1, runtime=runtime, transport_factory=lambda: transport,
-            process_file=process_file, process_cohort=process_test_cohort)
+            process_file=process_file, prepare_work=prepare_test_work_items)
         report = AggregateReport.create(dry_run=runtime.dry_run,
             exit_code=int(any(result.status is FileStatus.FAILED for result in run.results)),
             configured_workers=1, worker_threads=run.worker_threads, peak_active_workers=run.peak_active_workers,
@@ -259,6 +262,133 @@ class BatchWorkerTests(unittest.TestCase):
             self.assertEqual(1, report.statistics()["batching"]["shared_requests"])
             self.assertEqual([1, 1], [result.test_events for result in run.results])
             self.assertTrue(all(result.source_deleted and not task.source_path.exists() for task, result in zip(tasks, run.results)))
+
+    def test_unexpected_header_encoding_failure_does_not_cancel_a_later_batch(self):
+        class HeaderEncodingTransport(_FakeTransport):
+            def post_json(self, url, headers, body, **kwargs):
+                connection = http.client.HTTPConnection("unused.invalid")
+                try:
+                    connection.putrequest("POST", "/")
+                    for name, value in headers.items():
+                        connection.putheader(name, value)
+                finally:
+                    connection.close()
+                return super().post_json(url, headers, body, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = self._tasks(root)
+            document = json.loads(tasks[0].source_path.read_text())
+            document["metadata"]["*"]["library_version"] = "mini-💥"
+            tasks[0].source_path.write_text(json.dumps(document))
+            original = tasks[0].source_path.read_bytes()
+            transport = HeaderEncodingTransport()
+
+            run, _report = self._run(tasks, _runtime(root), transport)
+
+            self.assertEqual([FileStatus.FAILED, FileStatus.SUCCEEDED], [result.status for result in run.results])
+            self.assertEqual("UnicodeEncodeError", run.results[0].failure_message)
+            self.assertEqual(1, len(transport.json_calls))
+            self.assertEqual(original, tasks[0].source_path.read_bytes())
+            self.assertFalse(tasks[1].source_path.exists())
+
+    def test_unexpected_source_fallback_failure_preserves_the_next_source(self):
+        class FallbackTransport(_FakeTransport):
+            def post_json(self, url, headers, body, **kwargs):
+                document = json.loads(body.read_bytes())
+                if len(document["events"]) > 1:
+                    return HttpResult(400, 1)
+                if document["events"][0]["content"]["meta"]["runtime-id"] == "process-0":
+                    raise UnicodeEncodeError("latin-1", "💥", 0, 1, "header")
+                return super().post_json(url, headers, body, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = self._tasks(root)
+            original = tasks[0].source_path.read_bytes()
+            transport = FallbackTransport()
+            run, _report = self._run(tasks, _runtime(root), transport)
+            self.assertEqual([FileStatus.FAILED, FileStatus.SUCCEEDED], [result.status for result in run.results])
+            self.assertEqual("UnicodeEncodeError", run.results[0].failure_message)
+            self.assertEqual(1, len(transport.json_calls))
+            self.assertEqual(original, tasks[0].source_path.read_bytes())
+            self.assertFalse(tasks[1].source_path.exists())
+            self.assertIn("batch_rejected_then_source_fallback", run.results[1].warning_codes)
+
+    def test_non_batchable_sources_keep_the_configured_upload_parallelism(self):
+        for kind in ("incompatible", "large", "warning"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tasks = self._tasks(root, 8)
+                for index, task in enumerate(tasks):
+                    document = json.loads(task.source_path.read_text())
+                    if kind == "incompatible":
+                        document["custom_ingest_timestamp"] = index
+                    task.source_path.write_text(json.dumps(document) + (" " * 2048 if kind == "large" else ""))
+                changes = {"schema": {"type": "object", "required": ["missing"]}} if kind == "warning" else {}
+                barrier = threading.Barrier(8, timeout=5)
+                received = Queue()
+
+                class ConcurrentTransport:
+                    def post_json(self, url, headers, body, **kwargs):
+                        received.put(json.loads(body.read_bytes()))
+                        barrier.wait()
+                        return HttpResult(200, 1)
+
+                with mock.patch("uploader_py.batch_worker.MAX_TEST_PAYLOAD_BYTES", 2048):
+                    run = run_file_workers(tasks, workers=8, runtime=_runtime(root, **changes),
+                        transport_factory=ConcurrentTransport, process_file=process_file,
+                        prepare_work=prepare_test_work_items)
+
+                self.assertEqual([FileStatus.SUCCEEDED] * 8, [result.status for result in run.results])
+                self.assertEqual(8, received.qsize())
+                self.assertEqual(8, run.peak_active_workers)
+                self.assertTrue(all(not task.source_path.exists() for task in tasks))
+
+    def test_large_prepared_metadata_uses_independent_per_file_uploads(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            tasks = self._tasks(root)
+            for task in tasks:
+                document = json.loads(task.source_path.read_text())
+                document["metadata"]["*"]["library_version"] = "v" * (4 * 1024)
+                task.source_path.write_text(json.dumps(document))
+                self.assertLess(task.source_path.stat().st_size, 8 * 1024)
+            transport = _FakeTransport()
+            with mock.patch("uploader_py.batch_worker.MAX_TEST_PAYLOAD_BYTES", 8 * 1024):
+                run, _report = self._run(tasks, _runtime(root), transport)
+            self.assertEqual([FileStatus.SUCCEEDED] * 2, [result.status for result in run.results])
+            self.assertEqual(2, len(transport.json_calls))
+            for index, call in enumerate(transport.json_calls):
+                document = json.loads(call["body"])
+                self.assertEqual("process-" + str(index), document["metadata"]["*"]["runtime-id"])
+                self.assertEqual("v" * (4 * 1024), document["metadata"]["*"]["library_version"])
+                self.assertTrue(validate_payload(document, _runtime(root).schema).valid)
+
+    def test_shared_envelope_memory_does_not_grow_with_the_source_cohort(self):
+        class DiscardingTransport:
+            def post_json(self, url, headers, body, **kwargs):
+                return HttpResult(200, 1)
+
+        peaks = []
+        for count in (8, 64):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tasks = self._tasks(root, count)
+                for task in tasks:
+                    document = json.loads(task.source_path.read_text())
+                    document["metadata"]["*"]["library_version"] = "x" * (16 * 1024)
+                    task.source_path.write_text(json.dumps(document))
+                runtime = _runtime(root)
+                with mock.patch("uploader_py.batch_worker.MAX_TEST_PAYLOAD_BYTES", 64 * 1024):
+                    tracemalloc.start()
+                    try:
+                        run, _report = self._run(tasks, runtime, DiscardingTransport())
+                        peaks.append(tracemalloc.get_traced_memory()[1])
+                    finally:
+                        tracemalloc.stop()
+                self.assertEqual([FileStatus.SUCCEEDED] * count, [result.status for result in run.results])
+        self.assertLess(peaks[1] - peaks[0], 768 * 1024, peaks)
 
     def test_non_payload_rejections_do_not_fan_out_or_delete_sources(self):
         for response in (HttpResult(401, 1), HttpResult(403, 1), HttpResult(429, 3), HttpResult(500, 3), HttpResult(None, 3, transport_error="connection closed")):
@@ -526,7 +656,7 @@ class BatchWorkerTests(unittest.TestCase):
                 return FileResult(task.task_id, task.display_path, task.payload_type, FileStatus.SUCCEEDED,
                     requests_planned=1, requests_attempted=1, requests_succeeded=1)
             run = run_file_workers(tasks, workers=1, runtime=_runtime(root), transport_factory=lambda: transport,
-                process_file=ordinary, process_cohort=process_test_cohort)
+                process_file=ordinary, prepare_work=prepare_test_work_items)
             self.assertEqual([task.task_id for task in tasks], [result.task_id for result in run.results])
             self.assertEqual(1, len(transport.json_calls))
             self.assertEqual(3, len(run.requests[0].source_ids))
@@ -543,7 +673,9 @@ class BatchWorkerTests(unittest.TestCase):
                 first = cohort[0]
                 yield WorkItemOutcome((FileResult(first.task_id, first.display_path, PayloadType.TEST, FileStatus.SUCCEEDED),))
                 raise RuntimeError("later preparation failure")
-            run = run_file_workers(tasks, workers=1, runtime=object(), transport_factory=object, process_file=process_file, process_cohort=processor)
+            def prepare(cohort, _runtime):
+                yield PreparedWorkItem(cohort, partial(processor, cohort))
+            run = run_file_workers(tasks, workers=1, runtime=object(), transport_factory=object, process_file=process_file, prepare_work=prepare)
             self.assertEqual([FileStatus.SUCCEEDED, FileStatus.FAILED], [result.status for result in run.results])
             self.assertEqual("unhandled_worker_exception", run.results[1].failure_code)
 

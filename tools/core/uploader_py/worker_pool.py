@@ -4,7 +4,7 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Schedule complete file pipelines on a bounded pool of homogeneous workers.
+"""Schedule file pipelines and prepared requests on one bounded worker pool.
 
 The pool owns queueing and metrics while file workers remain mutually independent.
 """
@@ -17,10 +17,10 @@ import logging
 from queue import Empty, Queue
 import threading
 import time
-from typing import Callable, Iterable, Iterator, Protocol, TypeVar
+from typing import Callable, Generic, Iterable, Iterator, Protocol, TypeVar
 
 from .metrics import PhaseRecorder
-from .models import FileResult, FileStatus, FileTask, PayloadType, RequestOutcome, WorkItemOutcome
+from .models import FileResult, FileStatus, FileTask, RequestOutcome, WorkItemOutcome
 
 
 RuntimeType = TypeVar("RuntimeType")
@@ -38,6 +38,14 @@ class FileProcessor(Protocol[RuntimeType, TransportType]):
 
 class WorkerPoolError(ValueError):
     """The coordinator cannot safely construct the requested worker pool."""
+
+
+@dataclass(frozen=True)
+class PreparedWorkItem(Generic[RuntimeType, TransportType]):
+    """Sources transferred together to one worker after bounded preparation."""
+
+    tasks: tuple[FileTask, ...]
+    process: Callable[[RuntimeType, TransportType], Iterable[WorkItemOutcome]] | None = None
 
 
 @dataclass(frozen=True)
@@ -68,8 +76,9 @@ def run_file_workers(
     process_file: FileProcessor[RuntimeType, TransportType],
     logger: logging.Logger | None = None,
     measurements: PhaseRecorder | None = None,
-    process_cohort: Callable[[tuple[FileTask, ...], RuntimeType, TransportType], Iterable[WorkItemOutcome]] | None = None,
-    cohort_size: int = 64,
+    prepare_work: Callable[
+        [tuple[FileTask, ...], RuntimeType], Iterable[PreparedWorkItem[RuntimeType, TransportType]]
+    ] | None = None,
 ) -> WorkerPoolRun:
     """Process each source exactly once through one complete worker pipeline.
 
@@ -85,24 +94,7 @@ def run_file_workers(
     if not planned_tasks:
         return WorkerPoolRun((), 0, 0)
 
-    if cohort_size <= 0:
-        raise WorkerPoolError("cohort size must be positive")
-    work_items: list[tuple[FileTask, ...]] = []
-    pending: list[FileTask] = []
-    for task in planned_tasks:
-        if process_cohort is not None and task.payload_type is PayloadType.TEST:
-            pending.append(task)
-            if len(pending) == cohort_size:
-                work_items.append(tuple(pending))
-                pending.clear()
-        else:
-            # Discovery interleaves tests and telemetry within every output.
-            # Other protocols keep their own work items without closing the
-            # unrelated test cohort. Final results restore original order.
-            work_items.append((task,))
-    if pending:
-        work_items.append(tuple(pending))
-    worker_count = min(workers, len(work_items))
+    worker_count = min(workers, len(planned_tasks))
     try:
         with measurements.phase("transport_setup") if measurements is not None else nullcontext():
             worker_transports = tuple(transport_factory() for _ in range(worker_count))
@@ -111,7 +103,7 @@ def run_file_workers(
             f"failed to initialize worker transport: {type(exc).__name__}"
         ) from exc
 
-    task_queue: Queue[tuple[FileTask, ...] | None] = Queue(maxsize=max(1, worker_count * 2))
+    task_queue: Queue[PreparedWorkItem[RuntimeType, TransportType] | None] = Queue(maxsize=max(1, worker_count * 2))
     result_queue: Queue[FileResult] = Queue()
     request_queue: Queue[RequestOutcome] = Queue()
     activity_lock = threading.Lock()
@@ -136,7 +128,7 @@ def run_file_workers(
             logger.debug("worker=%s started", threading.current_thread().name)
         while True:
             try:
-                cohort = task_queue.get(timeout=0.1)
+                work_item = task_queue.get(timeout=0.1)
             except Empty:
                 if shutdown_event.is_set():
                     if logger is not None:
@@ -147,13 +139,13 @@ def run_file_workers(
                     return
                 continue
             try:
-                if cohort is None:
+                if work_item is None:
                     if logger is not None:
                         logger.debug("worker=%s stopped", threading.current_thread().name)
                     return
                 if shutdown_event.is_set():
                     continue
-                task = cohort[0]
+                task = work_item.tasks[0]
                 task_started = time.monotonic()
                 if logger is not None:
                     logger.debug(
@@ -167,7 +159,7 @@ def run_file_workers(
                     active_workers += 1
                     peak_active_workers = max(peak_active_workers, active_workers)
                 try:
-                    outcomes = _owned_work_item_outcomes(cohort, runtime, transport, process_file, process_cohort)
+                    outcomes = _owned_work_item_outcomes(work_item, runtime, transport, process_file)
                     try:
                         for outcome in outcomes:
                             for request in outcome.requests:
@@ -194,7 +186,7 @@ def run_file_workers(
                         task.payload_type.value,
                         task.display_path,
                         threading.current_thread().name,
-                        len(cohort),
+                        len(work_item.tasks),
                         max(0.0, time.monotonic() - task_started),
                     )
             finally:
@@ -239,6 +231,7 @@ def run_file_workers(
         progress_entered.set()
         _report_progress(progress_stop, logger, snapshot, len(planned_tasks))
 
+    work_items = None
     try:
         for thread in worker_threads:
             thread.start()
@@ -254,16 +247,27 @@ def run_file_workers(
                 # Diagnostics must not consume the threads required to upload.
                 # Workers already own their slots; lack of a reporter is safe.
                 logger.warning("progress reporter unavailable; uploads continue")
-        for cohort in work_items:
-            task_queue.put(cohort)
+        work_items = iter(prepare_work(planned_tasks, runtime) if prepare_work is not None else (
+            PreparedWorkItem((task,)) for task in planned_tasks
+        ))
+        scheduled_ids: set[str] = set()
+        known_ids = set(task_ids)
+        for work_item in work_items:
+            ids = {task.task_id for task in work_item.tasks}
+            if not ids or len(ids) != len(work_item.tasks) or ids.difference(known_ids) or ids.intersection(scheduled_ids):
+                raise WorkerPoolError("prepared work contains missing, duplicate or foreign sources")
+            scheduled_ids.update(ids)
+            task_queue.put(work_item)
             if logger is not None:
-                task = cohort[0]
+                task = work_item.tasks[0]
                 logger.debug(
                     "task=%s type=%s file=%s enqueued",
                     task.task_id,
                     task.payload_type.value,
                     task.display_path,
                 )
+        if scheduled_ids != known_ids:
+            raise WorkerPoolError("preparation did not schedule every source")
         for _ in started_threads:
             task_queue.put(None)
         task_queue.join()
@@ -308,6 +312,9 @@ def run_file_workers(
             set_attempt_callback = getattr(transport, "set_attempt_callback", None)
             if callable(set_attempt_callback):
                 set_attempt_callback(None)
+        close = getattr(work_items, "close", None)
+        if close is not None:
+            close()
 
     return _collect_run(
         planned_tasks,
@@ -338,20 +345,20 @@ def _report_progress(
         )
 
 def _owned_work_item_outcomes(
-    cohort: tuple[FileTask, ...], runtime: RuntimeType, transport: TransportType,
+    work_item: PreparedWorkItem[RuntimeType, TransportType], runtime: RuntimeType, transport: TransportType,
     process_file: FileProcessor[RuntimeType, TransportType],
-    process_cohort: Callable[[tuple[FileTask, ...], RuntimeType, TransportType], Iterable[WorkItemOutcome]] | None,
 ) -> Iterator[WorkItemOutcome]:
     """Validate each committed part and fail only unresolved original sources.
 
     Closing after an interrupt propagates GeneratorExit without manufacturing
     failed results for unowned work. Already yielded outcomes remain committed.
     """
+    cohort = work_item.tasks
     completed_ids: set[str] = set()
     owned_ids = {source.task_id for source in cohort}
     iterator = None
     try:
-        outcomes = process_cohort(cohort, runtime, transport) if process_cohort is not None and cohort[0].payload_type is PayloadType.TEST else (
+        outcomes = work_item.process(runtime, transport) if work_item.process is not None else (
             WorkItemOutcome((process_file(cohort[0], runtime, transport),)),
         )
         iterator = iter(outcomes)

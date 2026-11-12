@@ -14,6 +14,7 @@ enter this worker. Every yielded outcome commits its original source IDs.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import partial
 import itertools
 from typing import Any, Iterator
 
@@ -24,7 +25,7 @@ from .batching import BatchCompatibilityError, localize_runtime_ids
 from .file_worker import (
     WorkerRuntime, WorkerTransport, _cleanup_source, _enrich_and_validate_test, _phase, _skipped,
     _failed, _http_failure, _prepare_test_requests, _read_json_object,
-    common_headers, process_file, upload_prepared_test,
+    common_headers, upload_prepared_test,
 )
 from .json_utils import strict_json_dumps, strict_json_loads
 from .metrics import PhaseRecorder
@@ -32,6 +33,10 @@ from .models import MAX_TEST_PAYLOAD_BYTES, FileResult, FileStatus, FileTask, Pa
 from .splitting import PreparedTestChunk, TestPayloadSplitError, compact_json_bytes
 from .temporary import TemporaryDirectoryError, task_temporary_directory
 from .transport import HttpResult, HttpTransportError, prepare_json_request
+from .worker_pool import PreparedWorkItem
+
+
+_MAX_BATCH_SOURCES = 64
 
 
 @dataclass(frozen=True)
@@ -115,6 +120,8 @@ def _prepare_small_source_content(
             if ordinary:
                 return _OrdinarySource(task, payload, warnings, measurements, source_bytes)
             key = (envelope_key, strict_json_dumps(dict(context.values), sort_keys=True, separators=(",", ":")).encode())
+            if len(envelope) + len(events) + len(key[0]) + len(key[1]) > MAX_TEST_PAYLOAD_BYTES:
+                return _OrdinarySource(task, payload, warnings, measurements, source_bytes)
             return _Source(task, events, len(payload["events"]), test_result_event_count(payload), key, envelope, headers, tuple(warnings))
     except TestPayloadSplitError as exc:
         return replace(_failed(task, exc.code, str(exc)), events=len(payload["events"]),
@@ -140,51 +147,83 @@ def _run_ordinary_source(source: _OrdinarySource, runtime: WorkerRuntime, transp
             set_measurements(None)
 
 
-def process_test_cohort(
-    tasks: tuple[FileTask, ...], runtime: WorkerRuntime, transport: WorkerTransport,
-) -> Iterator[WorkItemOutcome]:
-    """Keep one bounded accumulator and measure each source and request once."""
+def prepare_test_work_items(
+    tasks: tuple[FileTask, ...], runtime: WorkerRuntime,
+) -> Iterator[PreparedWorkItem[WorkerRuntime, WorkerTransport]]:
+    """Stream compatible requests and independent fallbacks into the existing pool.
+
+    Only this producer owns the pending accumulator. The bounded worker queue
+    transfers prepared buffers without retaining the whole invocation in memory.
+    """
     if runtime.batch_schema is None:
         for task in tasks:
-            yield WorkItemOutcome((process_file(task, runtime, transport),))
+            yield PreparedWorkItem((task,))
         return
     pending: list[_Source] = []
     body_size = 0
-    request_sequence = itertools.count()
-    cohort_id = f"{len(tasks[0].task_id)}:{tasks[0].task_id}"
+    retained_size = 0
     for task in tasks:
+        if task.payload_type is not PayloadType.TEST:
+            yield PreparedWorkItem((task,))
+            continue
         try:
             source_bytes = task.source_path.stat().st_size
         except OSError as exc:
-            yield WorkItemOutcome((_failed(task, "file_pipeline_io_failed", type(exc).__name__),))
+            result = _failed(task, "file_pipeline_io_failed", type(exc).__name__)
+            yield PreparedWorkItem((task,), partial(_process_prepared, result))
             continue
         if (task.source_path.suffix.lower() != ".json"
             or (runtime.filter_prefix and not task.source_path.name.startswith("span_events_"))
             or source_bytes > MAX_TEST_PAYLOAD_BYTES):
             if pending:
-                yield from _upload_batch(tuple(pending), runtime, transport, cohort_id, request_sequence)
+                yield _batch_work_item(tuple(pending))
                 pending.clear()
-            yield WorkItemOutcome((process_file(task, runtime, transport),))
+            body_size = retained_size = 0
+            yield PreparedWorkItem((task,))
             continue
         prepared = _prepare_small_source(task, runtime, source_bytes)
         if isinstance(prepared, FileResult):
-            yield WorkItemOutcome((prepared,))
+            yield PreparedWorkItem((task,), partial(_process_prepared, prepared))
             continue
         if isinstance(prepared, _OrdinarySource):
             if pending:
-                yield from _upload_batch(tuple(pending), runtime, transport, cohort_id, request_sequence)
+                yield _batch_work_item(tuple(pending))
                 pending.clear()
-            yield WorkItemOutcome((_run_ordinary_source(prepared, runtime, transport),))
+            body_size = retained_size = 0
+            yield PreparedWorkItem((task,), partial(_process_prepared, prepared))
             continue
         prefix, suffix = _frame(prepared.envelope)
         single_size = len(prefix) + len(prepared.events) + len(suffix)
-        if pending and (pending[0].key != prepared.key or body_size + 1 + len(prepared.events) > MAX_TEST_PAYLOAD_BYTES):
-            yield from _upload_batch(tuple(pending), runtime, transport, cohort_id, request_sequence)
+        source_size = len(prepared.envelope) + len(prepared.events) + len(prepared.key[0]) + len(prepared.key[1])
+        if pending and (pending[0].key != prepared.key
+            or len(pending) == _MAX_BATCH_SOURCES
+            or body_size + 1 + len(prepared.events) > MAX_TEST_PAYLOAD_BYTES
+            or retained_size + source_size > MAX_TEST_PAYLOAD_BYTES):
+            yield _batch_work_item(tuple(pending))
             pending.clear()
+            body_size = retained_size = 0
         body_size = body_size + 1 + len(prepared.events) if pending else single_size
+        retained_size += source_size
         pending.append(prepared)
     if pending:
-        yield from _upload_batch(tuple(pending), runtime, transport, cohort_id, request_sequence)
+        yield _batch_work_item(tuple(pending))
+
+
+def _batch_work_item(sources: tuple[_Source, ...]) -> PreparedWorkItem[WorkerRuntime, WorkerTransport]:
+    return PreparedWorkItem(tuple(source.task for source in sources), partial(_process_prepared, sources))
+
+
+def _process_prepared(
+    prepared: tuple[_Source, ...] | _OrdinarySource | FileResult,
+    runtime: WorkerRuntime, transport: WorkerTransport,
+) -> Iterator[WorkItemOutcome]:
+    if isinstance(prepared, FileResult):
+        yield WorkItemOutcome((prepared,))
+    elif isinstance(prepared, _OrdinarySource):
+        yield WorkItemOutcome((_run_ordinary_source(prepared, runtime, transport),))
+    else:
+        task_id = prepared[0].task.task_id
+        yield from _upload_batch(prepared, runtime, transport, f"{len(task_id)}:{task_id}", itertools.count())
 
 
 def _upload_ordinary_prepared(
@@ -252,6 +291,9 @@ def _send_once(
                 outcome, response = WorkItemOutcome(tuple(_failed(source.task, code, message) for source in sources)), None
             except (OSError, TemporaryDirectoryError) as exc:
                 code, message = "file_pipeline_io_failed", type(exc).__name__
+                outcome, response = WorkItemOutcome(tuple(_failed(source.task, code, message) for source in sources)), None
+            except Exception as exc:
+                code, message = "unhandled_worker_exception", type(exc).__name__
                 outcome, response = WorkItemOutcome(tuple(_failed(source.task, code, message) for source in sources)), None
     finally:
         if callable(set_measurements):

@@ -26,7 +26,7 @@ from .discovery import DiscoveryResult
 from .endpoints import EndpointSet
 from .file_worker import WorkerRuntime, process_file
 from .metrics import PhaseRecorder
-from .batch_worker import process_test_cohort
+from .batch_worker import prepare_test_work_items
 from .batching import BatchCompatibilityError, schema_for_event_runtime_ids
 from .models import FileStatus
 from .reporting import AggregateReport
@@ -233,7 +233,7 @@ def run_discovered_tasks(
                 runtime=runtime,
                 transport_factory=create_transport,
                 process_file=process_file,
-                process_cohort=process_test_cohort if batch_schema is not None else None,
+                prepare_work=prepare_test_work_items if batch_schema is not None else None,
                 logger=logger,
                 measurements=measurements,
             )
