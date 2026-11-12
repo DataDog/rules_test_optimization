@@ -15,6 +15,21 @@ versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Instrumented Go tests preserve configured argument expansion and runtime
+  arguments, including locations in `data` selected by Go's `pure` or `race`
+  configuration. Data binaries keep their linker definitions. Internal helpers
+  accept test-only embedded libraries, and materialized test binaries retain
+  the directory depth needed by relative shared-library paths.
+- Windows instrumented tests use a native launcher so command-shell expansion
+  cannot change quotes, percent signs, exclamation marks, or shell operators in
+  arguments. The launcher preserves target metadata and the child exit code.
+- Local-static Go descriptors can identify metadata repositories private to a
+  Bzlmod extension with `repository_label`, resolved in the extension's mapping.
+- Module-selection errors show a count and bounded sample of available groups
+  instead of printing the complete catalog. Selection policy is unchanged.
+
 ## [2.0.0] - 2026-11-05
 
 ### Changed

@@ -1178,6 +1178,30 @@
         }
       }
     },
+    "//tests:private_metadata_repo.bzl%private_metadata": {
+      "general": {
+        "bzlTransitiveDigest": "SARas6i5J6G20kL9EYBLEzpFAErSG7206KFEcS5I2M8=",
+        "usagesDigest": "YHHD4VguQay87YpIc2K31YJHTr6eh3Xd1755CxHi6pE=",
+        "recordedInputs": [
+          "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+"
+        ],
+        "generatedRepoSpecs": {
+          "private_go_metadata": {
+            "repoRuleId": "@@datadog-rules-test-optimization+//tools/tests:example_stub_repo.bzl%example_stub_repo",
+            "attributes": {
+              "repo_alias": "private_go_metadata",
+              "service_name": "private-go-service"
+            }
+          },
+          "private_go_descriptor": {
+            "repoRuleId": "@@//tests:private_metadata_repo.bzl%_descriptor",
+            "attributes": {
+              "manifest": "@@+private_metadata+private_go_metadata//:.testoptimization/manifest.txt"
+            }
+          }
+        }
+      }
+    },
     "@@pybind11_bazel+//:python_configure.bzl%extension": {
       "general": {
         "bzlTransitiveDigest": "VhEtmxw1yzb9rBZVsKTdti7p+nDM/Fv1p9TmKdO45+Q=",

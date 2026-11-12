@@ -504,6 +504,18 @@ jobs:
           WINDOWS_SMOKE_ONLY: "1"
         run: ./tools/tests/integration/run_bzlmod_go_integration.sh
 
+      - name: Verify wrapper data and arguments with manifest-only runfiles
+        shell: bash
+        working-directory: modules/go
+        run: |
+          ../../bazelw test //tests/ddtest:public_data_test //tests/ddtest:public_data_pure_test \
+            --override_module=datadog-rules-test-optimization=../.. --noenable_runfiles \
+            --test_env='EXPECTED_RUNTIME_EXTRA=bang!missing!' --test_arg='bang!missing!'
+          ../../bazelw test //tools/testwrapper:testwrapper_test \
+            //tests/ddtest:recursive_args_native_test //tests/ddtest:recursive_args_wrapped_test \
+            --override_module=datadog-rules-test-optimization=../.. \
+            --define='DATA_ARG=$(NESTED_DATA)' --define='NESTED_DATA=$(rlocationpath :public_data.txt)'
+
   coverage-tools:
     needs: changes
     if: ${{ needs.changes.outputs.run_full_ci == 'true' }}

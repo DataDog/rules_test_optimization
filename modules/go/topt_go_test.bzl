@@ -104,6 +104,7 @@ _REMOVED_ORCHESTRION_ATTRS = [
     "orchestrion_pin_files",
 ]
 _STATIC_DESCRIPTOR_KEYS = {
+    "repository_label": None,
     "manifest_label": None,
     "repo_name": None,
     "runtime_module_path": None,
@@ -200,13 +201,20 @@ def _normalize_static_descriptor(descriptor, topt_service):
     repo_name = _validate_apparent_repo_name(_validate_non_empty_descriptor_string(descriptor, "repo_name"))
     service_name = _validate_non_empty_descriptor_string(descriptor, "service_name")
     runtime_module_path = _validate_non_empty_descriptor_string(descriptor, "runtime_module_path")
+    repository_label = descriptor.get("repository_label")
+    repo_prefix = "@" + repo_name
+    if repository_label != None:
+        if type(repository_label) not in ("string", "Label") or not str(repository_label):
+            fail_with_prefix("dd_topt_go_test", "local-static descriptor repository_label must be a Label or non-empty label string")
+        repository_label = repository_label if type(repository_label) == "Label" else Label(repository_label)
+        repo_prefix = str(repository_label).split("//")[0]
     manifest_label = descriptor.get("manifest_label")
     if manifest_label == None:
-        manifest_label = "@%s//:.testoptimization/manifest.txt" % repo_name
+        manifest_label = "%s//:.testoptimization/manifest.txt" % repo_prefix
     elif type(manifest_label) != type("") or not manifest_label:
         fail_with_prefix("dd_topt_go_test", "local-static descriptor manifest_label must be a non-empty label string")
 
-    expected_prefix = "@%s//" % repo_name
+    expected_prefix = "%s//" % repo_prefix
     if not manifest_label.startswith(expected_prefix) or ":" not in manifest_label[len(expected_prefix):]:
         fail_with_prefix(
             "dd_topt_go_test",
@@ -216,6 +224,7 @@ def _normalize_static_descriptor(descriptor, topt_service):
 
     return {
         "_local_static": True,
+        "_repo_prefix": repo_prefix,
         "enabled": True,
         "manifest_label": manifest_label,
         "repo_name": repo_name,
@@ -459,7 +468,7 @@ def dd_topt_go_test(
     # Build labels for files/context based on (possibly derived) sync_repo_name.
     # These labels remain stable public contracts of the generated sync repo.
     files_label = (
-        "@%s//:test_optimization_files" % sync_repo_name if is_local_static else resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
+        "%s//:test_optimization_files" % _svc["_repo_prefix"] if is_local_static else resolve_files_label(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
     )
 
     # ------------------------------------------------------------------
@@ -484,8 +493,8 @@ def dd_topt_go_test(
         module_labels = []
         module_group_names = []
         module_group_by_identifier = {}
-        repository_state_label = "@%s//:test_optimization_repository_state" % sync_repo_name
-        runtime_module_label = "@%s//:test_optimization_runtime_module" % sync_repo_name
+        repository_state_label = "%s//:test_optimization_repository_state" % _svc["_repo_prefix"]
+        runtime_module_label = "%s//:test_optimization_runtime_module" % _svc["_repo_prefix"]
         expected_service_name = _svc["service_name"]
         expected_runtime_module_path = _svc["runtime_module_path"]
     else:
@@ -515,6 +524,7 @@ def dd_topt_go_test(
     # phase, keeping runtime logic and user callsites simple.
     topt_go_payloads_selector(
         name = selector_name,
+        testonly = wrapper_kwargs.get("testonly", True),
         # The public test owns selection; this implementation detail should
         # never become a top-level target through wildcard expansion.
         tags = ["manual"],
@@ -540,6 +550,7 @@ def dd_topt_go_test(
     # uploader can merge target-specific Bazel tags into emitted events.
     topt_go_bazel_metadata(
         name = metadata_name,
+        testonly = wrapper_kwargs.get("testonly", True),
         # Keep metadata generation attached to the public test instead of
         # exposing it as an independently selectable wildcard target.
         tags = ["manual"],
@@ -627,12 +638,14 @@ def dd_topt_go_test(
     kwargs["visibility"] = ["//visibility:private"]
     for key, value in raw_passthrough.items():
         kwargs[key] = value
+    kwargs["testonly"] = wrapper_kwargs.get("testonly", True)
 
     # The registration file joins the test's own package or its external test
     # package, which only its sources tell; Mini's testopt links Mini.
     registration_name = name + "_ddtest_registration"
     topt_go_ddtest_registration(
         name = registration_name,
+        testonly = wrapper_kwargs.get("testonly", True),
         srcs = kwargs.get("srcs") or [],
         embed = kwargs.get("embed") or [],
         tags = ["manual"],
@@ -641,6 +654,11 @@ def dd_topt_go_test(
     )
     kwargs["srcs"] = _concat_label_list_values(kwargs.get("srcs"), [":" + registration_name])
     kwargs["deps"] = _with_mini(name, kwargs.get("deps"), wrapper_kwargs.get("target_compatible_with", []))
+
+    # Resolve configurable args and their location labels in the same incoming
+    # Go configuration as data (race, pure, goos/goarch), not in the wrapper.
+    if "args" in wrapper_kwargs:
+        kwargs["args"] = wrapper_kwargs.pop("args")
 
     # Create the hidden raw go_test first, then expose it through a public
     # wrapper target that builds it with the instrumentation.

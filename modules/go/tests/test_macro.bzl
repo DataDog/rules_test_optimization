@@ -24,7 +24,6 @@ load(
     "MINI_TESTOPT",
     "ddtest_go_test",
     "test_execution_requirements_for_tests",
-    "windows_wrapper_content_for_tests",
     "wrapper_output_name_for_tests",
 )
 load(
@@ -352,6 +351,12 @@ def go_macro_internal_helper_tags_loading_tests(
             ("registration", "_ddtest_registration"),
         ]:
             helper = native.existing_rule(target_name + suffix)
+            loadingtest.equals(
+                env,
+                "%s_%s_helper_testonly" % (target_kind, helper_kind),
+                True,
+                helper.get("testonly", False) if helper else None,
+            )
             loadingtest.equals(
                 env,
                 "%s_%s_helper_tags" % (target_kind, helper_kind),
@@ -988,7 +993,7 @@ def _go_macro_public_wrapper_test_impl(ctx):
     )
     asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "go_macro_single_service_target"))
-    asserts.true(env, _has_file_basename(files, "go_macro_single_service_target__wrapped_go_macro_single_service_target__raw_go_test.sh"))
+    asserts.true(env, _has_fragment([file.short_path for file in files], "go_macro_single_service_target__wrapped_/go_macro_single_service_target__raw_go_test.sh"))
     asserts.true(env, _has_file_basename(files, materialized_metadata))
     run_env = target[RunEnvironmentInfo].environment
     manifest_env = run_env.get("DD_TEST_OPTIMIZATION_MANIFEST_FILE")
@@ -1084,27 +1089,27 @@ def _wrapper_output_name_non_windows_test_impl(ctx):
     return analysistest.end(env)
 
 def _wrapper_output_name_windows_test_impl(ctx):
-    """Assert Windows wrapper names use the batch launcher suffix."""
+    """Assert Windows wrapper names use the native launcher suffix."""
     env = analysistest.begin(ctx)
     target = analysistest.target_under_test(env)
-    asserts.equals(env, "hello_test.bat", target[WrapperOutputNameInfo].output_name)
+    asserts.equals(env, "hello_test.exe", target[WrapperOutputNameInfo].output_name)
     return analysistest.end(env)
 
 def _windows_wrapper_uses_file_payload_mode_test_impl(ctx):
     """Assert Windows launchers preserve Bazel file mode instead of proxying uploads."""
-    env = unittest.begin(ctx)
-    content = windows_wrapper_content_for_tests("raw.exe", "target_metadata.json")
-    asserts.true(env, "bazel_target_metadata.json" in content)
-    asserts.true(env, '"%SCRIPT_DIR%target_metadata.json"' in content)
-    asserts.false(env, "META_BASENAME" in content)
-    asserts.true(env, '"%ACTUAL%" %*' in content)
-    asserts.true(env, "exit /b %ERRORLEVEL%" in content)
-    asserts.false(env, "DD_TRACE_AGENT_URL" in content)
-    asserts.false(env, "DD_CIVISIBILITY_AGENTLESS_ENABLED" in content)
-    asserts.false(env, "DD_CIVISIBILITY_AGENTLESS_URL" in content)
-    asserts.false(env, "CAPTURE_PORT" in content)
-    asserts.false(env, "HELPER" in content)
-    return unittest.end(env)
+    env = analysistest.begin(ctx)
+    files = analysistest.target_under_test(env)[DefaultInfo].files.to_list()
+    configs = [file for file in files if file.basename.endswith(".exe.json")]
+    asserts.equals(env, 1, len(configs))
+    actions = analysistest.target_actions(env)
+    writes = [action for action in actions if action.mnemonic == "FileWrite" and configs[0] in action.outputs.to_list()]
+    asserts.equals(env, 1, len(writes))
+    configuration = json.decode(writes[0].content)
+    asserts.equals(env, [], configuration["args"])
+    asserts.true(env, configuration["actual"].endswith("hello_test__raw_go_test.exe"))
+    asserts.true(env, configuration["metadata"].endswith("_metadata.json"))
+    asserts.equals(env, ["actual", "args", "metadata"], sorted(configuration.keys()))
+    return analysistest.end(env)
 
 def _reject_removed_orchestrion_attrs_test_impl(ctx):
     """Assert ordinary go_test attributes pass the removed-attribute check."""
@@ -1188,9 +1193,9 @@ def _ddtest_wrapper_materialized_actual_non_windows_test_impl(ctx):
     )
     asserts.equals(env, 3, len(files))
     asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_non_windows_target"))
-    asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_fragment([file.short_path for file in files], "ddtest_wrapper_materialized_actual_non_windows_target__wrapped_/hello_test__raw_go_test"))
     asserts.true(env, _has_file_basename(files, materialized_metadata))
-    asserts.true(env, _has_file_basename(runfiles, "ddtest_wrapper_materialized_actual_non_windows_target__wrapped_hello_test__raw_go_test"))
+    asserts.true(env, _has_fragment([file.short_path for file in runfiles], "ddtest_wrapper_materialized_actual_non_windows_target__wrapped_/hello_test__raw_go_test"))
     asserts.true(env, _has_file_basename(runfiles, materialized_metadata))
     return analysistest.end(env)
 
@@ -1201,14 +1206,14 @@ def _ddtest_wrapper_materialized_actual_windows_test_impl(ctx):
     files = target[DefaultInfo].files.to_list()
     runfiles = target[DefaultInfo].default_runfiles.files.to_list()
     materialized_metadata = (
-        "ddtest_wrapper_materialized_actual_windows_target__wrapped_" +
+        "ddtest_wrapper_materialized_actual_windows_target.exe__wrapped_" +
         "ddtest_wrapper_materialized_actual_windows_target_metadata.json"
     )
-    asserts.equals(env, 3, len(files))
-    asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_windows_target.bat"))
-    asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.equals(env, 4, len(files))
+    asserts.true(env, _has_file_basename(files, "ddtest_wrapper_materialized_actual_windows_target.exe"))
+    asserts.true(env, _has_fragment([file.short_path for file in files], "ddtest_wrapper_materialized_actual_windows_target.exe__wrapped_/hello_test__raw_go_test.exe"))
     asserts.true(env, _has_file_basename(files, materialized_metadata))
-    asserts.true(env, _has_file_basename(runfiles, "ddtest_wrapper_materialized_actual_windows_target__wrapped_hello_test__raw_go_test.exe"))
+    asserts.true(env, _has_fragment([file.short_path for file in runfiles], "ddtest_wrapper_materialized_actual_windows_target.exe__wrapped_/hello_test__raw_go_test.exe"))
     asserts.true(env, _has_file_basename(runfiles, materialized_metadata))
     return analysistest.end(env)
 
@@ -1345,8 +1350,11 @@ wrapper_output_name_non_windows_test = analysistest.make(
 wrapper_output_name_windows_test = analysistest.make(
     _wrapper_output_name_windows_test_impl,
 )
-windows_wrapper_uses_file_payload_mode_test = unittest.make(
+windows_wrapper_uses_file_payload_mode_test = analysistest.make(
     _windows_wrapper_uses_file_payload_mode_test_impl,
+    config_settings = {
+        "//command_line_option:platforms": str(Label("@io_bazel_rules_go//go/toolchain:windows_amd64")),
+    },
 )
 reject_removed_orchestrion_attrs_test = unittest.make(
     _reject_removed_orchestrion_attrs_test_impl,

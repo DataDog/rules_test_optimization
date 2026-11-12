@@ -227,6 +227,13 @@ Go wrapper, treat it as a consumer-specific integration:
   doctor and one enrichment-validating uploader pass; use dry-run only when
   real upload is disabled.
 
+When a consumer's module extension keeps metadata repositories private, have its
+exported static descriptor provide `repository_label` as a Label or canonical
+label string resolved in the extension's mapping. Keep `repo_name` as the logical
+metadata identity; do not import every backing repository into the root module
+just to make the macro resolve apparent labels. See the local-static descriptor
+section in `docs/Configuration_Reference.md`.
+
 ## Branch and PR hygiene
 
 Before editing, verify the repository, worktree, branch, and existing changes.

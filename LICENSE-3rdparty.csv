@@ -52,3 +52,4 @@ Python package PyYAML,https://github.com/yaml/pyyaml,MIT,"Kirill Simonov and PyY
 Python package tomli,https://github.com/hukkin/tomli,MIT,"Taneli Hukkinen and tomli contributors"
 Python package typing-extensions,https://github.com/python/typing_extensions,Python-2.0,"Python Software Foundation"
 Python package zipp,https://github.com/jaraco/zipp,MIT,"Jason R. Coombs and zipp contributors"
+Go wrapper argument tokenization,https://github.com/bazelbuild/bazel/blob/8.4.1/src/main/java/com/google/devtools/build/lib/shell/ShellUtils.java,Apache-2.0,"The Bazel Authors"

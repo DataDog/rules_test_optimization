@@ -4,15 +4,20 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library")
+load("@bazel_skylib//lib:shell.bzl", "shell")
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library", "go_test")
+load("@private_go_descriptor//:descriptor.bzl", "DESCRIPTOR", "DESCRIPTOR_LABEL")
+load("@rules_cc//cc:defs.bzl", "cc_binary", "cc_import")
 load("//:topt_go_stdlib.bzl", "dd_topt_go_stdlib_warmup")
 load("//:topt_go_test.bzl", "dd_topt_go_test")
 load("//tests:test_macro.bzl", "stdlib_warmup_target_has_outputs_test")
 load(
     ":fixtures.bzl",
     "TOPT_DATA",
+    "argument_contract_test",
     "ddtest_transition_test",
     "foreign_mini_failure_test",
+    "nested_executable_depth_test",
 )
 
 # Runs instrumented: it fails unless Mini set its context's trace. Its deps
@@ -53,6 +58,7 @@ dd_topt_go_test(
 # Its only source comes through embed, which the registration also reads.
 go_library(
     name = "widget",
+    testonly = True,
     srcs = ["widget.go"],
     importpath = "example.com/widget",
 )
@@ -173,4 +179,223 @@ dd_topt_go_stdlib_warmup(name = "stdlib_warmup")
 stdlib_warmup_target_has_outputs_test(
     name = "stdlib_warmup_has_outputs_test",
     target_under_test = ":stdlib_warmup",
+)
+
+# All three internal helpers must accept an embedded testonly library.
+# The existing embed_only_test above is the executable regression.
+
+go_binary(
+    name = "public_data_tool",
+    srcs = ["public_data_tool.go"],
+    importpath = "example.com/wrapperdatatool",
+    x_defs = {"message": "through-public-data"},
+)
+
+_SPECIAL_ARGS = [shell.quote(arg) for arg in [
+    "",
+    'quote "inside"',
+    "trailing\\",
+    "%PATH%",
+    "bang!",
+    "a&b|c<d>e^f",
+    "λ words",
+]] + ["'$$(literal)'"]
+
+dd_topt_go_test(
+    name = "public_data_test",
+    srcs = ["public_data_test.go"],
+    args = [
+        "$(location :public_data.txt)",
+        "$(rlocationpath :public_data_tool)",
+    ] + _SPECIAL_ARGS,
+    data = select({"//conditions:default": [
+        ":public_data.txt",
+        ":public_data_tool",
+    ]}),
+    importpath = "example.com/wrapperdata",
+    topt_data = TOPT_DATA,
+    deps = ["@io_bazel_rules_go//go/runfiles"],
+)
+
+cc_binary(
+    name = "libshared_answer.so",
+    srcs = ["shared_answer.c"],
+    linkshared = True,
+)
+
+cc_import(
+    name = "shared_answer_import",
+    shared_library = ":libshared_answer.so",
+)
+
+go_library(
+    name = "shared_answer",
+    testonly = True,
+    srcs = ["shared_answer.go"],
+    cdeps = [":shared_answer_import"],
+    cgo = True,
+    importpath = "example.com/sharedanswer",
+)
+
+dd_topt_go_test(
+    name = "shared_answer_test",
+    srcs = ["shared_answer_test.go"],
+    embed = [":shared_answer"],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    topt_data = TOPT_DATA,
+)
+
+dd_topt_go_test(
+    name = "private_repository_test",
+    srcs = ["instrumented_test.go"],
+    importpath = "example.com/privatefixture",
+    topt_data = DESCRIPTOR,
+    deps = [
+        "@topt_go_ddtest_mini//propagation",
+        "@topt_go_ddtest_mini//testopt",
+    ],
+)
+
+# A Label exported by an extension is accepted as well as its canonical string.
+dd_topt_go_test(
+    name = "private_repository_label_test",
+    srcs = ["instrumented_test.go"],
+    importpath = "example.com/privatelabelfixture",
+    topt_data = DESCRIPTOR_LABEL,
+    deps = [
+        "@topt_go_ddtest_mini//propagation",
+        "@topt_go_ddtest_mini//testopt",
+    ],
+)
+
+config_setting(
+    name = "pure_enabled",
+    flag_values = {"@io_bazel_rules_go//go/config:pure": "true"},
+)
+
+config_setting(
+    name = "race_enabled",
+    flag_values = {"@io_bazel_rules_go//go/config:race": "true"},
+)
+
+dd_topt_go_test(
+    name = "public_data_pure_test",
+    srcs = ["public_data_test.go"],
+    args = [
+        "$(location :configured_data.txt)",
+        "$(rlocationpath :public_data_tool)",
+    ] + _SPECIAL_ARGS,
+    data = select({
+        ":pure_enabled": [
+            ":configured_data.txt",
+            ":public_data_tool",
+        ],
+        "//conditions:default": [
+            ":public_data.txt",
+            ":public_data_tool",
+        ],
+    }),
+    env = {"EXPECTED_PUBLIC_DATA": "configured data"},
+    importpath = "example.com/wrapperpuredata",
+    pure = "on",
+    topt_data = TOPT_DATA,
+    deps = ["@io_bazel_rules_go//go/runfiles"],
+)
+
+dd_topt_go_test(
+    name = "public_data_race_test",
+    srcs = ["public_data_test.go"],
+    args = [
+        "$(location :configured_data.txt)",
+        "$(rlocationpath :public_data_tool)",
+    ] + _SPECIAL_ARGS,
+    data = select({
+        ":race_enabled": [
+            ":configured_data.txt",
+            ":public_data_tool",
+        ],
+        "//conditions:default": [
+            ":public_data.txt",
+            ":public_data_tool",
+        ],
+    }),
+    env = {"EXPECTED_PUBLIC_DATA": "configured data"},
+    importpath = "example.com/wrapperracedata",
+    race = "on",
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    topt_data = TOPT_DATA,
+    deps = ["@io_bazel_rules_go//go/runfiles"],
+)
+
+dd_topt_go_test(
+    name = "nested/shared_answer_test",
+    srcs = ["shared_answer_test.go"],
+    embed = [":shared_answer"],
+    target_compatible_with = select({
+        "@platforms//os:windows": ["@platforms//:incompatible"],
+        "//conditions:default": [],
+    }),
+    topt_data = TOPT_DATA,
+)
+
+argument_contract_test(name = "argument_contract_test")
+
+nested_executable_depth_test(
+    name = "nested_executable_depth_test",
+    target_under_test = ":nested/shared_answer_test",
+)
+
+genrule(
+    name = "generated_data",
+    outs = ["generated_data.txt"],
+    cmd = "echo public data > $@",
+)
+
+dd_topt_go_test(
+    name = "public_generated_data_test",
+    srcs = ["public_data_test.go"],
+    args = [
+        "$(location :generated_data)",
+        "$(rlocationpath :public_data_tool)",
+    ] + _SPECIAL_ARGS,
+    data = [
+        ":generated_data",
+        ":public_data_tool",
+    ],
+    importpath = "example.com/wrappergenerateddata",
+    topt_data = TOPT_DATA,
+    deps = ["@io_bazel_rules_go//go/runfiles"],
+)
+
+# Native and wrapped tests must expand Make variables introduced by --define.
+# Manual: the caller deliberately supplies DATA_ARG for this regression.
+go_test(
+    name = "recursive_args_native_test",
+    srcs = ["recursive_args_test.go"],
+    args = [
+        "$(DATA_ARG)",
+        "'$$(literal)'",
+    ],
+    data = [":public_data.txt"],
+    tags = ["manual"],
+    deps = ["@io_bazel_rules_go//go/runfiles"],
+)
+
+dd_topt_go_test(
+    name = "recursive_args_wrapped_test",
+    srcs = ["recursive_args_test.go"],
+    args = [
+        "$(DATA_ARG)",
+        "'$$(literal)'",
+    ],
+    data = [":public_data.txt"],
+    tags = ["manual"],
+    topt_data = TOPT_DATA,
+    deps = ["@io_bazel_rules_go//go/runfiles"],
 )
