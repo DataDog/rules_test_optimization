@@ -12,6 +12,7 @@ import json
 import os
 from contextlib import redirect_stderr
 from io import StringIO
+from itertools import product
 from unittest import mock
 from pathlib import Path
 import tempfile
@@ -66,18 +67,23 @@ class BepExecutionTests(unittest.TestCase):
         from test_python_tools import TestOptimizationDoctorTests
         from test_uploader_application_tools import _bep_test_result, _write_payload
         doctor = _load_module("doctor_optional_ambiguous", "tools/core/test_optimization_doctor.py")
-        for catalog in (False, True):
-            with self.subTest(catalog=catalog), tempfile.TemporaryDirectory() as tmp:
+        for catalog, kind, sidecar in product((False, True), ("tests", "coverage", "telemetry"), (False, True)):
+            with self.subTest(catalog=catalog, kind=kind, sidecar=sidecar), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 output = root / "bazel-testlogs/pkg/test/shard_1_of_2/test.outputs"
-                _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
-                (output / "bazel_target_metadata.json").write_text(json.dumps({
-                    "bazel.target": "//pkg:test", "bazel.go.payload_selection": "module"}))
+                payload = {"events": [{"type": "test", "content": {}}]} if kind == "tests" else {"files": []}
+                _write_payload(output, kind, "events.json", payload)
+                if sidecar:
+                    (output / "bazel_target_metadata.json").write_text(json.dumps({
+                        "bazel.target": "//pkg:test", "bazel.go.payload_selection": "module"}))
                 bep = root / "bep.json"
                 fresh = _bep_test_result("//pkg:test", output=output)
                 cached = _bep_test_result("//pkg:test", output=output, cached_locally=True)
                 bep.write_text(json.dumps(fresh) + "\n" + json.dumps(cached))
                 config = TestOptimizationDoctorTests._write_doctor_config(root, ["//pkg:test"] if catalog else [])
+                settings = json.loads(config.read_text())
+                settings["require_bazel_metadata"] = sidecar
+                config.write_text(json.dumps(settings))
                 stderr = StringIO()
                 with mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root / "bazel-testlogs"), "BUILD_WORKSPACE_DIRECTORY": str(root)}), redirect_stderr(stderr):
                     with self.assertRaises(SystemExit):

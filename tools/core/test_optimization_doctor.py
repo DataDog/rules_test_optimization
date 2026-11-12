@@ -3201,8 +3201,12 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             test_result_outputs=test_result_outputs,
         )
         if freshness is not None:
-            selected_labels = freshness.identified_labels.union(expected_targets).union(test_result_outputs.values())
-            ambiguous_keys = {key for execution in freshness.executions if execution.identity[1] in selected_labels for key in execution.output_keys if key in freshness.ambiguous_outputs}
+            selected_labels = freshness.identified_labels.union(expected_targets).union(
+                entry["label"] for entry in report["outputs"] if entry["label"])
+            observed_keys = {entry["output_key"] for entry in report["outputs"]}
+            ambiguous_keys = freshness.ambiguous_outputs.intersection(observed_keys).union(
+                key for execution in freshness.executions if execution.identity[1] in selected_labels
+                for key in execution.output_keys if key in freshness.ambiguous_outputs)
             if freshness.ambiguous_labels.intersection(selected_labels):
                 _fail("BEP freshness is ambiguous: target reported as both platform-skipped and executed")
             if ambiguous_keys:
