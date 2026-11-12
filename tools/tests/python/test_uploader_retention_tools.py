@@ -382,6 +382,30 @@ class RetentionTests(unittest.TestCase):
                 with self.subTest(shell=shell, case=case), tempfile.TemporaryDirectory() as tmp:
                     self._run_wrapper(Path(tmp), launcher, extension, case)
 
+    def test_powershell_legacy_preserves_retention_paths(self):
+        interpreters = []
+        if shutil.which("pwsh"):
+            interpreters.append((shutil.which("pwsh"), True))
+        if os.name == "nt":
+            windows_powershell = shutil.which("powershell.exe")
+            self.assertIsNotNone(windows_powershell, "Windows PowerShell 5.1 is required on Windows")
+            interpreters.append((windows_powershell, False))
+        if not interpreters:
+            self.skipTest("PowerShell unavailable")
+        for interpreter, set_legacy in interpreters:
+            for case in ("success", "durable"):
+                with self.subTest(interpreter=interpreter, case=case), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    launcher = [interpreter, "-NoProfile", "-File"]
+                    if set_legacy:
+                        adapter = root / "legacy.ps1"
+                        adapter.write_text("$PSNativeCommandArgumentPassing = 'Legacy'\n"
+                            "$wrapper = $args[0]\n"
+                            "$arguments = @($args | Select-Object -Skip 1)\n"
+                            "& $wrapper @arguments\nexit $LASTEXITCODE\n", encoding="utf-8")
+                        launcher.append(str(adapter))
+                    self._run_wrapper(root, launcher, "ps1", case)
+
     @unittest.skipIf(os.name == "nt", "POSIX SIGINT delivery; Windows interruption remains a CI/platform check")
     def test_interrupt_keeps_unacknowledged_staged_source(self):
         bash = shutil.which("bash")

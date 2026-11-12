@@ -143,10 +143,10 @@ from pathlib import Path
 import sys
 try:
     status = json.loads(Path(sys.argv[1]).read_text())
-    valid = (type(status.get("schema_version")) is int and status["schema_version"] == 1
-        and status.get("wrapper_temp_root") == str(Path(sys.argv[2]).resolve())
-        and status.get("cleanup_safe") is True
-        and not any((Path(sys.argv[3]) / "__runs").glob("*")))
+    valid = (type(status.get('schema_version')) is int and status['schema_version'] == 1
+        and status.get('wrapper_temp_root') == str(Path(sys.argv[2]).resolve())
+        and status.get('cleanup_safe') is True
+        and not any((Path(sys.argv[3]) / '__runs').glob('*')))
 except (OSError, ValueError, TypeError, AttributeError):
     valid = False
 sys.exit(0 if valid else 1)
@@ -291,7 +291,7 @@ try {
 from pathlib import Path
 import sys
 report, temporary = (Path(value).resolve() for value in sys.argv[1:])
-print(report / "retained" if not report.is_relative_to(temporary) else "")
+print(report / 'retained' if not report.is_relative_to(temporary) else '')
 '@
       try {
         $candidate = [string](& $python -c $code $ReportDir $tmpRoot)
