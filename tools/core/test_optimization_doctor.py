@@ -1404,6 +1404,9 @@ def _stage_bep_artifacts(
                     )
                     continue
             downloaded = False
+            # Own an incomplete materialization before any transfer can write
+            # bytes. Interruption after download must preserve that carrier too.
+            tmp_dst, dst = _prepare_staging_destination(run_staging_dir, ref.output_key)
             try:
                 if ref.remote_only:
                     if downloader:
@@ -1423,11 +1426,13 @@ def _stage_bep_artifacts(
                 else:
                     source = _resolve_bep_local_artifact_path(ref.fetch_value, workspace)
             except (BepArtifactStageError, OSError) as exc:
+                _discard_staging_destination(tmp_dst)
                 if remote_artifacts == "required":
                     _fail(str(exc))
                 warn_once(str(exc))
                 continue
             if source is None:
+                _discard_staging_destination(tmp_dst)
                 if remote_artifacts == "required":
                     _fail(
                         f"BEP artifact for {ref.label} could not be materialized as a local test.outputs carrier: "
@@ -1439,7 +1444,6 @@ def _stage_bep_artifacts(
                         f"{display_fetch_value}"
                     )
                 continue
-            tmp_dst, dst = _prepare_staging_destination(run_staging_dir, ref.output_key)
             try:
                 if downloaded:
                     if not source.is_file() or source.name != "outputs.zip":

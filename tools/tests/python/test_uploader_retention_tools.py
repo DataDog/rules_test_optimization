@@ -190,7 +190,7 @@ class RetentionTests(unittest.TestCase):
 
     def test_completed_remote_carrier_survives_preparation_or_freshness_failure(self):
         """Real HTTP download/extraction, no uploader transport or backend calls."""
-        for case in ("staging_failure", "planning_failure", "freshness_excluded", "interrupt_before_commit", "interrupt_after_commit", "optional_success"):
+        for case in ("staging_failure", "planning_failure", "freshness_excluded", "interrupt_after_download", "interrupt_before_commit", "interrupt_after_commit", "optional_success"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp).resolve()
                 raw = b'{"events":[{"type":"test","content":{"meta":{"test.name":"pending"}}}]}'
@@ -228,7 +228,9 @@ class RetentionTests(unittest.TestCase):
                     if case == "optional_success":
                         arguments.append("--dry-run")
                     config = parse_uploader_config(arguments,
-                        environ={"BUILD_WORKSPACE_DIRECTORY": str(root)}, cwd=root)
+                        environ={"BUILD_WORKSPACE_DIRECTORY": str(root),
+                            "DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT": str(root / "staging"),
+                            "DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE": str(root / "staging/status.json")}, cwd=root)
                     transport_factory = mock.Mock() if case == "optional_success" else mock.Mock(side_effect=AssertionError("excluded/preflight sources must not be uploaded"))
                     diagnostics = io.StringIO()
                     with ExitStack() as patches:
@@ -236,6 +238,15 @@ class RetentionTests(unittest.TestCase):
                             load_doctor = freshness_runtime._load_doctor_runtime
                             def load_interruptible_doctor(*args):
                                 doctor = load_doctor(*args)
+                                if case == "interrupt_after_download":
+                                    download = doctor._download_http_artifact
+                                    def interrupt_download(*args, **kwargs):
+                                        source = download(*args, **kwargs)
+                                        self.assertIsNotNone(source)
+                                        self.assertEqual(archive, source.read_bytes())
+                                        raise KeyboardInterrupt
+                                    patches.enter_context(mock.patch.object(doctor, "_download_http_artifact", interrupt_download))
+                                    return doctor
                                 commit = doctor._commit_staging_destination
                                 def interrupt_commit(temporary, destination):
                                     if case == "interrupt_after_commit":
@@ -258,6 +269,14 @@ class RetentionTests(unittest.TestCase):
                         continue
                     transport_factory.assert_not_called()
                     catalogs = list((root / "retained").glob("*/catalog.json"))
+                    if case == "interrupt_after_download":
+                        self.assertFalse(json.loads((root / "staging/status.json").read_text())["cleanup_safe"])
+                        self.assertFalse(catalogs)
+                        pending = list((root / "staging/__runs").rglob("outputs.zip"))
+                        self.assertEqual(1, len(pending))
+                        self.assertEqual(archive, pending[0].read_bytes())
+                        self.assertIn("preserving incomplete BEP materialization", diagnostics.getvalue())
+                        continue
                     if case == "interrupt_before_commit":
                         self.assertFalse(catalogs)
                         pending = list((root / "staging/__runs").rglob("payloads/tests/events.json"))
