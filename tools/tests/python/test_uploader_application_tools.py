@@ -459,6 +459,92 @@ class ApplicationTests(unittest.TestCase):
                         self.assertIn("bep_missing_test_evidence", report["warnings"])
                     self.assertTrue((outputs[0] / "payloads/tests/events.json").exists())
 
+    def test_optional_freshness_rejects_ambiguous_non_test_outputs_without_sidecar(self) -> None:
+        payloads = (
+            ("coverage", {"files": []}),
+            ("telemetry", {"api_version": "v2", "request_type": "app-started"}),
+            ("tests", {"events": [{"type": "test_session_end", "content": {}}]}),
+        )
+        for kind, payload in payloads:
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                output = root / "bazel-testlogs/pkg/ambiguous/test.outputs"
+                source = _write_payload(output, kind, "events.json", payload)
+                original = source.read_bytes()
+                fresh = _bep_test_result("//pkg:ambiguous", output=output)
+                cached = _bep_test_result("//pkg:ambiguous", output=output, cached_locally=True)
+                cached["id"]["testResult"]["run"] = 2
+                bep = root / "bep.json"
+                bep.write_text("\n".join(json.dumps(event) for event in (fresh, cached)))
+                report_path = root / "report.json"
+                config = self._config(root, allow_cached_payload_uploads=False,
+                    extra_arguments=("--freshness-mode=optional", f"--bep-json={bep}", f"--report-json={report_path}"))
+
+                rc = run_uploader(config, resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config), logger=configure_logging(debug=False, stream=StringIO()), stream=StringIO())
+
+                report = json.loads(report_path.read_text())
+                self.assertEqual(2, rc)
+                self.assertIn("ambiguous", report["result"]["reason"])
+                self.assertEqual(0, report["requests"]["attempted"])
+                self.assertEqual(original, source.read_bytes())
+
+    def test_optional_freshness_ignores_remote_outputs_from_uninstrumented_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "bazel-testlogs/pkg/instrumented/test.outputs"
+            _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
+            (output / "bazel_target_metadata.json").write_text(json.dumps({"bazel.target": "//pkg:instrumented"}))
+            remote = _bep_test_result("//pkg:ordinary")
+            remote["testResult"]["testActionOutput"] = [{
+                "name": "test.outputs", "pathPrefix": ["bazel-out", "config", "testlogs", "pkg", "ordinary"],
+                "uri": "bytestream://cache.example/blobs/ordinary-log/100",
+            }]
+            bep = root / "bep.json"
+            bep.write_text("\n".join(json.dumps(event) for event in (
+                _bep_test_result("//pkg:instrumented", output=output), remote)))
+            report_path = root / "report.json"
+            config = self._config(root, fail_on_error=True, allow_cached_payload_uploads=False,
+                extra_arguments=("--freshness-mode=optional", f"--bep-json={bep}", f"--report-json={report_path}"))
+
+            rc = run_uploader(config, resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config), logger=configure_logging(debug=False, stream=StringIO()), stream=StringIO())
+
+            report = json.loads(report_path.read_text())
+            self.assertEqual(0, rc, report["result"])
+            self.assertEqual(1, report["payload_types"]["test"]["succeeded"])
+            self.assertEqual(1, report["bep"]["remote_only_outputs"])
+
+    def test_cross_label_output_collision_does_not_block_a_valid_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            outputs = []
+            events = []
+            for name in ("valid", "contested"):
+                output = root / "bazel-testlogs/pkg" / name / "test.outputs"
+                outputs.append(output)
+                _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
+                (output / "bazel_target_metadata.json").write_text(json.dumps({"bazel.target": "//pkg:" + name}))
+                events.append(_bep_test_result("//pkg:" + name, output=output))
+            events.append(_bep_test_result("//pkg:other", output=outputs[1]))
+            contested = outputs[1] / "payloads/tests/events.json"
+            original = contested.read_bytes()
+            bep = root / "bep.json"
+            bep.write_text("\n".join(json.dumps(event) for event in events))
+            report_path = root / "report.json"
+            config = self._config(root, expected_targets=("//pkg:valid", "//pkg:contested", "//pkg:other"),
+                allow_cached_payload_uploads=False,
+                extra_arguments=("--freshness-mode=required", f"--bep-json={bep}", f"--report-json={report_path}"))
+
+            rc = run_uploader(config, resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                endpoints=build_endpoints(config), logger=configure_logging(debug=False, stream=StringIO()), stream=StringIO())
+
+            report = json.loads(report_path.read_text())
+            self.assertEqual(2, rc)
+            self.assertEqual(1, report["payload_types"]["test"]["succeeded"])
+            self.assertIn("ambiguous", report["result"]["reason"])
+            self.assertEqual(original, contested.read_bytes())
+
     def test_ambiguous_output_is_blocked_while_proven_sibling_is_processed(self) -> None:
         for cached in (False, True):
             with self.subTest(cached=cached), tempfile.TemporaryDirectory() as tmp:

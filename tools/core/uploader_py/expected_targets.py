@@ -116,7 +116,7 @@ def select_expected_outputs(
         if not matches:
             continue
         target = matches[0]
-        if bep_labels and bep_labels != {target}:
+        if len(bep_labels) == 1 and bep_labels != {target}:
             raise ExpectedTargetsError("BEP output target conflicts with expected target: " + output.output_key)
         if physical_retry or (bep_labels and "/test_attempts/" in output.output_key):
             declared = read_target_label(output.path)

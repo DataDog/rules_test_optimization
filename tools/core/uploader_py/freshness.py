@@ -330,8 +330,7 @@ def filter_discovery_for_freshness(
         if target_label:
             task_label_by_output[output.output_key] = target_label
         if output.output_key in plan.ambiguous_outputs:
-            if sidecar_label or any(_recognized_test_source(task) for task in tasks if task.payload_type is PayloadType.TEST):
-                relevant_ambiguities.add(output.output_key)
+            relevant_ambiguities.add(output.output_key)
             skipped_output_keys.append(output.output_key)
             continue
         if not tasks:
@@ -404,8 +403,9 @@ def validate_fresh_outputs_accounted(
     if plan.selected_source != "bep":
         return
     expected_target_set = frozenset(expected_targets)
+    selected_target_set = expected_target_set.union(identified_targets)
     relevant_ambiguities = set(plan.ambiguous_outputs if ambiguous_outputs is None else ambiguous_outputs)
-    if plan.ambiguous_labels.intersection(expected_target_set.union(identified_targets)):
+    if plan.ambiguous_labels.intersection(selected_target_set):
         raise FreshnessError("BEP freshness is ambiguous: target reported as both platform-skipped and executed")
     if expected_target_set:
         relevant_ambiguities.update(key for execution in plan.executions if execution.identity[1] in expected_target_set for key in execution.output_keys if key in plan.ambiguous_outputs)
@@ -435,14 +435,14 @@ def validate_fresh_outputs_accounted(
 
     enforce_test_results = fail_on_error or plan.require_test_results
     remote_outputs = tuple(output for output in plan.remote_only_outputs
-        if not expected_target_set or output.label in expected_target_set)
+        if output.label in selected_target_set)
     if remote_outputs and enforce_test_results:
         raise FreshnessError("BEP references remote-only test outputs for " + remote_outputs[0].label + ", but local test.outputs was not found")
     results = tuple(results)
     if plan.executions:
         results_by_id = {result.task_id: result for result in results}
         proven_outputs = set()
-        selected_labels = set(expected_target_set).union(identified_targets)
+        selected_labels = set(selected_target_set)
         for task in discovery.tasks:
             result = results_by_id.get(task.task_id)
             if task.target_label and result is not None and task.payload_type is PayloadType.TEST and result.test_events > 0:
