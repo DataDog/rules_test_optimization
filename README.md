@@ -1343,6 +1343,11 @@ Optional tooling:
 See the [parallel Python uploader](docs/Uploader_Reference.md#parallel-python-uploader-default)
 for its shared cross-platform behavior. Set `use_python_uploader = False` only
 for temporary rollback to the legacy Bash or PowerShell implementation.
+Compatible small test sources can use [opt-in test batching](docs/Uploader_Reference.md#opt-in-test-batching),
+which keeps each process's runtime ID on its events and retains one original
+global ID as the required fallback. Prepared batch buffers are bounded; sources
+that cannot share a request keep the configured upload concurrency. Batching
+defaults to disabled.
 
 ### Contract gate checklist
 
@@ -1464,7 +1469,8 @@ is neither necessary nor supported.
 After enrichment, a worker compacts a test payload and splits it along its
 `events` array before any HTTP request when the encoded body would exceed
 `4_718_592` bytes (4.5 MiB). Chunks preserve event order and the original
-top-level envelope, and each chunk has its own retry lifecycle. HTTP `413` is a
+top-level envelope, and each chunk has its own retry lifecycle. For an individual
+source, HTTP `413` is a
 terminal contract error: the uploader has already applied the preventive limit,
 so retrying or splitting adaptively would hide a defect. A single event that
 cannot fit within the limit is rejected locally without spending a request.

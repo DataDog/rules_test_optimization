@@ -17,7 +17,7 @@ from typing import Callable, Iterator
 
 
 class PhaseRecorder:
-    """Thread-confined phase totals with deterministic clock seams."""
+    """Owned phase totals; transfer between threads only with no phase active."""
 
     def __init__(
         self,

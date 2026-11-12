@@ -41,6 +41,16 @@ LegacyContextCaptureInfo = provider(
     },
 )
 
+def _legacy_batching_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "batch_test_payloads requires use_python_uploader = True")
+    return analysistest.end(env)
+
+legacy_batching_failure_test = analysistest.make(
+    _legacy_batching_failure_test_impl,
+    expect_failure = True,
+)
+
 def _legacy_context_capture_impl(ctx):
     """Capture legacy single-context fallback entries from raw data files."""
     return [LegacyContextCaptureInfo(

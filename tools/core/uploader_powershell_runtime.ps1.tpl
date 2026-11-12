@@ -7,6 +7,16 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+$batchTestPayloads = ([string]$env:DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS).Trim().ToLowerInvariant()
+if ($batchTestPayloads -in @('1', 'true', 'yes')) {
+    [Console]::Error.WriteLine('[dd-uploader] error: batch_test_payloads requires use_python_uploader = True')
+    exit 2
+}
+if ($batchTestPayloads -notin @('', '0', 'false', 'no')) {
+    [Console]::Error.WriteLine('[dd-uploader] error: DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS must be true or false')
+    exit 2
+}
+
 function Format-ArtifactReferenceForLog {
     param([string]$Value)
     if ([string]::IsNullOrEmpty($Value)) { return $Value }

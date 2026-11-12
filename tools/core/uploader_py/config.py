@@ -78,6 +78,7 @@ class RuleConfig:
     expected_targets_file_path: str = ""
     expected_targets_file_short_path: str = ""
     runtime_selection: bool = False
+    batch_test_payloads: bool = False
 
 
 @dataclass(frozen=True)
@@ -128,6 +129,7 @@ class UploaderConfig:
     retained_outputs_dir: Path | None = None
     wrapper_temp_root: Path | None = None
     retention_status_file: Path | None = None
+    batch_test_payloads: bool = False
 
     @property
     def agentless(self) -> bool:
@@ -235,6 +237,10 @@ def parse_uploader_config(
     gzip_payloads = _environment_bool(
         env, "DD_TEST_OPTIMIZATION_GZIP", rule.gzip_payloads
     )
+    value = env.get("DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS", "").strip().lower()
+    if value not in {"", "1", "0", "true", "false", "yes", "no"}:
+        raise ConfigError("DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS must be true or false")
+    batch_test_payloads = value in {"1", "true", "yes"} if value else rule.batch_test_payloads
 
     freshness_source_text = text_option(
         args.freshness_source,
@@ -371,6 +377,7 @@ def parse_uploader_config(
         ),
         ci=env.get("CI", "").strip().lower() not in {"", "0", "false", "no"},
         retained_outputs_dir=retained_outputs_dir,
+        batch_test_payloads=batch_test_payloads,
         wrapper_temp_root=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT"]
             if env.get("DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT") else None),
         retention_status_file=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE"]
@@ -437,6 +444,7 @@ def load_rule_config(path: Path) -> RuleConfig:
             raw, "expected_targets_file_short_path", ""
         ),
         runtime_selection=_json_boolean(raw, "runtime_selection", False),
+        batch_test_payloads=_json_boolean(raw, "batch_test_payloads", False),
     )
 
 

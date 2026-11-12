@@ -165,6 +165,7 @@ def retain_pending_outputs(
             "test_events": results[task.task_id].test_events if task.task_id in results else None,
             "requests_attempted": results[task.task_id].requests_attempted if task.task_id in results else None,
             "requests_succeeded": results[task.task_id].requests_succeeded if task.task_id in results else None,
+            "request_ids": list(results[task.task_id].request_ids) if task.task_id in results else [],
             "failure_code": results[task.task_id].failure_code if task.task_id in results else None}
             for task in discovery.tasks]
         catalog = {"schema_version": 1, "purpose": "private_inspection", "sources": entries,
@@ -174,6 +175,9 @@ def retain_pending_outputs(
             "expected_targets": sorted(set(expected_targets)), "uploader_reason_code": reason_code,
             "uploader_exit_code": report.exit_code if report else None,
             "automatic_replay_supported": False}
+        if report is not None and report.requests:
+            catalog["requests"] = [{"request_id": request.request_id, "source_ids": list(request.source_ids),
+                "attempts": request.attempts, "succeeded": request.succeeded} for request in report.requests]
         unpublished = owned / "catalog.pending"
         unpublished.write_text(strict_json_dumps(catalog, sort_keys=True, indent=2) + "\n")
         os.replace(unpublished, owned / "catalog.json")

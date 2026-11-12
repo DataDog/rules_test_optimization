@@ -4,7 +4,7 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-"""Schedule complete file pipelines on a bounded pool of homogeneous workers.
+"""Schedule file pipelines and prepared requests on one bounded worker pool.
 
 The pool owns queueing and metrics while file workers remain mutually independent.
 """
@@ -17,10 +17,10 @@ import logging
 from queue import Empty, Queue
 import threading
 import time
-from typing import Callable, Iterable, Protocol, TypeVar
+from typing import Callable, Generic, Iterable, Iterator, Protocol, TypeVar
 
 from .metrics import PhaseRecorder
-from .models import FileResult, FileStatus, FileTask
+from .models import FileResult, FileStatus, FileTask, RequestOutcome, WorkItemOutcome
 
 
 RuntimeType = TypeVar("RuntimeType")
@@ -41,12 +41,21 @@ class WorkerPoolError(ValueError):
 
 
 @dataclass(frozen=True)
+class PreparedWorkItem(Generic[RuntimeType, TransportType]):
+    """Sources transferred together to one worker after bounded preparation."""
+
+    tasks: tuple[FileTask, ...]
+    process: Callable[[RuntimeType, TransportType], Iterable[WorkItemOutcome]] | None = None
+
+
+@dataclass(frozen=True)
 class WorkerPoolRun:
     """Deterministic results plus coordinator-owned concurrency observations."""
 
     results: tuple[FileResult, ...]
     worker_threads: int
     peak_active_workers: int
+    requests: tuple[RequestOutcome, ...] = ()
 
 
 class WorkerPoolInterrupted(KeyboardInterrupt):
@@ -67,6 +76,9 @@ def run_file_workers(
     process_file: FileProcessor[RuntimeType, TransportType],
     logger: logging.Logger | None = None,
     measurements: PhaseRecorder | None = None,
+    prepare_work: Callable[
+        [tuple[FileTask, ...], RuntimeType], Iterable[PreparedWorkItem[RuntimeType, TransportType]]
+    ] | None = None,
 ) -> WorkerPoolRun:
     """Process each source exactly once through one complete worker pipeline.
 
@@ -91,8 +103,9 @@ def run_file_workers(
             f"failed to initialize worker transport: {type(exc).__name__}"
         ) from exc
 
-    task_queue: Queue[FileTask | None] = Queue(maxsize=max(1, worker_count * 2))
+    task_queue: Queue[PreparedWorkItem[RuntimeType, TransportType] | None] = Queue(maxsize=max(1, worker_count * 2))
     result_queue: Queue[FileResult] = Queue()
+    request_queue: Queue[RequestOutcome] = Queue()
     activity_lock = threading.Lock()
     shutdown_event = threading.Event()
     active_workers = 0
@@ -115,7 +128,7 @@ def run_file_workers(
             logger.debug("worker=%s started", threading.current_thread().name)
         while True:
             try:
-                task = task_queue.get(timeout=0.1)
+                work_item = task_queue.get(timeout=0.1)
             except Empty:
                 if shutdown_event.is_set():
                     if logger is not None:
@@ -126,19 +139,13 @@ def run_file_workers(
                     return
                 continue
             try:
-                if task is None:
+                if work_item is None:
                     if logger is not None:
                         logger.debug("worker=%s stopped", threading.current_thread().name)
                     return
                 if shutdown_event.is_set():
-                    if logger is not None:
-                        logger.debug(
-                            "task=%s type=%s file=%s cancelled before worker ownership",
-                            task.task_id,
-                            task.payload_type.value,
-                            task.display_path,
-                        )
                     continue
+                task = work_item.tasks[0]
                 task_started = time.monotonic()
                 if logger is not None:
                     logger.debug(
@@ -152,40 +159,34 @@ def run_file_workers(
                     active_workers += 1
                     peak_active_workers = max(peak_active_workers, active_workers)
                 try:
+                    outcomes = _owned_work_item_outcomes(work_item, runtime, transport, process_file)
                     try:
-                        result = process_file(task, runtime, transport)
-                        if result.task_id != task.task_id:
-                            raise WorkerPoolError(
-                                "file processor returned a result for a different task"
-                            )
-                    except Exception as exc:
-                        # A broken file pipeline becomes that file's terminal
-                        # result; it must not tear down unrelated workers.
-                        result = FileResult(
-                            task_id=task.task_id,
-                            source_path=task.display_path,
-                            payload_type=task.payload_type,
-                            status=FileStatus.FAILED,
-                            failure_code="unhandled_worker_exception",
-                            failure_message=type(exc).__name__,
-                        )
+                        for outcome in outcomes:
+                            for request in outcome.requests:
+                                request_queue.put(request)
+                            for result in outcome.results:
+                                result_queue.put(result)
+                            with activity_lock:
+                                completed_sources += len(outcome.results)
+                                if not live_attempts:
+                                    attempted_requests += sum(request.attempts for request in outcome.requests)
+                                    attempted_requests += sum(result.requests_attempted for result in outcome.results if not result.request_ids)
+                            if shutdown_event.is_set():
+                                break
+                    finally:
+                        outcomes.close()
                 finally:
                     with activity_lock:
                         active_workers -= 1
-                result_queue.put(result)
-                with activity_lock:
-                    completed_sources += 1
-                    if not live_attempts:
-                        attempted_requests += result.requests_attempted
                 if logger is not None:
                     logger.debug(
-                        "task=%s type=%s file=%s worker=%s completed status=%s "
+                        "task=%s type=%s file=%s worker=%s completed cohort_sources=%s "
                         "elapsed=%.3fs",
                         task.task_id,
                         task.payload_type.value,
                         task.display_path,
                         threading.current_thread().name,
-                        result.status.value,
+                        len(work_item.tasks),
                         max(0.0, time.monotonic() - task_started),
                     )
             finally:
@@ -230,6 +231,7 @@ def run_file_workers(
         progress_entered.set()
         _report_progress(progress_stop, logger, snapshot, len(planned_tasks))
 
+    work_items = None
     try:
         for thread in worker_threads:
             thread.start()
@@ -245,15 +247,27 @@ def run_file_workers(
                 # Diagnostics must not consume the threads required to upload.
                 # Workers already own their slots; lack of a reporter is safe.
                 logger.warning("progress reporter unavailable; uploads continue")
-        for task in planned_tasks:
-            task_queue.put(task)
+        work_items = iter(prepare_work(planned_tasks, runtime) if prepare_work is not None else (
+            PreparedWorkItem((task,)) for task in planned_tasks
+        ))
+        scheduled_ids: set[str] = set()
+        known_ids = set(task_ids)
+        for work_item in work_items:
+            ids = {task.task_id for task in work_item.tasks}
+            if not ids or len(ids) != len(work_item.tasks) or ids.difference(known_ids) or ids.intersection(scheduled_ids):
+                raise WorkerPoolError("prepared work contains missing, duplicate or foreign sources")
+            scheduled_ids.update(ids)
+            task_queue.put(work_item)
             if logger is not None:
+                task = work_item.tasks[0]
                 logger.debug(
                     "task=%s type=%s file=%s enqueued",
                     task.task_id,
                     task.payload_type.value,
                     task.display_path,
                 )
+        if scheduled_ids != known_ids:
+            raise WorkerPoolError("preparation did not schedule every source")
         for _ in started_threads:
             task_queue.put(None)
         task_queue.join()
@@ -272,6 +286,7 @@ def run_file_workers(
         interrupted_run = _collect_run(
             planned_tasks,
             result_queue,
+            request_queue,
             worker_count=len(started_threads),
             peak_active_workers=peak_active_workers,
             require_complete=False,
@@ -297,10 +312,14 @@ def run_file_workers(
             set_attempt_callback = getattr(transport, "set_attempt_callback", None)
             if callable(set_attempt_callback):
                 set_attempt_callback(None)
+        close = getattr(work_items, "close", None)
+        if close is not None:
+            close()
 
     return _collect_run(
         planned_tasks,
         result_queue,
+        request_queue,
         worker_count=worker_count,
         peak_active_workers=peak_active_workers,
         require_complete=True,
@@ -325,10 +344,50 @@ def _report_progress(
             completed, total, active, requests, rate,
         )
 
+def _owned_work_item_outcomes(
+    work_item: PreparedWorkItem[RuntimeType, TransportType], runtime: RuntimeType, transport: TransportType,
+    process_file: FileProcessor[RuntimeType, TransportType],
+) -> Iterator[WorkItemOutcome]:
+    """Validate each committed part and fail only unresolved original sources.
+
+    Closing after an interrupt propagates GeneratorExit without manufacturing
+    failed results for unowned work. Already yielded outcomes remain committed.
+    """
+    cohort = work_item.tasks
+    completed_ids: set[str] = set()
+    owned_ids = {source.task_id for source in cohort}
+    iterator = None
+    try:
+        outcomes = work_item.process(runtime, transport) if work_item.process is not None else (
+            WorkItemOutcome((process_file(cohort[0], runtime, transport),)),
+        )
+        iterator = iter(outcomes)
+        for outcome in iterator:
+            ids = [result.task_id for result in outcome.results]
+            if len(ids) != len(set(ids)) or completed_ids.intersection(ids) or set(ids).difference(owned_ids):
+                raise WorkerPoolError("work item returned duplicate or foreign source results")
+            if any(not request.source_ids or set(request.source_ids).difference(owned_ids) for request in outcome.requests):
+                raise WorkerPoolError("request refers to a source outside its owning work item")
+            completed_ids.update(ids)
+            yield outcome
+        if completed_ids != owned_ids:
+            raise WorkerPoolError("work item did not return every owned source result")
+    except Exception as exc:
+        yield WorkItemOutcome(tuple(FileResult(
+            task_id=source.task_id, source_path=source.display_path,
+            payload_type=source.payload_type, status=FileStatus.FAILED,
+            failure_code="unhandled_worker_exception", failure_message=type(exc).__name__)
+            for source in cohort if source.task_id not in completed_ids))
+    finally:
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()
+
 
 def _collect_run(
     planned_tasks: tuple[FileTask, ...],
     result_queue: Queue[FileResult],
+    request_queue: Queue[RequestOutcome],
     *,
     worker_count: int,
     peak_active_workers: int,
@@ -350,6 +409,15 @@ def _collect_run(
     if len(results_by_id) != len(planned_tasks):
         if require_complete:
             raise WorkerPoolError("worker pool did not return exactly one result per task")
+    requests: dict[str, RequestOutcome] = {}
+    while not request_queue.empty():
+        request = request_queue.get_nowait()
+        if request.request_id in requests:
+            raise WorkerPoolError("worker pool returned duplicate request outcomes")
+        requests[request.request_id] = request
+    for result in completed_results:
+        if any(request_id not in requests or result.task_id not in requests[request_id].source_ids for request_id in result.request_ids):
+            raise WorkerPoolError("source result refers to an unknown or unrelated request")
     return WorkerPoolRun(
         results=tuple(
             results_by_id[task.task_id]
@@ -358,4 +426,5 @@ def _collect_run(
         ),
         worker_threads=worker_count,
         peak_active_workers=peak_active_workers,
+        requests=tuple(requests[key] for key in sorted(requests)),
     )

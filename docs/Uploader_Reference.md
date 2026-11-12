@@ -225,6 +225,55 @@ precedence. Leave
 `use_python_uploader` unset for the Python implementation. Set it to `False`
 only for temporary rollback to the legacy Bash or PowerShell implementation.
 
+#### Opt-in test batching
+
+Set `batch_test_payloads = True` on the uploader, or pass
+`"batch_test_payloads": True` through `uploader_kwargs`, to combine compatible
+small test sources. The runtime override
+`DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS=1` enables the same behavior; `0`
+disables it even when the rule attribute is enabled. Accepted boolean values
+are `1`/`0`, `true`/`false`, and `yes`/`no`, ignoring case and outer whitespace.
+The default is disabled. Legacy uploaders reject an enabled setting.
+
+Preparation streams compatible groups of at most 64 original sources into the
+existing worker pool. Each group keeps both its request body and its retained
+event, envelope and compatibility-key buffers within the uncompressed byte guard.
+The bounded queue holds at most two prepared jobs per worker. Incompatible,
+warning-bearing and large sources remain independently schedulable, so they
+keep the configured upload parallelism. No source is parsed or enriched twice.
+Expanding a runtime ID across events is checked before mutation; sources that
+would exceed the request budget keep their original envelope and the per-file
+path. Context changes or any other envelope difference flush the batch.
+Coverage and telemetry stay separate.
+
+The shared envelope retains common metadata and the first source's global
+`runtime-id`, as required by the canonical schema. Each event carries its
+effective `content.meta["runtime-id"]`: fixed event-type metadata wins over the
+event's own metadata, then test-level defaults, then global defaults. Test-level
+defaults do not apply to span events. Runtime defaults are removed from the
+type and test-level scopes after they have been copied to events. The uploader
+does not generate a replacement process identity.
+Real intake acceptance and rejection behavior still need validation before rollout.
+
+HTTP success acknowledges all whole sources in that request. A rejected batch
+with status 400, 413, or 422 gets one per-source pass to isolate the rejection.
+Authentication, transport, rate-limit, and server failures use the existing
+retry policy without a per-source fan-out. Rejected or interrupted sources
+remain recoverable, and `keep_payloads` preserves original bytes. Dry-run makes
+no HTTP request and leaves all sources unchanged.
+
+File and chunk counters still describe original sources. Request counters
+count each shared request and retry once. Source preparation timings and raw
+bytes are counted once per source; shared request timings and encoded body
+bytes are counted once per request, including a rejected batch before fallback.
+The additive `batching` report
+section records logical requests and their source IDs, including a rejected
+batch that later succeeds through individual uploads. Source schema warnings
+retain their warning and per-file upload behavior; they never silently drop a
+source from a mixed batch.
+If the outbound schema is missing or unsupported, the uploader uses ordinary
+per-file uploads and reports one `batching_schema_unavailable` warning.
+
 If your repository is small, the same helper can live in the root package. In
 large monorepos, prefer `//tools/test_optimization` or another lightweight
 package to avoid loading unrelated root package wiring when running doctor or

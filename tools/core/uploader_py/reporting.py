@@ -13,13 +13,14 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass, field
+from itertools import chain
 from pathlib import Path
 from typing import Any, Iterable, Mapping, TextIO
 
 from topt_runtime.log_levels import enabled
 
 from .json_utils import strict_json_dumps
-from .models import FileResult, FileStatus, MAX_TEST_PAYLOAD_BYTES, PayloadType
+from .models import FileResult, FileStatus, MAX_TEST_PAYLOAD_BYTES, PayloadType, RequestOutcome
 
 
 @dataclass(frozen=True)
@@ -69,6 +70,7 @@ class AggregateReport:
     process_cpu_seconds: tuple[float, float] | None = field(default=None, compare=False)
     execution_environment: tuple[tuple[str, object], ...] = field(default=(), compare=False)
     retention: tuple[tuple[str, object], ...] = ()
+    requests: tuple[RequestOutcome, ...] = ()
 
     @classmethod
     def create(
@@ -84,6 +86,7 @@ class AggregateReport:
         results: Iterable[FileResult],
         cancelled: int = 0,
         initialization_warning_codes: Iterable[str] = (),
+        requests: Iterable[RequestOutcome] = (),
     ) -> "AggregateReport":
         if configured_workers <= 0:
             raise ValueError("configured_workers must be positive")
@@ -104,6 +107,16 @@ class AggregateReport:
         if any(count < 0 for _payload_type, count in discovered):
             raise ValueError("discovered counters must be non-negative")
         terminal_results = tuple(results)
+        logical_requests = tuple(requests)
+        request_ids = {request.request_id for request in logical_requests}
+        if len(request_ids) != len(logical_requests):
+            raise ValueError("aggregate requests must contain unique IDs")
+        if any(request.attempts < 0 or not request.source_ids for request in logical_requests):
+            raise ValueError("logical requests need contributors and nonnegative attempts")
+        by_request_id = {request.request_id: request for request in logical_requests}
+        if any(request_id not in by_request_id or result.task_id not in by_request_id[request_id].source_ids
+            for result in terminal_results for request_id in result.request_ids):
+            raise ValueError("source result refers to an unknown or unrelated request")
         task_ids = [result.task_id for result in terminal_results]
         if len(task_ids) != len(set(task_ids)):
             raise ValueError("aggregate results must contain unique task IDs")
@@ -120,6 +133,7 @@ class AggregateReport:
             results=terminal_results,
             cancelled=cancelled,
             initialization_warning_codes=tuple(initialization_warning_codes),
+            requests=logical_requests,
         )
 
     @property
@@ -162,9 +176,9 @@ class AggregateReport:
             for warning in result.warning_codes
         )
         performance = {}
-        if self.invocation_phase_times or any(result.phase_times for result in self.results):
+        if self.invocation_phase_times or any(result.phase_times for result in chain(self.results, self.requests)):
             worker_phases: dict[str, dict[str, float]] = {}
-            for result in self.results:
+            for result in chain(self.results, self.requests):
                 for name, wall, cpu in result.phase_times:
                     total = worker_phases.setdefault(name, {"sum_worker_wall_seconds": 0.0, "sum_worker_thread_cpu_seconds": 0.0})
                     total["sum_worker_wall_seconds"] += wall
@@ -178,12 +192,13 @@ class AggregateReport:
                     for name, wall, cpu in self.invocation_phase_times
                 },
                 "processed_source_bytes": sum(result.source_bytes for result in self.results),
-                "prepared_body_bytes": sum(result.prepared_body_bytes for result in self.results),
+                "prepared_body_bytes": sum(result.prepared_body_bytes for result in chain(self.results, self.requests)),
                 "process_cpu_seconds": (
                     {"user": self.process_cpu_seconds[0], "system": self.process_cpu_seconds[1]}
                     if self.process_cpu_seconds is not None else None
                 ),
             }}
+        ordinary_results = tuple(result for result in self.results if not result.request_ids)
         document = {
             **performance,
             "mode": self.mode,
@@ -225,17 +240,21 @@ class AggregateReport:
                 ),
             },
             "requests": {
-                "planned": sum(result.requests_planned for result in self.results),
-                "attempted": sum(result.requests_attempted for result in self.results),
-                "succeeded": sum(result.requests_succeeded for result in self.results),
-                "failed": sum(result.requests_failed for result in self.results),
-                "retries": sum(result.retries for result in self.results),
+                "planned": sum(result.requests_planned for result in ordinary_results) + len(self.requests),
+                "attempted": sum(result.requests_attempted for result in ordinary_results) + sum(request.attempts for request in self.requests),
+                "succeeded": sum(result.requests_succeeded for result in ordinary_results) + sum(request.succeeded is True for request in self.requests),
+                "failed": sum(result.requests_failed for result in ordinary_results) + sum(request.succeeded is False for request in self.requests),
+                "retries": sum(result.retries for result in ordinary_results) + sum(request.retries for request in self.requests),
             },
             "warnings": dict(sorted(warning_codes.items())),
             "failures": dict(sorted(failure_codes.items())),
         }
         if self.retention:
             document["retention"] = dict(self.retention)
+        if self.requests:
+            document["batching"] = {"logical_requests": len(self.requests),
+                "shared_requests": sum(len(request.source_ids) > 1 for request in self.requests),
+                "request_sources": {request.request_id: list(request.source_ids) for request in self.requests}}
         return document
 
     def human_lines(self) -> tuple[str, ...]:
@@ -397,8 +416,9 @@ class AggregateReport:
             report_document[key] = stats[key]
         if "performance" in stats:
             report_document["performance"] = stats["performance"]
-        if "retention" in stats:
-            report_document["retention"] = stats["retention"]
+        for key in ("retention", "batching"):
+            if key in stats:
+                report_document[key] = stats[key]
         return report_document
 
 
