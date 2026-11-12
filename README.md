@@ -1344,7 +1344,8 @@ See the [parallel Python uploader](docs/Uploader_Reference.md#parallel-python-up
 for its shared cross-platform behavior. Set `use_python_uploader = False` only
 for temporary rollback to the legacy Bash or PowerShell implementation.
 Compatible small test sources can use [opt-in test batching](docs/Uploader_Reference.md#opt-in-test-batching),
-which keeps each process's runtime ID on its events. Batching defaults to disabled.
+which keeps each process's runtime ID on its events and retains one original
+global ID as the required fallback. Batching defaults to disabled.
 
 ### Contract gate checklist
 

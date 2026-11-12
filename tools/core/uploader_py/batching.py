@@ -7,8 +7,9 @@
 """Prepare compatible test envelopes without sharing process identity.
 
 Only an owned, enriched source is mutated. Source files remain unchanged until
-their complete request is acknowledged. Runtime IDs belong to individual events;
-all other envelope fields remain part of the compatibility key.
+their complete request is acknowledged. Each event keeps its effective runtime
+ID; the envelope retains one required global fallback. Other envelope fields
+remain part of the compatibility key.
 """
 
 from __future__ import annotations
@@ -23,10 +24,16 @@ class BatchCompatibilityError(ValueError):
     """A source must retain the ordinary per-file upload path."""
 
 
-def localize_runtime_ids(payload: dict[str, Any], *, max_additional_bytes: int | None = None) -> bytes:
-    """Move envelope runtime defaults to events and return the exact envelope key.
+_TEST_LEVEL_TYPES = frozenset(("test", "test_suite_end", "test_module_end", "test_session_end"))
+_FIXED_TYPES = _TEST_LEVEL_TYPES | {"span"}
 
-    Existing event values win, then event-type defaults, then global defaults.
+
+def localize_runtime_ids(payload: dict[str, Any], *, max_additional_bytes: int | None = None) -> bytes:
+    """Materialize effective event IDs and return the normalized envelope key.
+
+    Fixed-type defaults win over event values, then test-level and global
+    defaults. The canonical global fallback stays in the payload; only the
+    compatibility key omits it so different processes can share a request.
     Validate the complete source before mutation so an unsupported source can
     safely use the existing per-file path. No other metadata is moved or dropped.
     """
@@ -37,6 +44,8 @@ def localize_runtime_ids(payload: dict[str, Any], *, max_additional_bytes: int |
     if any(not isinstance(values, dict) for values in metadata.values()):
         raise BatchCompatibilityError("metadata scopes must be objects")
     global_meta = metadata.get("*", {})
+    if not isinstance(global_meta.get("runtime-id"), str) or not global_meta["runtime-id"]:
+        raise BatchCompatibilityError("expected a nonempty global runtime-id")
     runtime_ids = []
     additional_bytes = 0
     runtime_sizes: dict[str, int] = {}
@@ -47,12 +56,15 @@ def localize_runtime_ids(payload: dict[str, Any], *, max_additional_bytes: int |
         if not isinstance(content, dict) or not isinstance(content.get("meta", {}), dict):
             raise BatchCompatibilityError("expected event content and metadata objects")
         event_meta = content.get("meta", {})
-        type_meta = metadata.get(event["type"], {})
+        event_type = event["type"]
+        type_meta = metadata.get(event_type, {}) if event_type in _FIXED_TYPES else {}
+        level_meta = metadata.get("test_levels", {}) if event_type in _TEST_LEVEL_TYPES else {}
         # An explicitly malformed value is not a missing default.
-        runtime_id = event_meta.get("runtime-id", type_meta.get("runtime-id", global_meta.get("runtime-id")))
+        runtime_id = type_meta.get("runtime-id", event_meta.get("runtime-id",
+            level_meta.get("runtime-id", global_meta["runtime-id"])))
         if not isinstance(runtime_id, str) or not runtime_id:
             raise BatchCompatibilityError("each event must have a nonempty runtime-id")
-        if max_additional_bytes is not None and "runtime-id" not in event_meta:
+        if max_additional_bytes is not None and event_meta.get("runtime-id") != runtime_id:
             if runtime_id not in runtime_sizes:
                 runtime_sizes[runtime_id] = len(strict_json_dumps(runtime_id, ensure_ascii=False).encode("utf-8"))
             # Conservatively include commas and a new meta object if needed.
@@ -67,14 +79,17 @@ def localize_runtime_ids(payload: dict[str, Any], *, max_additional_bytes: int |
 
     for event, runtime_id in zip(events, runtime_ids):
         event["content"].setdefault("meta", {})["runtime-id"] = runtime_id
-    for values in metadata.values():
-        values.pop("runtime-id", None)
+    for scope in (*_FIXED_TYPES, "test_levels"):
+        if scope in metadata:
+            metadata[scope].pop("runtime-id", None)
     envelope = {key: value for key, value in payload.items() if key != "events"}
+    envelope["metadata"] = dict(metadata)
+    envelope["metadata"]["*"] = {key: value for key, value in global_meta.items() if key != "runtime-id"}
     return strict_json_dumps(envelope, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
 
 
 def schema_for_event_runtime_ids(schema: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Adapt the outbound-only schema to require a runtime ID on every event.
+    """Add per-event IDs while retaining the canonical global requirement.
 
     Ordinary source validation keeps its existing schema and warning policy.
     This representation still needs a real intake compatibility check before
@@ -85,7 +100,8 @@ def schema_for_event_runtime_ids(schema: dict[str, Any] | None) -> dict[str, Any
     result = deepcopy(schema)
     try:
         global_meta = result["properties"]["metadata"]["properties"]["*"]
-        global_meta["required"] = [field for field in global_meta.get("required", []) if field != "runtime-id"]
+        if "runtime-id" not in global_meta.get("required", []):
+            raise BatchCompatibilityError("batching requires the canonical global runtime-id requirement")
         item = result["properties"]["events"]["items"]
         item.setdefault("allOf", []).append({"properties": {"content": {"properties": {"meta": {
             "type": "object", "properties": {"runtime-id": {"type": "string", "minLength": 1}}, "required": ["runtime-id"]}}, "required": ["meta"]}}})

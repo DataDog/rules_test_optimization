@@ -242,10 +242,14 @@ across events is checked against the byte budget before mutation; sources that
 would exceed it keep their original envelope and the per-file path. Context changes or any
 other envelope difference flush the batch. Coverage and telemetry stay separate.
 
-The shared envelope retains common metadata. Each event carries its own
-`content.meta["runtime-id"]`; an event's existing value takes precedence over
-its type or global default. No runtime ID remains in the shared envelope.
-This representation needs intake compatibility validation before rollout.
+The shared envelope retains common metadata and the first source's global
+`runtime-id`, as required by the canonical schema. Each event carries its
+effective `content.meta["runtime-id"]`: fixed event-type metadata wins over the
+event's own metadata, then test-level defaults, then global defaults. Test-level
+defaults do not apply to span events. Runtime defaults are removed from the
+type and test-level scopes after they have been copied to events. The uploader
+does not generate a replacement process identity.
+Real intake acceptance and rejection behavior still need validation before rollout.
 
 HTTP success acknowledges all whole sources in that request. A rejected batch
 with status 400, 413, or 422 gets one per-source pass to isolate the rejection.

@@ -41,6 +41,7 @@ class _Source:
     event_count: int
     test_events: int
     key: tuple[bytes, bytes]
+    envelope: bytes
     headers: dict[str, str]
     warnings: tuple[str, ...]
     source_bytes: int = 0
@@ -70,7 +71,10 @@ def _prepare_small_source(task: FileTask, runtime: WorkerRuntime, source_bytes: 
     measurements = PhaseRecorder(runtime.clock, runtime.cpu_clock)
     local_runtime = replace(runtime, measurements=measurements)
     with measurements.phase("file_pipeline"):
-        prepared = _prepare_small_source_content(task, local_runtime, measurements, source_bytes)
+        try:
+            prepared = _prepare_small_source_content(task, local_runtime, measurements, source_bytes)
+        except Exception as exc:
+            prepared = _failed(task, "unhandled_worker_exception", type(exc).__name__)
     if isinstance(prepared, FileResult):
         return _source_result(prepared, measurements, source_bytes)
     if isinstance(prepared, _Source):
@@ -99,17 +103,19 @@ def _prepare_small_source_content(
             if not ordinary:
                 try:
                     headers = common_headers(runtime, payload)
-                    envelope = localize_runtime_ids(payload, max_additional_bytes=MAX_TEST_PAYLOAD_BYTES - encoded_size)
+                    envelope_key = localize_runtime_ids(payload, max_additional_bytes=MAX_TEST_PAYLOAD_BYTES - encoded_size)
                 except BatchCompatibilityError:
                     ordinary = True
             if not ordinary:
                 events = compact_json_bytes(payload["events"])[1:-1]
+                envelope = strict_json_dumps({key: value for key, value in payload.items() if key != "events"},
+                    sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
                 prefix, suffix = _frame(envelope)
                 ordinary = len(prefix) + len(events) + len(suffix) > MAX_TEST_PAYLOAD_BYTES
             if ordinary:
                 return _OrdinarySource(task, payload, warnings, measurements, source_bytes)
-            key = (envelope, strict_json_dumps(dict(context.values), sort_keys=True, separators=(",", ":")).encode())
-            return _Source(task, events, len(payload["events"]), test_result_event_count(payload), key, headers, tuple(warnings))
+            key = (envelope_key, strict_json_dumps(dict(context.values), sort_keys=True, separators=(",", ":")).encode())
+            return _Source(task, events, len(payload["events"]), test_result_event_count(payload), key, envelope, headers, tuple(warnings))
     except TestPayloadSplitError as exc:
         return replace(_failed(task, exc.code, str(exc)), events=len(payload["events"]),
             test_events=test_result_event_count(payload), warning_codes=tuple(warnings))
@@ -123,7 +129,11 @@ def _run_ordinary_source(source: _OrdinarySource, runtime: WorkerRuntime, transp
         set_measurements(measurements)
     try:
         with measurements.phase("file_pipeline"):
-            result = _upload_ordinary_prepared(source.task, local_runtime, transport, source.payload, source.warnings)
+            try:
+                result = _upload_ordinary_prepared(source.task, local_runtime, transport, source.payload, source.warnings)
+            except Exception as exc:
+                result = replace(_failed(source.task, "unhandled_worker_exception", type(exc).__name__),
+                    warning_codes=tuple(source.warnings))
         return _source_result(result, measurements, source.source_bytes)
     finally:
         if callable(set_measurements):
@@ -166,7 +176,7 @@ def process_test_cohort(
                 pending.clear()
             yield WorkItemOutcome((_run_ordinary_source(prepared, runtime, transport),))
             continue
-        prefix, suffix = _frame(prepared.key[0])
+        prefix, suffix = _frame(prepared.envelope)
         single_size = len(prefix) + len(prepared.events) + len(suffix)
         if pending and (pending[0].key != prepared.key or body_size + 1 + len(prepared.events) > MAX_TEST_PAYLOAD_BYTES):
             yield from _upload_batch(tuple(pending), runtime, transport, cohort_id, request_sequence)
@@ -265,7 +275,7 @@ def _prepare_and_send(
     cleanup_errors: list[str],
 ) -> tuple[WorkItemOutcome, HttpResult | None]:
     with _phase(runtime, "encoding_split"):
-        prefix, suffix = _frame(sources[0].key[0])
+        prefix, suffix = _frame(sources[0].envelope)
         body = prefix + b",".join(source.events for source in sources) + suffix
         if len(body) > MAX_TEST_PAYLOAD_BYTES:
             raise ValueError("batch exceeded the uncompressed request guard")

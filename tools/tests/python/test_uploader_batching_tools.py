@@ -61,6 +61,44 @@ def _runtime(root, **changes):
 
 
 class BatchEnvelopeTests(unittest.TestCase):
+    def test_localized_payload_keeps_the_canonical_global_runtime_requirement(self):
+        schema = json.loads(resolve_runfile("tools/core/schemas/agentless-schema.json").read_text())
+        source = payload()
+        localize_runtime_ids(source)
+        self.assertTrue(validate_payload(source, schema).valid)
+        self.assertEqual("process-a", source["metadata"]["*"]["runtime-id"])
+        outbound = schema_for_event_runtime_ids(schema)
+        source["metadata"]["*"].pop("runtime-id")
+        self.assertFalse(validate_payload(source, outbound).valid)
+
+    def test_type_event_test_levels_and_global_precedence_preserves_opaque_scopes(self):
+        source = payload()
+        source["metadata"].update({"test": {"runtime-id": "type"},
+            "test_levels": {"runtime-id": "levels"}, "opaque": {"runtime-id": "opaque"}})
+        source["events"] = [
+            {"type": "test", "content": {"meta": {"runtime-id": "event"}}},
+            {"type": "test_suite_end", "content": {}},
+            {"type": "test_module_end", "content": {"meta": {"runtime-id": "module"}}},
+            {"type": "span", "content": {}},
+        ]
+        localize_runtime_ids(source)
+        self.assertEqual(["type", "levels", "module", "process-a"],
+            [event["content"]["meta"]["runtime-id"] for event in source["events"]])
+        self.assertEqual("opaque", source["metadata"]["opaque"]["runtime-id"])
+        self.assertEqual("process-a", source["metadata"]["*"]["runtime-id"])
+        self.assertNotIn("runtime-id", source["metadata"]["test"])
+        self.assertNotIn("runtime-id", source["metadata"]["test_levels"])
+
+    def test_larger_type_override_is_budgeted_before_replacing_an_event_id(self):
+        source = payload()
+        source["metadata"]["test"] = {"runtime-id": "x" * 1000}
+        source["events"][0]["content"]["meta"]["runtime-id"] = "small"
+        source["events"] *= 20
+        original = deepcopy(source)
+        with self.assertRaisesRegex(BatchCompatibilityError, "budget"):
+            localize_runtime_ids(source, max_additional_bytes=5000)
+        self.assertEqual(original, source)
+
     def test_outbound_schema_requires_event_ids_without_mutating_the_source_schema(self):
         schema = {"type": "object", "properties": {
             "metadata": {"type": "object", "properties": {"*": {"type": "object", "required": ["language", "runtime-id"]}}},
@@ -86,8 +124,7 @@ class BatchEnvelopeTests(unittest.TestCase):
         first_key = localize_runtime_ids(first)
         self.assertEqual(first_key, localize_runtime_ids(second))
         self.assertEqual(["process-a", "process-b"], [source["events"][0]["content"]["meta"]["runtime-id"] for source in (first, second)])
-        self.assertNotIn("runtime-id", first["metadata"]["*"])
-        self.assertEqual({"language": "go", "library_version": "mini-test"}, first["metadata"]["*"])
+        self.assertEqual({"runtime-id": "process-a", "language": "go", "library_version": "mini-test"}, first["metadata"]["*"])
 
     def test_event_and_type_overrides_keep_their_own_runtime_ids(self):
         source = payload()
@@ -98,9 +135,9 @@ class BatchEnvelopeTests(unittest.TestCase):
             {"type": "test_suite_end", "content": {}},
         ]
         localize_runtime_ids(source)
-        self.assertEqual(["event-runtime", "type-runtime", "process-a"], [event["content"]["meta"]["runtime-id"] for event in source["events"]])
+        self.assertEqual(["type-runtime", "type-runtime", "process-a"], [event["content"]["meta"]["runtime-id"] for event in source["events"]])
         self.assertEqual({"shared-tag": "unchanged"}, source["metadata"]["test"])
-        self.assertTrue(all("runtime-id" not in values for values in source["metadata"].values()))
+        self.assertEqual("process-a", source["metadata"]["*"]["runtime-id"])
 
     def test_every_other_envelope_field_prevents_an_unsafe_merge(self):
         control = localize_runtime_ids(payload())
@@ -123,6 +160,69 @@ class BatchEnvelopeTests(unittest.TestCase):
 
 
 class BatchWorkerTests(unittest.TestCase):
+    def test_live_batch_attempts_are_not_added_again_when_the_cohort_finishes(self):
+        from io import StringIO
+        from uploader_py.logging_utils import configure_logging
+
+        class Transport(_FakeTransport):
+            def set_attempt_callback(self, callback):
+                self.callback = callback
+
+            def post_json(self, *args, **kwargs):
+                self.callback()
+                return super().post_json(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            transport = Transport()
+            snapshots = []
+            with mock.patch("uploader_py.worker_pool._report_progress",
+                side_effect=lambda _stop, _logger, snapshot, _total: snapshots.append(snapshot)):
+                run = run_file_workers(self._tasks(root), workers=1, runtime=_runtime(root),
+                    transport_factory=lambda: transport, process_file=process_file,
+                    process_cohort=process_test_cohort,
+                    logger=configure_logging(debug=False, stream=StringIO()))
+            self.assertEqual((2, 0, 1), snapshots[0]())
+            self.assertEqual(1, sum(request.attempts for request in run.requests))
+            self.assertIsNone(transport.callback)
+
+    def test_unexpected_source_failures_keep_measurements_and_do_not_poison_siblings(self):
+        from uploader_py import batch_worker
+        for stage in ("prepare", "ordinary"):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                tasks = self._tasks(root)
+                original = tasks[1].source_path.read_bytes()
+                transport = _FakeTransport()
+                changes = {"schema": {"type": "object", "required": ["missing"]}} if stage == "ordinary" else {}
+                runtime = _runtime(root, **changes)
+                if stage == "prepare":
+                    name = "_read_json_object"
+                    actual = batch_worker._read_json_object
+
+                    def process(path, *args):
+                        if path == tasks[1].source_path:
+                            raise RecursionError("source parse")
+                        return actual(path, *args)
+                else:
+                    name = "_upload_ordinary_prepared"
+                    actual = batch_worker._upload_ordinary_prepared
+
+                    def process(task, *args):
+                        if task.task_id == tasks[1].task_id:
+                            raise RecursionError("source encoding")
+                        return actual(task, *args)
+                with mock.patch.object(batch_worker, name, side_effect=process):
+                    run, _report = self._run(tasks, runtime, transport)
+                self.assertEqual([FileStatus.SUCCEEDED, FileStatus.FAILED], [r.status for r in run.results])
+                self.assertEqual("unhandled_worker_exception", run.results[1].failure_code)
+                self.assertEqual(len(original), run.results[1].source_bytes)
+                self.assertIn("read_parse", {p[0] for p in run.results[1].phase_times})
+                self.assertEqual(original, tasks[1].source_path.read_bytes())
+                self.assertEqual(1, len(transport.json_calls))
+                if stage == "ordinary":
+                    self.assertIn("schema_validation_failed", run.results[1].warning_codes)
+
     def _tasks(self, root, count=2):
         tasks = []
         for index in range(count):
@@ -150,7 +250,8 @@ class BatchWorkerTests(unittest.TestCase):
             run, report = self._run(tasks, _runtime(root, gzip_payloads=True), transport)
             self.assertEqual(1, len(transport.json_calls))
             body = json.loads(gzip.decompress(transport.json_calls[0]["body"]))
-            self.assertNotIn("runtime-id", body["metadata"]["*"])
+            self.assertEqual("process-0", body["metadata"]["*"]["runtime-id"])
+            self.assertTrue(validate_payload(body, _runtime(root).schema).valid)
             self.assertEqual(["process-0", "process-1"], [event["content"]["meta"]["runtime-id"] for event in body["events"]])
             self.assertEqual(["test-0", "test-1"], [event["content"]["meta"]["test.name"] for event in body["events"]])
             self.assertEqual(2, report.statistics()["files"]["succeeded"])
@@ -620,7 +721,7 @@ class BatchConfigurationTests(unittest.TestCase):
                     self.assertEqual(1, diagnostics.getvalue().count("batching_schema_unavailable"))
                     return
                 self.assertEqual(1, len(server.bodies))
-                self.assertNotIn("runtime-id", server.bodies[0]["metadata"]["*"])
+                self.assertEqual("process-0", server.bodies[0]["metadata"]["*"]["runtime-id"])
                 self.assertEqual(["process-0", "process-1"], [event["content"]["meta"]["runtime-id"] for event in server.bodies[0]["events"]])
                 self.assertEqual(2, actual["files"]["succeeded"])
                 self.assertEqual(1, actual["requests"]["attempted"])
