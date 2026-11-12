@@ -223,6 +223,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
     parser.add_argument("--expected-target", action="append", default=[])
+    parser.add_argument("--expected-targets-file")
     parser.add_argument("--context-entry", action="append", default=[])
     parser.add_argument("--bep-json", action="append", default=[])
     parser.add_argument(
@@ -278,6 +279,13 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
         help=argparse.SUPPRESS,
     )
     args = parser.parse_args(argv)
+    if args.expected_targets_file == "":
+        _fail("--expected-targets-file must be a nonempty path")
+    if args.expected_targets_file is not None:
+        target_file = Path(args.expected_targets_file)
+        if not target_file.is_absolute():
+            target_file = Path(os.environ.get("BUILD_WORKING_DIRECTORY") or Path.cwd()) / target_file
+        args.expected_targets_file = str(target_file)
     _validate_artifact_resolution_args(args)
     return args
 
@@ -515,9 +523,12 @@ def _resolve_configured_optional_runfile(
 
 
 def _load_expected_targets_file(path: Path) -> list[str]:
-    if not path.is_file():
-        _fail(f"expected_targets_file does not exist or is not a file: {path}")
-    value = _load_json(path)
+    try:
+        if not path.is_file():
+            _fail(f"expected_targets_file does not exist or is not a file: {path}")
+        value = _load_json(path)
+    except (OSError, UnicodeError) as exc:
+        _fail(f"expected_targets_file could not be read as UTF-8: {path}: {exc}")
     if not isinstance(value, dict):
         _fail("expected_targets_file root must be a JSON object")
     expected_keys = {"schema_version", "targets"}
@@ -547,6 +558,8 @@ def _resolve_expected_targets(
     config_path: Path,
     runtime_targets: list[str] | None = None,
     runtime_selection: bool = False,
+    *,
+    runtime_targets_file: Path | None = None,
 ) -> tuple[list[str], str]:
     static_targets = config["expected_targets"]
     for label in static_targets:
@@ -573,13 +586,14 @@ def _resolve_expected_targets(
     normalized_runtime = [_validate_expected_target_label(label) for label in runtime_targets]
     if len(set(normalized_runtime)) != len(normalized_runtime):
         _fail("runtime --expected-target arguments contain duplicate target labels")
-    normalized_runtime = sorted(normalized_runtime)
+    file_targets = _load_expected_targets_file(runtime_targets_file) if runtime_targets_file is not None else []
+    normalized_runtime = sorted(set(normalized_runtime).union(file_targets))
     if normalized_runtime:
         if configured_targets and set(configured_targets) != set(normalized_runtime):
             _fail("configured and runtime expected targets contain different target sets")
         return normalized_runtime, "runtime_and_configured" if configured_targets else "runtime"
     if runtime_selection:
-        _fail("runtime selection requires at least one --expected-target argument")
+        _fail("runtime selection requires at least one --expected-target argument or a nonempty --expected-targets-file")
     return configured_targets, configured_source
 
 
@@ -1748,10 +1762,23 @@ def _local_test_output_key(output_dir: Path, *, testlogs_dir: Path | None = None
     return _bep_test_output_key(str(output_dir))
 
 
-def _local_output_matches_bep_key(output_dir: Path, bep_key: str) -> bool:
-    """Return true when a local test.outputs path corresponds to one BEP key."""
-    output_path = str(output_dir).replace("\\", "/").rstrip("/")
-    return output_path.endswith("/" + bep_key.rstrip("/")) or output_path == bep_key.rstrip("/")
+class _BepOutputIndex:
+    """Index fresh keys once, retaining all labels for ambiguous suffixes."""
+
+    def __init__(self, pairs: Iterable[tuple[str, str]]) -> None:
+        self._labels_by_key: dict[str, set[str]] = {}
+        for label, key in pairs:
+            self._labels_by_key.setdefault(key, set()).add(label)
+
+    def labels_for(self, output_dir: Path, explicit_key: str | None) -> set[str]:
+        if explicit_key:
+            return self._labels_by_key.get(explicit_key, set())
+        path = str(output_dir).replace("\\", "/").rstrip("/")
+        labels = set(self._labels_by_key.get(path, ()))
+        for offset, character in enumerate(path):
+            if character == "/":
+                labels.update(self._labels_by_key.get(path[offset + 1:], ()))
+        return labels
 
 
 def _validate_expected_target_bep_freshness(
@@ -1779,19 +1806,12 @@ def _validate_expected_target_bep_freshness(
     bep_fresh_labels = set(_target_labels_from_pairs(freshness.eligible_outputs))
     bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
     cached_only_labels = bep_cached_labels.difference(bep_fresh_labels)
+    output_index = _BepOutputIndex(freshness.eligible_outputs)
     fresh_output_dirs = []
     fresh_labels = set()
     for output_dir in output_dirs:
         explicit_output_key = output_key_by_output_dir.get(output_dir.resolve())
-        candidate_labels = {
-            candidate_label
-            for candidate_label, candidate_key in freshness.eligible_outputs
-            if (
-                explicit_output_key == candidate_key
-                if explicit_output_key
-                else _local_output_matches_bep_key(output_dir, candidate_key)
-            )
-        }
+        candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
         if not candidate_labels:
             continue
         metadata_files = _metadata_files(output_dir)
@@ -1880,18 +1900,11 @@ def _validate_discovered_bep_freshness(
             f"--build_event_json_file and {REMOTE_TEST_OUTPUT_DOWNLOAD_HINT}"
         )
 
+    output_index = _BepOutputIndex(freshness.eligible_outputs)
     fresh_output_dirs = []
     for output_dir in output_dirs:
         explicit_output_key = output_key_by_output_dir.get(output_dir.resolve())
-        candidate_labels = {
-            candidate_label
-            for candidate_label, candidate_key in freshness.eligible_outputs
-            if (
-                explicit_output_key == candidate_key
-                if explicit_output_key
-                else _local_output_matches_bep_key(output_dir, candidate_key)
-            )
-        }
+        candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
         if not candidate_labels:
             continue
         metadata_files = _metadata_files(output_dir)
@@ -2849,6 +2862,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
         config_path,
         args.expected_target,
         runtime_selection,
+        runtime_targets_file=Path(args.expected_targets_file) if args.expected_targets_file else None,
     )
     runtime_contexts = _load_runtime_contexts(args.context_entry)
     if runtime_selection and not runtime_contexts:

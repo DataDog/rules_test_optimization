@@ -1768,6 +1768,10 @@ per-module selection can add `--expected-enriched-tag=bazel.go.payload_selection
 
 ### Full uploader reference
 
+For large target sets, doctor and the Python uploader accept
+`--expected-targets-file=/path/to/targets.json`; see the
+[runtime target-file format](docs/Configuration_Reference.md#runtime-expected-target-files).
+
 For complete uploader details, use [`docs/Uploader_Reference.md`](docs/Uploader_Reference.md), including:
 
 - uploader target attributes and optional environment variables

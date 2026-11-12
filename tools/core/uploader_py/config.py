@@ -103,6 +103,7 @@ class UploaderConfig:
     workers: int
     expected_enriched_tags: tuple[str, ...]
     runtime_expected_targets: tuple[str, ...]
+    runtime_expected_targets_file: Path | None
     runtime_context_entries: tuple[str, ...]
     bep_json_files: tuple[Path, ...]
     freshness_source: str
@@ -138,6 +139,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--validate-enrichment", action="store_true")
     parser.add_argument("--expected-enriched-tag", action="append", default=[])
     parser.add_argument("--expected-target", action="append", default=[])
+    parser.add_argument("--expected-targets-file")
     parser.add_argument("--context-entry", action="append", default=[])
     parser.add_argument("--bep-json", action="append", default=[])
     parser.add_argument("--freshness-source")
@@ -165,6 +167,8 @@ def parse_uploader_config(
     """Resolve generated config, environment, and CLI using public precedence."""
     env = dict(os.environ if environ is None else environ)
     args = _parser().parse_args(list(argv))
+    if args.expected_targets_file == "":
+        raise ConfigError("--expected-targets-file must be a nonempty path")
 
     def text_option(
         cli_value: str | None,
@@ -177,6 +181,11 @@ def parse_uploader_config(
     config_path = Path(args.config)
     rule = load_rule_config(config_path)
     invocation_cwd = Path(cwd or Path.cwd()).absolute()
+    runtime_targets_file = None
+    if args.expected_targets_file is not None:
+        runtime_targets_file = Path(args.expected_targets_file)
+        if not runtime_targets_file.is_absolute():
+            runtime_targets_file = Path(env.get("BUILD_WORKING_DIRECTORY") or invocation_cwd) / runtime_targets_file
     lock_workspace = env.get("BUILD_WORKSPACE_DIRECTORY") or str(invocation_cwd)
     workspace = Path(lock_workspace).resolve()
     launcher_directory = _optional_path(
@@ -329,6 +338,7 @@ def parse_uploader_config(
         workers=workers,
         expected_enriched_tags=expected_enriched_tags,
         runtime_expected_targets=tuple(args.expected_target),
+        runtime_expected_targets_file=runtime_targets_file,
         runtime_context_entries=tuple(args.context_entry),
         bep_json_files=tuple(Path(path) for path in bep_json_paths),
         freshness_source=freshness_source,

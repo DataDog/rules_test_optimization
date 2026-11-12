@@ -140,6 +140,7 @@ def _run_uploader_with_lock(
             ),
             resolver=resolver,
             runtime_targets=config.runtime_expected_targets,
+            runtime_targets_file=config.runtime_expected_targets_file,
             runtime_selection=config.rule.runtime_selection,
         )
         resources = _load_resources(config, resolver, logger)
