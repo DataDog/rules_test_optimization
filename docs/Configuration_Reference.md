@@ -925,6 +925,7 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_ARTIFACT_SOURCE` | Artifact discovery source: `local`, `bep`, or `auto`. Recommended CI with zipped undeclared outputs should set `bep` |
 | `DD_TEST_OPTIMIZATION_REMOTE_ARTIFACTS` | Remote BEP artifact handling: `disabled`, `download`, or `required`. HTTP/HTTPS `outputs.zip` carriers can be staged natively when enabled |
 | `DD_TEST_OPTIMIZATION_ARTIFACT_STAGING_DIR` | Directory used for per-run staged BEP artifacts |
+| `DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR` | Default Python uploader: copy unresolved sources and inspection metadata to unique directories here before releasing staging; must be outside disposable roots |
 | `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER` | Optional executable used to download non-HTTP remote/CAS BEP artifacts or HTTP endpoints requiring custom auth |
 | `DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER_TIMEOUT_SEC` | Timeout for the BEP artifact downloader and native HTTP/HTTPS request attempts |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | Optional explicit legacy execution-log fallback path; default execution-log files are not auto-discovered |
@@ -933,11 +934,17 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 
 Uploader CLI flags:
 
+`--retained-outputs-dir=<path>` overrides the retention environment variable;
+relative paths use the workspace root. See
+[retaining unresolved outputs](Uploader_Reference.md#retain-unresolved-outputs)
+for the default temporary-root behavior and private CI artifact collection.
+
 | Flag | Purpose |
 |------|---------|
 | `--dry-run` | Enrich and validate discovered payloads without uploading or deleting files |
 | `--validate-enrichment` | Require key Git and Bazel tags to exist after enrichment, before either validation-only completion or upload |
 | `--workers=<positive-integer>` | Override the maximum independent payload-file workers in Python mode; takes precedence over `DD_TEST_OPTIMIZATION_WORKERS` and the rule attribute |
+| `--retained-outputs-dir=<path>` | Default Python uploader: copy unresolved sources for private inspection; CLI overrides the environment, and relative paths use the workspace root |
 | `--expected-enriched-tag=<tag>` | Add a required enriched tag; repeatable. Defaults cover `git.repository_url`, `git.commit.sha`, `bazel.target`, and `bazel.package`. Add `bazel.go.payload_selection` explicitly when a Go rollout must prove per-module selection |
 | `--bep-json=<path>` | BEP JSON file from the matching Bazel test invocation; repeat for multiple invocations |
 | `--freshness-source=<source>` | Freshness source: `auto`, `bep`, or `execution_log` |
@@ -974,6 +981,7 @@ Wrapper report options:
 | `--report-dir=<path>` / `-ReportDir <path>` / `DD_TEST_OPTIMIZATION_REPORT_DIR` | Recommended CI artifact directory. Bash and PowerShell wrappers write a doctor report plus exactly one uploader report under this directory |
 | `--doctor-report-json=<path>` / `-DoctorReportJson <path>` / `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Override only the wrapper doctor report path |
 | `--uploader-report-json=<path>` / `-UploaderReportJson <path>` / `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Override the selected wrapper uploader report path, for either dry-run or real upload |
+| `--retained-outputs-dir=<path>` / `-RetainedOutputsDir <path>` / `DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR` | Default Python uploader: choose the durable inspection destination; otherwise an external report directory supplies `<report-dir>/retained` |
 | `--support-bundle=<path>` / `-SupportBundle <path>` / `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` | Write a redacted support diagnostics zip containing reports, selected BEP summaries, command metadata, runtime metadata, and a Markdown summary |
 | `--support-bundle-collector=<path>` / `-SupportBundleCollector <path>` / `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR` | Override the support bundle collector path. Defaults to `create_support_bundle.py` beside the wrapper |
 

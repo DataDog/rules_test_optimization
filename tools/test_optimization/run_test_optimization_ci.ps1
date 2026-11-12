@@ -13,6 +13,7 @@ param(
   [string]$DoctorReportJson = $(if ($env:DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON) { $env:DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON } else { "" }),
   [string]$UploaderReportJson = $(if ($env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON) { $env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON } else { "" }),
   [string]$ReportDir = $(if ($env:DD_TEST_OPTIMIZATION_REPORT_DIR) { $env:DD_TEST_OPTIMIZATION_REPORT_DIR } else { "" }),
+  [string]$RetainedOutputsDir = $(if ($env:DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR) { $env:DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR } else { "" }),
   [string]$SupportBundle = $(if ($env:DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE) { $env:DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE } else { "" }),
   [string]$SupportBundleCollector = $(if ($env:DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR) { $env:DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR } else { "" }),
   [string[]]$TestFlag = @(),
@@ -75,6 +76,8 @@ $tmpRoot = Join-Path $tmpParent ("dd-topt-" + [System.Guid]::NewGuid().ToString(
 $bepDir = Join-Path $tmpRoot "bep"
 $artifactStagingDir = Join-Path $tmpRoot "bep-artifacts"
 New-Item -ItemType Directory -Force -Path $bepDir, $artifactStagingDir | Out-Null
+$retentionStatusJson = Join-Path $tmpRoot "uploader-retention-status.json"
+$finalizationRequired = $false
 if (-not [string]::IsNullOrWhiteSpace($SupportBundle) -and [string]::IsNullOrWhiteSpace($ReportDir)) {
   $ReportDir = Join-Path $tmpRoot "reports"
 }
@@ -128,6 +131,32 @@ function Get-SupportBundleCollector {
   }
   $scriptDir = Split-Path -Parent $PSCommandPath
   return (Join-Path $scriptDir "create_support_bundle.py")
+}
+
+function Test-RetentionCleanupSafe {
+  if (-not (Test-Path -LiteralPath $retentionStatusJson -PathType Leaf)) { return $false }
+  $python = Get-PythonForSupportBundle
+  if (-not $python) { return $false }
+  $code = @'
+import json
+from pathlib import Path
+import sys
+try:
+    status = json.loads(Path(sys.argv[1]).read_text())
+    valid = (type(status.get('schema_version')) is int and status['schema_version'] == 1
+        and status.get('wrapper_temp_root') == str(Path(sys.argv[2]).resolve())
+        and status.get('cleanup_safe') is True
+        and not any((Path(sys.argv[3]) / '__runs').glob('*')))
+except (OSError, ValueError, TypeError, AttributeError):
+    valid = False
+sys.exit(0 if valid else 1)
+'@
+  try {
+    & $python -c $code $retentionStatusJson $tmpRoot $artifactStagingDir
+    return ($LASTEXITCODE -eq 0)
+  } catch {
+    return $false
+  }
 }
 
 function Write-SupportCommandManifest {
@@ -237,6 +266,7 @@ try {
     $doctorRuntimeArgs += "--report-json=$DoctorReportJson"
   }
 
+  $finalizationRequired = $true
   $doctorStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $DoctorTarget, "--") + $doctorRuntimeArgs)
   if ($doctorStatus -ne 0 -and $finalStatus -eq 0) {
     $finalStatus = $doctorStatus
@@ -254,7 +284,40 @@ try {
     }
     $uploaderRuntimeArgs += @("--dry-run", "--validate-enrichment")
   }
-  $uploaderStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $uploaderRuntimeArgs)
+  if ($Upload.IsPresent -and [string]::IsNullOrWhiteSpace($RetainedOutputsDir) -and -not [string]::IsNullOrWhiteSpace($ReportDir)) {
+    $python = Get-PythonForSupportBundle
+    if ($python) {
+      $code = @'
+from pathlib import Path
+import sys
+report, temporary = (Path(value).resolve() for value in sys.argv[1:])
+print(report / 'retained' if not report.is_relative_to(temporary) else '')
+'@
+      try {
+        $candidate = [string](& $python -c $code $ReportDir $tmpRoot)
+        if ($LASTEXITCODE -eq 0) { $RetainedOutputsDir = $candidate }
+      } catch {
+        Write-Warning "Could not select a durable retention destination; original outputs will be preserved when needed."
+      }
+    }
+  }
+  $uploaderEnvironment = @{
+    DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT = $tmpRoot
+    DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE = $retentionStatusJson
+    DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR = $RetainedOutputsDir
+  }
+  $previousEnvironment = @{}
+  foreach ($name in $uploaderEnvironment.Keys) {
+    $previousEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
+    [Environment]::SetEnvironmentVariable($name, $uploaderEnvironment[$name], "Process")
+  }
+  try {
+    $uploaderStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $UploadTarget, "--") + $uploaderRuntimeArgs)
+  } finally {
+    foreach ($name in $uploaderEnvironment.Keys) {
+      [Environment]::SetEnvironmentVariable($name, $previousEnvironment[$name], "Process")
+    }
+  }
   if ($uploaderStatus -ne 0 -and $finalStatus -eq 0) {
     $finalStatus = $uploaderStatus
   }
@@ -262,8 +325,8 @@ try {
   exit $finalStatus
 } finally {
   New-SupportBundle
-  if ($keepGeneratedFiles) {
-    Write-Host "keeping Test Optimization temporary files: $tmpRoot"
+  if ($keepGeneratedFiles -or ($finalizationRequired -and -not (Test-RetentionCleanupSafe))) {
+    Write-Host "keeping Test Optimization temporary files: $tmpRoot (explicit keep or unverified retention)"
   } else {
     Remove-Item -LiteralPath $tmpRoot -Recurse -Force -ErrorAction SilentlyContinue
   }

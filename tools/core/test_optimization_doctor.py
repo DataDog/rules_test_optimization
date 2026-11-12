@@ -1323,16 +1323,32 @@ def _stage_bep_artifacts(
     selected_labels: set[str] | None = None,
     downloader: str = "",
     downloader_timeout_sec: float = 300.0,
+    owned_run_roots: list[Path] | None = None,
 ) -> list[StagedBepArtifact]:
-    """Materialize fresh BEP artifacts into local test.outputs directories."""
+    """Materialize fresh BEP artifacts into local test.outputs directories.
+
+    With owned_run_roots, the caller owns the run directory before any data is
+    written, including errors or interruption between extraction and commit.
+    Otherwise this function cleans its run directory on failure.
+    """
     warned: set[str] = set()
     staged: list[StagedBepArtifact] = []
     run_staging_dir = _create_staging_run_dir(staging_dir)
+    if owned_run_roots is not None:
+        owned_run_roots.append(run_staging_dir)
 
     def warn_once(message: str) -> None:
         if message not in warned:
             warned.add(message)
             _warn(message)
+
+    def discard_failed_destination(tmp: Path, exc: BaseException) -> None:
+        # An uploader-owned transfer or extraction may have already written
+        # recoverable bytes. Extraction wraps I/O errors; rejected ZIPs do not.
+        if owned_run_roots is None or not (
+            isinstance(exc, OSError) or isinstance(exc.__cause__, OSError)
+        ):
+            _discard_staging_destination(tmp)
 
     try:
         refs, ambiguous_output_keys = _dedupe_stageable_artifact_references(
@@ -1396,6 +1412,9 @@ def _stage_bep_artifacts(
                     )
                     continue
             downloaded = False
+            # Own an incomplete materialization before any transfer can write
+            # bytes. Interruption after download must preserve that carrier too.
+            tmp_dst, dst = _prepare_staging_destination(run_staging_dir, ref.output_key)
             try:
                 if ref.remote_only:
                     if downloader:
@@ -1415,11 +1434,13 @@ def _stage_bep_artifacts(
                 else:
                     source = _resolve_bep_local_artifact_path(ref.fetch_value, workspace)
             except (BepArtifactStageError, OSError) as exc:
+                discard_failed_destination(tmp_dst, exc)
                 if remote_artifacts == "required":
                     _fail(str(exc))
                 warn_once(str(exc))
                 continue
             if source is None:
+                _discard_staging_destination(tmp_dst)
                 if remote_artifacts == "required":
                     _fail(
                         f"BEP artifact for {ref.label} could not be materialized as a local test.outputs carrier: "
@@ -1431,7 +1452,6 @@ def _stage_bep_artifacts(
                         f"{display_fetch_value}"
                     )
                 continue
-            tmp_dst, dst = _prepare_staging_destination(run_staging_dir, ref.output_key)
             try:
                 if downloaded:
                     if not source.is_file() or source.name != "outputs.zip":
@@ -1449,7 +1469,7 @@ def _stage_bep_artifacts(
                     )
                 _commit_staging_destination(tmp_dst, dst)
             except (BepArtifactStageError, OSError) as exc:
-                _discard_staging_destination(tmp_dst)
+                discard_failed_destination(tmp_dst, exc)
                 if remote_artifacts == "required":
                     _fail(str(exc))
                 warn_once(str(exc))
@@ -1465,22 +1485,24 @@ def _stage_bep_artifacts(
                     fetch_value=ref.fetch_value,
                 )
             )
-        if not staged:
+        if not staged and (owned_run_roots is None or not any(run_staging_dir.rglob(".test.outputs.tmp-*"))):
             shutil.rmtree(run_staging_dir, ignore_errors=True)
         return sorted(staged, key=lambda item: str(item.output_dir))
     except BaseException:
-        shutil.rmtree(run_staging_dir, ignore_errors=True)
+        if owned_run_roots is None:
+            shutil.rmtree(run_staging_dir, ignore_errors=True)
         raise
 
 
-def _cleanup_staged_bep_run_roots(staged: Iterable[StagedBepArtifact], *, staging_base: Path) -> None:
+def _cleanup_staged_bep_run_roots(staged: Iterable[StagedBepArtifact], *, staging_base: Path, owned_run_roots: Iterable[Path] = ()) -> None:
     """Remove owned per-run staging roots after staged outputs are no longer needed."""
     runs_root = (staging_base / "__runs").resolve()
-    roots = sorted({item.staging_root.resolve() for item in staged})
+    owned_roots = {root.resolve() for root in owned_run_roots}
+    roots = sorted({item.staging_root.resolve() for item in staged}.union(owned_roots))
     for root in roots:
         if root.parent.resolve() != runs_root:
             _fail(f"refusing to clean BEP staging root outside run directory: {root}")
-        owned = False
+        owned = root in owned_roots
         for item in staged:
             if item.staging_root.resolve() != root:
                 continue

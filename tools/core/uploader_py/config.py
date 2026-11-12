@@ -125,6 +125,9 @@ class UploaderConfig:
     agentless_url: str
     proxy_environment: tuple[tuple[str, str], ...]
     ci: bool
+    retained_outputs_dir: Path | None = None
+    wrapper_temp_root: Path | None = None
+    retention_status_file: Path | None = None
 
     @property
     def agentless(self) -> bool:
@@ -153,6 +156,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bep-artifact-downloader")
     parser.add_argument("--bep-artifact-downloader-timeout-sec")
     parser.add_argument("--report-json")
+    parser.add_argument("--retained-outputs-dir", help="Copy unresolved sources outside disposable staging for private inspection")
     parser.add_argument("--debug", action="store_true", default=None)
     parser.add_argument("--workers")
     return parser
@@ -181,11 +185,12 @@ def parse_uploader_config(
     config_path = Path(args.config)
     rule = load_rule_config(config_path)
     invocation_cwd = Path(cwd or Path.cwd()).absolute()
+    working_directory = Path(env.get("BUILD_WORKING_DIRECTORY") or invocation_cwd)
     runtime_targets_file = None
     if args.expected_targets_file is not None:
         runtime_targets_file = Path(args.expected_targets_file)
         if not runtime_targets_file.is_absolute():
-            runtime_targets_file = Path(env.get("BUILD_WORKING_DIRECTORY") or invocation_cwd) / runtime_targets_file
+            runtime_targets_file = working_directory / runtime_targets_file
     lock_workspace = env.get("BUILD_WORKSPACE_DIRECTORY") or str(invocation_cwd)
     workspace = Path(lock_workspace).resolve()
     launcher_directory = _optional_path(
@@ -317,6 +322,9 @@ def parse_uploader_config(
         args.bep_artifact_downloader,
         "DD_TEST_OPTIMIZATION_BEP_ARTIFACT_DOWNLOADER",
     )
+    retained_outputs_dir = _optional_path(text_option(args.retained_outputs_dir, "DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR"))
+    if retained_outputs_dir is not None and not retained_outputs_dir.is_absolute():
+        retained_outputs_dir = workspace / retained_outputs_dir
 
     return UploaderConfig(
         rule=rule,
@@ -362,6 +370,11 @@ def parse_uploader_config(
             (name, env[name]) for name in PROXY_ENVIRONMENT_NAMES if env.get(name)
         ),
         ci=env.get("CI", "").strip().lower() not in {"", "0", "false", "no"},
+        retained_outputs_dir=retained_outputs_dir,
+        wrapper_temp_root=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT"]
+            if env.get("DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT") else None),
+        retention_status_file=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE"]
+            if env.get("DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE") else None),
     )
 
 

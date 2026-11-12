@@ -14,7 +14,7 @@ of worker threads.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import importlib.util
 import json
 import logging
@@ -78,10 +78,11 @@ class FreshnessPreparation:
     _doctor_runtime: ModuleType | None = None
     _staged_artifacts: tuple[object, ...] = ()
     _staging_base_path: Path | None = None
+    _owned_run_roots: tuple[Path, ...] = ()
 
     def cleanup(self) -> None:
         """Remove only per-invocation staging roots owned by the doctor."""
-        if not self._staged_artifacts:
+        if not self._staged_artifacts and not self._owned_run_roots:
             return
         assert self._doctor_runtime is not None
         assert self._staging_base_path is not None
@@ -89,9 +90,32 @@ class FreshnessPreparation:
             self._doctor_runtime._cleanup_staged_bep_run_roots(
                 self._staged_artifacts,
                 staging_base=self._staging_base_path,
+                owned_run_roots=self._owned_run_roots,
             )
         except SystemExit as exc:
             raise FreshnessError(_doctor_failure(self._doctor_runtime, exc)) from exc
+
+
+@dataclass
+class StagingOwnership:
+    """Transfer completed staging to application finalization before preflight.
+
+    Preparation can fail or be interrupted before returning its immutable
+    snapshot. Register the run directory before downloading or publishing data,
+    so interruption cannot fall between a filesystem commit and ownership.
+    """
+
+    run_roots: list[Path] = field(default_factory=list)
+    doctor_runtime: ModuleType | None = None
+    staging_base_path: Path | None = None
+    plan: FreshnessPlan = field(default_factory=FreshnessPlan)
+
+    def snapshot(self) -> FreshnessPreparation | None:
+        if not self.run_roots:
+            return None
+        roots = tuple(sorted({root.resolve() for root in self.run_roots if root.is_dir()}))
+        return FreshnessPreparation(self.plan, tuple(ScanRoot(root, staged=True) for root in roots), roots,
+            self.doctor_runtime, (), self.staging_base_path, roots)
 
 
 @dataclass(frozen=True)
@@ -109,6 +133,7 @@ def prepare_freshness(
     local_testlogs_root: Path | None,
     expected_targets: Iterable[str] = (),
     logger: logging.Logger | None = None,
+    staging_owner: StagingOwnership | None = None,
 ) -> FreshnessPreparation:
     """Parse freshness and optionally stage BEP artifacts before discovery."""
     expected_target_set = frozenset(expected_targets)
@@ -173,12 +198,21 @@ def prepare_freshness(
                         )
                     )
                     staging_base_path = config.artifact_staging_dir.resolve()
+                    if staging_owner is not None:
+                        staging_owner.doctor_runtime = doctor_runtime
+                        staging_owner.staging_base_path = staging_base_path
+                        staging_owner.plan = _build_plan(config, selected_source=selected_source,
+                            doctor_freshness=doctor_freshness, selected_artifact_outputs=selected_artifact_outputs,
+                            blocked_labels=blocked_labels, expected_targets=expected_target_set,
+                            warning_codes=list(warning_codes), staged_outputs=set())
                     staged_artifacts = tuple(
                         doctor_runtime._stage_bep_artifacts(
                             doctor_freshness,
                             workspace=config.workspace,
                             staging_dir=staging_base_path,
                             remote_artifacts=config.remote_artifacts,
+                            selected_labels=set(expected_target_set) if expected_target_set else None,
+                            owned_run_roots=staging_owner.run_roots if staging_owner is not None else None,
                             downloader=(
                                 str(config.bep_artifact_downloader)
                                 if config.bep_artifact_downloader is not None
@@ -197,7 +231,7 @@ def prepare_freshness(
             raise FreshnessError(_doctor_failure(doctor_runtime, exc)) from exc
         except BaseException:
             # Staging must not survive interrupts or unexpected doctor errors.
-            if staged_artifacts and staging_base_path is not None:
+            if staging_owner is None and staged_artifacts and staging_base_path is not None:
                 doctor_runtime._cleanup_staged_bep_run_roots(
                     staged_artifacts,
                     staging_base=staging_base_path,
@@ -219,22 +253,32 @@ def prepare_freshness(
         )
     except BaseException:
         # Planning failures must obey the same ownership cleanup contract.
-        if staged_artifacts and doctor_runtime is not None and staging_base_path is not None:
+        if staging_owner is None and staged_artifacts and doctor_runtime is not None and staging_base_path is not None:
             doctor_runtime._cleanup_staged_bep_run_roots(
                 staged_artifacts,
                 staging_base=staging_base_path,
             )
         raise
 
+    if staging_owner is not None:
+        staging_owner.plan = plan
+    if plan.remote_only_outputs and (config.freshness_mode == "required" or config.remote_artifacts == "required"):
+        # Callers with an owner retain completed downloads before reporting the
+        # missing carrier; standalone preparation preserves its old cleanup.
+        if staging_owner is None and staged_artifacts and doctor_runtime is not None and staging_base_path is not None:
+            doctor_runtime._cleanup_staged_bep_run_roots(staged_artifacts, staging_base=staging_base_path)
+        raise FreshnessError("BEP references remote-only test outputs for "
+            f"{plan.remote_only_outputs[0].label}, but local test.outputs was not found")
+
     scan_roots: list[ScanRoot] = []
     if local_testlogs_root is not None:
         scan_roots.append(ScanRoot(local_testlogs_root))
-    staged_roots = tuple(
-        sorted(
-            {Path(item.staging_root).resolve() for item in staged_artifacts},
-            key=lambda path: path.as_posix(),
-        )
-    )
+    staged_root_paths = {Path(item.staging_root).resolve() for item in staged_artifacts}
+    if staging_owner is not None:
+        # Finalization must see incomplete owned roots even when preparation
+        # returns normally without publishing any test.outputs directory.
+        staged_root_paths.update(root.resolve() for root in staging_owner.run_roots if root.is_dir())
+    staged_roots = tuple(sorted(staged_root_paths, key=lambda path: path.as_posix()))
     scan_roots.extend(ScanRoot(root, staged=True) for root in staged_roots)
     if logger is not None:
         for artifact in staged_artifacts:
@@ -261,6 +305,7 @@ def prepare_freshness(
         _doctor_runtime=doctor_runtime,
         _staged_artifacts=staged_artifacts,
         _staging_base_path=staging_base_path,
+        _owned_run_roots=tuple(staging_owner.run_roots) if staging_owner is not None else (),
     )
 
 
@@ -389,6 +434,36 @@ def _recognized_test_source(task: FileTask) -> bool:
         return False
 
 
+def collect_test_result_evidence(
+    discovery: DiscoveryResult,
+    results: Iterable[FileResult],
+) -> tuple[set[tuple[str, str]], set[str]]:
+    """Collect execution evidence independently from HTTP acknowledgement.
+
+    Postflight and retained diagnostics must use the same test-evidence policy.
+    """
+    results_by_id = {result.task_id: result for result in results}
+    proven_outputs: set[tuple[str, str]] = set()
+    labels: set[str] = set()
+    for task in discovery.tasks:
+        result = results_by_id.get(task.task_id)
+        if result is None or task.payload_type is not PayloadType.TEST or result.test_events <= 0:
+            continue
+        if task.target_label:
+            labels.add(task.target_label)
+            if task.output_key and (result.status is FileStatus.SUCCEEDED or result.requests_attempted > 0):
+                proven_outputs.add((task.target_label, task.output_key))
+    return proven_outputs, labels
+
+
+def represented_test_targets(plan: FreshnessPlan) -> frozenset[str]:
+    """Targets represented by fresh, cached, remote or incompatible BEP evidence."""
+    return frozenset(label for label, _key in plan.eligible_outputs).union(
+        label for label, _key in plan.cached_outputs).union(
+        output.label for output in plan.remote_only_outputs).union(
+        plan.skipped_targets, exclusively_cached_labels(plan.executions))
+
+
 def validate_fresh_outputs_accounted(
     plan: FreshnessPlan,
     discovery: DiscoveryResult,
@@ -412,13 +487,7 @@ def validate_fresh_outputs_accounted(
     if relevant_ambiguities:
         raise FreshnessError("BEP freshness has ambiguous execution provenance for " + sorted(relevant_ambiguities)[0])
     if expected_target_set:
-        represented_labels = {
-            label for label, _output_key in plan.eligible_outputs
-        }.union(
-            label for label, _output_key in plan.cached_outputs
-        ).union(
-            output.label for output in plan.remote_only_outputs
-        ).union(plan.skipped_targets).union(exclusively_cached_labels(plan.executions))
+        represented_labels = represented_test_targets(plan)
         missing_expected = sorted(expected_target_set.difference(represented_labels))
         if missing_expected:
             label = missing_expected[0]
@@ -441,17 +510,8 @@ def validate_fresh_outputs_accounted(
     results = tuple(results)
     if plan.executions:
         results_by_id = {result.task_id: result for result in results}
-        proven_outputs = set()
-        selected_labels = set(selected_target_set)
-        for task in discovery.tasks:
-            result = results_by_id.get(task.task_id)
-            if task.target_label and result is not None and task.payload_type is PayloadType.TEST and result.test_events > 0:
-                selected_labels.add(task.target_label)
-            if result is not None and task.payload_type is PayloadType.TEST and result.test_events > 0:
-                if result.status is FileStatus.SUCCEEDED or result.requests_attempted > 0:
-                    # Transport acknowledgement has its own error policy. A
-                    # rejected request still contains identified test evidence.
-                    proven_outputs.add((task.target_label, task.output_key))
+        proven_outputs, observed_labels = collect_test_result_evidence(discovery, results)
+        selected_labels = set(selected_target_set).union(observed_labels)
         missing = missing_test_shards(plan.executions, proven_outputs, selected_labels)
         if missing:
             invocation, label, configuration, run, shard = missing[0]
@@ -616,13 +676,7 @@ def _build_plan(
         missing_output_labels.intersection_update(expected_targets)
         skipped_targets.intersection_update(expected_targets)
 
-    if remote_outputs:
-        if config.freshness_mode == "required" or config.remote_artifacts == "required":
-            first_remote_output = remote_outputs[0]
-            raise FreshnessError(
-                "BEP references remote-only test outputs for "
-                f"{first_remote_output.label}, but local test.outputs was not found"
-            )
+    if remote_outputs and config.freshness_mode != "required" and config.remote_artifacts != "required":
         warning_codes.append("bep_remote_only_outputs_skipped")
 
     return FreshnessPlan(

@@ -27,6 +27,7 @@ from .coordinator import CoordinatorSettings, run_discovered_tasks
 from .discovery import (
     DiscoveryError,
     DiscoveryResult,
+    ScanRoot,
     count_tasks_by_payload_type,
     discover_file_tasks,
     resolve_local_testlogs_root,
@@ -44,6 +45,7 @@ from .freshness import (
     FreshnessError,
     FreshnessPlan,
     FreshnessPreparation,
+    StagingOwnership,
     filter_discovery_for_freshness,
     prepare_freshness,
     validate_fresh_outputs_accounted,
@@ -53,6 +55,7 @@ from .logging_utils import redact_url
 from .metrics import PhaseRecorder, execution_environment
 from .models import FileStatus, PayloadType
 from .reporting import AggregateReport, LegacyReportContext, emit_report
+from .retention import RetentionError, retain_pending_outputs, write_retention_status
 from .resources import LoadedResources, ResourceError, ResourceInputs, load_resources
 from .temporary import TemporaryDirectoryError
 from .transport import HttpTransportError
@@ -132,6 +135,9 @@ def _run_uploader_with_lock(
     report: AggregateReport | None = None
     report_reason: _ReportReason | None = None
     workers_completed = False
+    retention_discovery: DiscoveryResult | None = None
+    resources: LoadedResources | None = None
+    staging_owner = StagingOwnership()
 
     _log_invocation(config, endpoints, resolver, logger)
 
@@ -164,6 +170,7 @@ def _run_uploader_with_lock(
                 local_testlogs_root=local_root,
                 expected_targets=expected_targets_plan.targets,
                 logger=logger,
+                staging_owner=staging_owner,
             )
         freshness_plan = freshness_preparation.plan
         logger.debug(
@@ -212,6 +219,12 @@ def _run_uploader_with_lock(
                 expected_targets=expected_targets_plan.targets,
             )
         eligible_discovery = freshness_selection.discovery
+        owned_roots = tuple(root.resolve() for root in freshness_preparation.staged_roots)
+        eligible_by_id = {task.task_id: task for task in eligible_discovery.tasks}
+        retained_tasks = tuple(eligible_by_id.get(task.task_id, task) for task in raw_discovery.tasks if task.task_id in eligible_by_id
+            or any(task.source_path.resolve().is_relative_to(root) for root in owned_roots))
+        retention_discovery = replace(raw_discovery, tasks=retained_tasks,
+            discovered_by_type=count_tasks_by_payload_type(retained_tasks))
         freshness_skipped_outputs = freshness_selection.skipped_outputs
         freshness_skipped_count = len(freshness_skipped_outputs)
         for output_key in freshness_skipped_outputs:
@@ -303,6 +316,10 @@ def _run_uploader_with_lock(
                     ),
                 )
     except _CONTROLLED_ERRORS as exc:
+        if freshness_preparation is None:
+            freshness_preparation = staging_owner.snapshot()
+            if freshness_preparation is not None:
+                freshness_plan = freshness_preparation.plan
         exit_code = exc.exit_code if isinstance(exc, FreshnessError) else 2
         logger.error("%s", exc)
         report = _empty_report(
@@ -316,8 +333,14 @@ def _run_uploader_with_lock(
             freshness_plan,
             exc,
         )
+    except KeyboardInterrupt:
+        report = _empty_report(config, exit_code=130, elapsed_seconds=max(0.0, clock() - started), discovery=raw_discovery)
+        report_reason = _ReportReason(code="interrupted", message="Uploader interrupted during preparation.")
+        raise
     finally:
         with phases.phase("staging_cleanup"):
+            if freshness_preparation is None:
+                freshness_preparation = staging_owner.snapshot()
             report, report_reason = _cleanup_staging(
                 freshness_preparation,
                 report,
@@ -327,6 +350,9 @@ def _run_uploader_with_lock(
                 started=started,
                 clock=clock,
                 logger=logger,
+                retention_discovery=retention_discovery,
+                resources=resources,
+                expected_targets=expected_targets_plan.targets,
             )
 
     assert report is not None
@@ -444,43 +470,85 @@ def _cleanup_staging(
     started: float,
     clock: Callable[[], float],
     logger: logging.Logger,
+    retention_discovery: DiscoveryResult | None = None,
+    resources: LoadedResources | None = None,
+    expected_targets: tuple[str, ...] = (),
 ) -> tuple[AggregateReport | None, _ReportReason | None]:
-    """Clean owned BEP staging without discarding completed upload results."""
-    if freshness_preparation is None:
-        return report, report_reason
-    try:
-        freshness_preparation.cleanup()
-    except FreshnessError as exc:
-        logger.error("failed to clean BEP staging: %s", exc)
+    """Retain unresolved data before releasing this invocation's staging roots."""
+    cleanup_safe = freshness_preparation is not None
+    preserve_staging = False
+    retained_details: dict[str, object] = {}
+
+    def record_failure(code: str, message: str) -> None:
+        nonlocal report, report_reason, cleanup_safe
+        cleanup_safe = False
+        logger.error("%s", message)
         if report is None:
-            report = _empty_report(
-                config,
-                exit_code=2,
-                elapsed_seconds=max(0.0, clock() - started),
-                discovery=discovery,
-            )
-        warning_codes = tuple(
-            dict.fromkeys(
-                report.initialization_warning_codes + ("staging_cleanup_failed",)
-            )
-        )
-        report = replace(
-            report,
-            exit_code=report.exit_code or 2,
-            initialization_warning_codes=warning_codes,
-        )
-        if report.exit_code == 2 and (
-            report_reason is None or report_reason.code in {"", "ok"}
-        ):
-            report_reason = _ReportReason(
-                code="staging_cleanup_failed",
-                message=str(exc),
-                next_steps=(
-                    "Remove only the uploader-owned staging run directory.",
-                ),
-            )
-    else:
-        logger.debug("BEP staging cleanup completed")
+            report = _empty_report(config, exit_code=2,
+                elapsed_seconds=max(0.0, clock() - started), discovery=discovery)
+        report = replace(report, exit_code=report.exit_code or 2,
+            initialization_warning_codes=tuple(dict.fromkeys(report.initialization_warning_codes + (code,))))
+        if report_reason is None or report_reason.code in {"", "ok"}:
+            report_reason = _ReportReason(code=code, message=message,
+                next_steps=("Preserve the announced original outputs before cleaning temporary files.",))
+
+    if not config.dry_run:
+        try:
+            owned_roots = freshness_preparation.staged_roots if freshness_preparation is not None else ()
+            if retention_discovery is None:
+                # Authorization may have failed before workers. Only inspect
+                # staging roots we own, never unrelated local/cached outputs.
+                retention_discovery = discover_file_tasks(tuple(ScanRoot(root, staged=True) for root in owned_roots))
+            disposable = (config.artifact_staging_dir,)
+            if config.wrapper_temp_root is not None:
+                disposable += (config.wrapper_temp_root,)
+            outcome = retain_pending_outputs(retention_discovery, report, freshness_preparation, resources,
+                destination=config.retained_outputs_dir, disposable_roots=disposable,
+                expected_targets=expected_targets, keep_payloads=config.keep_payloads,
+                reason_code=report_reason.code if report_reason else "unknown")
+            # An interrupted extraction may not yet have a published
+            # test.outputs directory. Keep that owned scratch tree too; its
+            # bytes cannot be authorized or cataloged as a completed source.
+            if any(any(root.rglob(".test.outputs.tmp-*")) for root in owned_roots):
+                preserve_staging = True
+                cleanup_safe = False
+                logger.warning("preserving incomplete BEP materialization in owned staging")
+            if outcome.source_count:
+                retained_details = {"sources": outcome.source_count, "catalog": str(outcome.catalog) if outcome.catalog else "",
+                    "durable_destination_configured": config.retained_outputs_dir is not None,
+                    "original_roots": [str(path) for path in outcome.original_roots]}
+                if outcome.catalog is not None:
+                    logger.warning("retained Test Optimization outputs: %s", outcome.catalog)
+                else:
+                    logger.warning("unresolved Test Optimization outputs: roots=%d first=%s; configure a durable retention/artifact destination for ephemeral CI",
+                        len(outcome.original_roots), outcome.original_roots[0])
+                    preserve_staging = preserve_staging or any(source.is_relative_to(root.resolve()) for source in outcome.original_roots for root in owned_roots)
+                    if config.wrapper_temp_root is not None and any(path.is_relative_to(config.wrapper_temp_root.resolve()) for path in outcome.original_roots):
+                        cleanup_safe = False
+        except (OSError, RetentionError, DiscoveryError) as exc:
+            preserve_staging = True
+            retained_details = {"status": "failed", "durable_destination_configured": config.retained_outputs_dir is not None}
+            record_failure("output_retention_failed", f"failed to retain outputs; preserve original roots: {exc}")
+
+    if freshness_preparation is not None and not preserve_staging:
+        try:
+            freshness_preparation.cleanup()
+        except FreshnessError as exc:
+            record_failure("staging_cleanup_failed", f"failed to clean BEP staging: {exc}")
+        else:
+            logger.debug("BEP staging cleanup completed")
+    elif preserve_staging:
+        cleanup_safe = False
+        roots = freshness_preparation.staged_roots if freshness_preparation is not None else ()
+        logger.warning("preserving this invocation's BEP staging roots: count=%d first=%s",
+            len(roots), roots[0] if roots else "unknown")
+
+    try:
+        write_retention_status(config.retention_status_file, config.wrapper_temp_root, cleanup_safe=cleanup_safe)
+    except (OSError, RetentionError) as exc:
+        record_failure("retention_status_failed", f"failed to publish temporary-output status: {exc}")
+    if report is not None and retained_details:
+        report = replace(report, retention=tuple(retained_details.items()))
     return report, report_reason
 
 

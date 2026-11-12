@@ -1586,6 +1586,14 @@ or malformed, the uploader exits with a configuration error instead of guessing.
 
 ### BEP artifact resolution
 
+The default Python uploader retains unresolved staged payloads before cleanup.
+With the CI wrapper's `--report-dir` outside its temporary root, it copies them
+to a unique directory under `<report-dir>/retained`; otherwise it preserves the
+temporary root and prints its location. To keep that data across CI jobs,
+configure private artifact collection. See
+[retaining unresolved outputs](docs/Uploader_Reference.md#retain-unresolved-outputs)
+for standalone commands, copy failures, and `keep_payloads` behavior.
+
 BEP freshness and BEP artifact resolution are separate controls. Freshness
 prevents uploads from cached `TestResult` outputs. Artifact resolution lets the
 doctor and uploader materialize fresh `test.outputs` referenced by BEP when

@@ -68,6 +68,7 @@ class AggregateReport:
     invocation_phase_times: tuple[tuple[str, float, float], ...] = field(default=(), compare=False)
     process_cpu_seconds: tuple[float, float] | None = field(default=None, compare=False)
     execution_environment: tuple[tuple[str, object], ...] = field(default=(), compare=False)
+    retention: tuple[tuple[str, object], ...] = ()
 
     @classmethod
     def create(
@@ -183,7 +184,7 @@ class AggregateReport:
                     if self.process_cpu_seconds is not None else None
                 ),
             }}
-        return {
+        document = {
             **performance,
             "mode": self.mode,
             "result": self.result_name,
@@ -233,6 +234,9 @@ class AggregateReport:
             "warnings": dict(sorted(warning_codes.items())),
             "failures": dict(sorted(failure_codes.items())),
         }
+        if self.retention:
+            document["retention"] = dict(self.retention)
+        return document
 
     def human_lines(self) -> tuple[str, ...]:
         """Render a compact stable statistics block for CI logs."""
@@ -393,6 +397,8 @@ class AggregateReport:
             report_document[key] = stats[key]
         if "performance" in stats:
             report_document["performance"] = stats["performance"]
+        if "retention" in stats:
+            report_document["retention"] = stats["retention"]
         return report_document
 
 
