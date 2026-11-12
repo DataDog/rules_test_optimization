@@ -851,20 +851,22 @@ def _bep_test_output_key(path_value: str, *, artifact_name: str = "") -> str:
                 return key.lstrip("/")
 
     marker = "/test.outputs/"
+    retry_log = re.search(r"(?:^|/)test_attempts/attempt_([0-9]+)[.](?:log|xml)$", normalized)
     if normalized.endswith("/test.outputs"):
         pass
+    elif normalized.endswith("/test.log") or normalized.endswith("/test.xml"):
+        normalized = normalized.rsplit("/", 1)[0] + "/test.outputs"
+    elif retry_log:
+        normalized = normalized[:retry_log.start()] + "/test_attempts/attempt_" + retry_log[1] + ".outputs/test.outputs"
+    elif canonical_output_directory_key(normalized).endswith("/test.outputs"):
+        normalized = canonical_output_directory_key(normalized)
     elif marker in normalized:
         normalized = normalized.rsplit(marker, 1)[0] + "/test.outputs"
     elif normalized.endswith("/outputs.zip"):
         normalized = normalized.rsplit("/", 1)[0] + "/test.outputs"
-    elif normalized.endswith("/test.log") or normalized.endswith("/test.xml"):
-        normalized = normalized.rsplit("/", 1)[0] + "/test.outputs"
     else:
         retries = list(re.finditer(r"(?:^|/)test_attempts/attempt_[0-9]+[.]outputs(?:/|$)", normalized))
-        retry_log = re.search(r"(?:^|/)test_attempts/attempt_([0-9]+)[.](?:log|xml)$", normalized)
-        if retry_log:
-            normalized = normalized[:retry_log.start()] + "/test_attempts/attempt_" + retry_log[1] + ".outputs/test.outputs"
-        elif retries:
+        if retries:
             normalized = normalized[:retries[-1].end()].rstrip("/") + "/test.outputs"
         else:
             return ""
@@ -3198,20 +3200,21 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             target_by_output_dir=target_by_output_dir,
             test_result_outputs=test_result_outputs,
         )
-        if freshness is not None and args.freshness_mode in {"required", "auto"}:
+        if freshness is not None:
             selected_labels = freshness.identified_labels.union(expected_targets).union(test_result_outputs.values())
             ambiguous_keys = {key for execution in freshness.executions if execution.identity[1] in selected_labels for key in execution.output_keys if key in freshness.ambiguous_outputs}
             if freshness.ambiguous_labels.intersection(selected_labels):
                 _fail("BEP freshness is ambiguous: target reported as both platform-skipped and executed")
             if ambiguous_keys:
                 _fail("BEP freshness has ambiguous execution provenance for " + sorted(ambiguous_keys)[0])
-            proven = {(label, output_key_by_output_dir.get(path) or _local_test_output_key(path, testlogs_dir=testlogs_dir))
-                      for path, label in test_result_outputs.items()}
-            freshness.identified_labels.update(test_result_outputs.values())
-            missing = missing_test_shards(freshness.executions, proven, freshness.identified_labels.union(expected_targets))
-            if missing:
-                invocation, label, configuration, run, shard = missing[0]
-                _fail(f"fresh shard produced no test-result evidence: {label} configuration={configuration!r} run={run} shard={shard} invocation={invocation}")
+            if args.freshness_mode in {"required", "auto"}:
+                proven = {(label, output_key_by_output_dir.get(path) or _local_test_output_key(path, testlogs_dir=testlogs_dir))
+                          for path, label in test_result_outputs.items()}
+                freshness.identified_labels.update(test_result_outputs.values())
+                missing = missing_test_shards(freshness.executions, proven, freshness.identified_labels.union(expected_targets))
+                if missing:
+                    invocation, label, configuration, run, shard = missing[0]
+                    _fail(f"fresh shard produced no test-result evidence: {label} configuration={configuration!r} run={run} shard={shard} invocation={invocation}")
         report["summary"]["payload_selection"] = dict(sorted(selection_summary.items()))
         _summary(
             "payload selection summary: "

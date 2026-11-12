@@ -29,6 +29,65 @@ def execution(*, invocation="one", configuration="config", run=1, shard=0, attem
 
 
 class BepExecutionTests(unittest.TestCase):
+    def test_named_target_log_references_keep_each_shards_output_root(self):
+        from test_python_tools import TestOptimizationDoctorTests
+        from test_uploader_application_tools import _bep_test_result, _write_payload
+        doctor = _load_module("doctor_named_target_logs", "tools/core/test_optimization_doctor.py")
+        for filename, retry in (("test.log", False), ("test.xml", False),
+                ("attempt_1.log", True), ("attempt_1.xml", True)):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                testlogs = root / "bazel-testlogs"
+                records, keys = [], []
+                for shard in (1, 2):
+                    parent = testlogs / f"pkg/test.outputs/shard_{shard}_of_2"
+                    output = parent / ("test_attempts/attempt_1.outputs" if retry else "test.outputs")
+                    log = (parent / "test_attempts" if retry else parent) / filename
+                    _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
+                    (output / "bazel_target_metadata.json").write_text(json.dumps({
+                        "bazel.target": "//pkg:test.outputs", "bazel.go.payload_selection": "module"}))
+                    key = output.relative_to(testlogs).as_posix() + ("/test.outputs" if retry else "")
+                    keys.append(key)
+                    self.assertEqual(key, doctor._bep_test_output_key(log.as_uri(), artifact_name="test.log" if filename.endswith(".log") else "test.xml"))
+                    record = _bep_test_result("//pkg:test.outputs", output=output)
+                    record["id"]["testResult"]["shard"] = shard
+                    record["testResult"]["testActionOutput"].append({"name": "test.log" if filename.endswith(".log") else "test.xml", "uri": log.as_uri()})
+                    records.append(record)
+                bep = root / "bep.json"
+                bep.write_text("\n".join(json.dumps(record) for record in records))
+                parsed = doctor._parse_bep_freshness([bep])
+                self.assertFalse(parsed.ambiguous_outputs)
+                self.assertEqual(set(keys), {key for _, key in parsed.eligible_outputs})
+                config = TestOptimizationDoctorTests._write_doctor_config(root, ["//pkg:test.outputs"])
+                with mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(testlogs), "BUILD_WORKSPACE_DIRECTORY": str(root)}):
+                    self.assertEqual(0, doctor.main(["--config", str(config), "--bep-json", str(bep), "--freshness-mode=required"]))
+
+    def test_optional_doctor_rejects_ambiguous_bep_without_requiring_all_shards(self):
+        from test_python_tools import TestOptimizationDoctorTests
+        from test_uploader_application_tools import _bep_test_result, _write_payload
+        doctor = _load_module("doctor_optional_ambiguous", "tools/core/test_optimization_doctor.py")
+        for catalog in (False, True):
+            with self.subTest(catalog=catalog), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                output = root / "bazel-testlogs/pkg/test/shard_1_of_2/test.outputs"
+                _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
+                (output / "bazel_target_metadata.json").write_text(json.dumps({
+                    "bazel.target": "//pkg:test", "bazel.go.payload_selection": "module"}))
+                bep = root / "bep.json"
+                fresh = _bep_test_result("//pkg:test", output=output)
+                cached = _bep_test_result("//pkg:test", output=output, cached_locally=True)
+                bep.write_text(json.dumps(fresh) + "\n" + json.dumps(cached))
+                config = TestOptimizationDoctorTests._write_doctor_config(root, ["//pkg:test"] if catalog else [])
+                stderr = StringIO()
+                with mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root / "bazel-testlogs"), "BUILD_WORKSPACE_DIRECTORY": str(root)}), redirect_stderr(stderr):
+                    with self.assertRaises(SystemExit):
+                        doctor.main(["--config", str(config), "--bep-json", str(bep), "--freshness-mode=optional"])
+                    self.assertIn("ambiguous", stderr.getvalue())
+                    missing = _bep_test_result("//pkg:test")
+                    missing["id"]["testResult"]["shard"] = 2
+                    bep.write_text(json.dumps(fresh) + "\n" + json.dumps(missing))
+                    self.assertEqual(0, doctor.main(["--config", str(config), "--bep-json", str(bep), "--freshness-mode=optional"]))
+
     def test_global_discovery_ignores_named_ancestors_with_real_sidecars(self):
         from test_python_tools import TestOptimizationDoctorTests
         from test_uploader_application_tools import _write_payload
