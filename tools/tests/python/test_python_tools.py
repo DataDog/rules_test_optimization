@@ -5773,7 +5773,7 @@ Path(out).mkdir(parents=True)
 
     def test_validate_outputs_accepts_known_payload_selection(self) -> None:
         """Validate known Go payload selection values pass the doctor."""
-        for selection in ["module", "module_override", "full_bundle_disabled"]:
+        for selection in ["module", "module_override", "full_bundle_disabled", "full_bundle_importpath_miss"]:
             with self.subTest(selection=selection):
                 with tempfile.TemporaryDirectory() as tmp:
                     output = Path(tmp) / "pkg" / "target" / "test.outputs"
@@ -5781,7 +5781,7 @@ Path(out).mkdir(parents=True)
                     payload_dir.mkdir(parents=True)
                     (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
                     (output / "bazel_target_metadata.json").write_text(
-                        json.dumps({"bazel.go.payload_selection": selection}),
+                        json.dumps({"bazel.go.payload_selection": selection, "bazel.go.importpath": "example.com/app/new", "bazel.go.runtime_module_path": "example.com/app"}),
                         encoding="utf-8",
                     )
                     self.mod._validate_outputs([output], True, True, True, True)

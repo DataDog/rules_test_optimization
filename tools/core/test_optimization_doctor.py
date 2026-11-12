@@ -46,6 +46,7 @@ VALID_GO_PAYLOAD_SELECTIONS = {
     "module",
     "module_override",
     "full_bundle_disabled",
+    "full_bundle_importpath_miss",
     "full_bundle_no_match",
 }
 VALID_GO_PAYLOAD_SELECTIONS_TEXT = ", ".join(sorted(VALID_GO_PAYLOAD_SELECTIONS))
@@ -53,6 +54,7 @@ DEFAULT_ALLOWED_GO_PAYLOAD_SELECTIONS = {
     "module",
     "module_override",
     "full_bundle_disabled",
+    "full_bundle_importpath_miss",
 }
 DOCTOR_EXECROOT_ENV = "DD_TEST_OPTIMIZATION_DOCTOR_EXECROOT"
 VALID_FRESHNESS_MODES = {"auto", "required", "optional", "disabled"}
@@ -2260,6 +2262,10 @@ def _validate_outputs(
         for metadata_file in metadata:
             doc = _load_json(metadata_file)
             selection = doc.get("bazel.go.payload_selection")
+            if selection == "full_bundle_importpath_miss":
+                ip, root = doc.get("bazel.go.importpath"), doc.get("bazel.go.runtime_module_path")
+                if not (isinstance(ip, str) and isinstance(root, str) and root and (ip == root or ip.startswith(root + "/"))):
+                    _fail(f"{metadata_file} reports full_bundle_importpath_miss without a canonical Go module boundary")
             if selection is not None and selection not in VALID_GO_PAYLOAD_SELECTIONS:
                 _fail(
                     f"{metadata_file} has unsupported bazel.go.payload_selection={selection!r}; "

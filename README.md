@@ -2053,14 +2053,22 @@ dd_topt_go_test(
 )
 ```
 
-When synchronized metadata exposes module groups, explicit `importpath` and
-`module_label_override` selections fail analysis if their group is absent. If
-no module groups exist, or inferred/derived selection misses, the selector uses
-the canonical full bundle. Target metadata reports `full_bundle_disabled` when
-no module groups exist and `full_bundle_no_match` when groups exist but
-inferred/derived selection misses. The doctor rejects the latter by default;
-only repositories that intentionally allow this generic fallback should set
-`forbid_full_bundle_no_match = False` on the doctor target.
+When a package is absent from a populated backend catalog, the Go selector may
+use the full bundle for the selected service if its importpath equals the
+configured Go module path or starts with that path followed by `/`. This lets
+new packages run before they appear in the catalog. Metadata reports
+`full_bundle_importpath_miss` and `bazel.go.runtime_module_path`; the doctor
+accepts this state after checking that boundary. For example,
+`example.com/app/new` belongs to `example.com/app`, while
+`example.com/application` does not.
+
+With per-module selection enabled and a populated catalog, an absent
+`module_label_override` still fails analysis. An explicit importpath
+miss without a proven boundary also fails. Inferred or label-derived misses
+without that proof retain `full_bundle_no_match`, which the doctor rejects by
+default. Empty catalogs retain `full_bundle_disabled`. Keep that default
+protection enabled; an explicit doctor allowlist must include
+`full_bundle_importpath_miss` if the consumer wants to permit it.
 
 ### Multi-service usage
 
