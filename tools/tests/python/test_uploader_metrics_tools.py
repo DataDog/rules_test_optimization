@@ -81,6 +81,53 @@ class PhaseRecorderTests(unittest.TestCase):
 
 
 class ProgressTests(unittest.TestCase):
+    def test_active_requests_and_retries_are_counted_before_the_source_finishes(self) -> None:
+        from io import StringIO
+        from queue import Queue
+        import threading
+        from unittest import mock
+        from uploader_py.logging_utils import configure_logging
+        from uploader_py.models import FileResult, FileStatus
+        from uploader_py.transport import HttpTransport
+        from uploader_py.worker_pool import run_file_workers
+        from test_uploader_transport_tools import _Response
+        from test_uploader_worker_pool_tools import _tasks
+
+        transport = HttpTransport(max_attempts=2, retry_delay=0, sleeper=lambda _: None)
+        attempts = Queue()
+        statuses = iter((503, 202, 202))
+        observed, snapshots = [], []
+
+        def open_request(*_args, **_kwargs):
+            proceed = threading.Event()
+            attempts.put(proceed)
+            if not proceed.wait(5):
+                raise AssertionError("progress observer did not release the request")
+            return _Response(status=next(statuses))
+
+        def report(_stop, _logger, snapshot, _total):
+            snapshots.append(snapshot)
+            for _ in range(3):
+                proceed = attempts.get(timeout=5)
+                observed.append(snapshot())
+                proceed.set()
+
+        def process(task, _runtime, current_transport):
+            outcomes = [current_transport.post_json("https://example.test/upload", {}, b"{}")
+                for _ in range(2)]
+            return FileResult(task.task_id, task.display_path, task.payload_type,
+                FileStatus.SUCCEEDED, requests_attempted=sum(r.attempts for r in outcomes))
+
+        transport._opener = mock.Mock()
+        transport._opener.open.side_effect = open_request
+        with mock.patch("uploader_py.worker_pool._report_progress", side_effect=report):
+            run_file_workers(_tasks(1), workers=1, runtime=object(),
+                transport_factory=lambda: transport, process_file=process,
+                logger=configure_logging(debug=False, stream=StringIO()))
+        self.assertEqual([(0, 1, 1), (0, 1, 2), (0, 1, 3)], observed)
+        self.assertEqual((1, 0, 3), snapshots[0]())
+        self.assertIsNone(transport._attempt_callback)
+
     def test_progress_uses_aggregate_counts_and_stops_without_sleep(self) -> None:
         from io import StringIO
         from unittest import mock

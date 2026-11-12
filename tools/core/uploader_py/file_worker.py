@@ -194,7 +194,10 @@ def process_file(
         )
     try:
         with measurements.phase("file_pipeline"):
-            result = _process_file_with_context(task, runtime, transport)
+            try:
+                result = _process_file_with_context(task, runtime, transport)
+            except Exception as exc:
+                result = _failed(task, "unhandled_worker_exception", type(exc).__name__)
         return replace(result, phase_times=measurements.snapshot(), source_bytes=source_bytes,
                        prepared_body_bytes=dict(measurements.byte_counts()).get("prepared_body_bytes", 0))
     finally:

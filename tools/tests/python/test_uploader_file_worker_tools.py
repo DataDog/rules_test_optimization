@@ -130,6 +130,26 @@ def _large_test_payload(*markers: str) -> str:
 
 
 class FileWorkerTests(unittest.TestCase):
+    def test_escaping_parse_error_keeps_failed_source_measurements(self) -> None:
+        import itertools
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "nested.json"
+            original = b"[" * 2000 + b"0" + b"]" * 2000
+            source.write_bytes(original)
+            wall, cpu = itertools.count(), itertools.count(step=0.5)
+            # Python's JSON decoder has different nesting limits by version;
+            # force the escaping parser failure while retaining real file I/O.
+            with patch("uploader_py.file_worker.strict_json_loads", side_effect=RecursionError):
+                result = process_file(_test_task(source), _runtime(root, dry_run=True,
+                    clock=lambda: next(wall), cpu_clock=lambda: next(cpu)), _FakeTransport())
+            self.assertEqual(FileStatus.FAILED, result.status)
+            self.assertEqual("unhandled_worker_exception", result.failure_code)
+            self.assertEqual(len(original), result.source_bytes)
+            self.assertEqual({"file_pipeline", "read_parse"}, {p[0] for p in result.phase_times})
+            self.assertTrue(all(wall > 0 and cpu > 0 for _, wall, cpu in result.phase_times))
+            self.assertEqual(original, source.read_bytes())
+
     def test_complete_pipeline_has_owned_phase_and_byte_measurements(self) -> None:
         import itertools
         with tempfile.TemporaryDirectory() as tmp:

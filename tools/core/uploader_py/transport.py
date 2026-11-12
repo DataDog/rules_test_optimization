@@ -514,6 +514,7 @@ class HttpTransport:
         self._ssl_context = ssl_context or ssl.create_default_context()
         self._logger = logger
         self._log_context = ""
+        self._attempt_callback: Callable[[], None] | None = None
         proxies, no_proxy = _proxy_configuration(proxy_environment)
         handlers = (
             _SnapshotProxyHandler(proxies, no_proxy),
@@ -526,6 +527,10 @@ class HttpTransport:
     def set_measurements(self, measurements: PhaseRecorder | None) -> None:
         """Attach the current file owner's recorder; never share it across workers."""
         self._measurements = measurements
+
+    def set_attempt_callback(self, callback: Callable[[], None] | None) -> None:
+        """Report each actual attempt to the owning pool before HTTP starts."""
+        self._attempt_callback = callback
 
     def _measure(self, name: str):
         measurements = getattr(self, "_measurements", None)
@@ -630,6 +635,8 @@ class HttpTransport:
                     method="POST",
                 )
                 try:
+                    if self._attempt_callback is not None:
+                        self._attempt_callback()
                     response = self._opener.open(
                         http_request,
                         timeout=self.request_timeout,

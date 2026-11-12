@@ -100,8 +100,17 @@ def run_file_workers(
     completed_sources = 0
     attempted_requests = 0
 
+    def request_started() -> None:
+        nonlocal attempted_requests
+        with activity_lock:
+            attempted_requests += 1
+
     def worker_loop(transport: TransportType) -> None:
         nonlocal active_workers, peak_active_workers, completed_sources, attempted_requests
+        set_attempt_callback = getattr(transport, "set_attempt_callback", None)
+        live_attempts = callable(set_attempt_callback)
+        if live_attempts:
+            set_attempt_callback(request_started)
         if logger is not None:
             logger.debug("worker=%s started", threading.current_thread().name)
         while True:
@@ -166,7 +175,8 @@ def run_file_workers(
                 result_queue.put(result)
                 with activity_lock:
                     completed_sources += 1
-                    attempted_requests += result.requests_attempted
+                    if not live_attempts:
+                        attempted_requests += result.requests_attempted
                 if logger is not None:
                     logger.debug(
                         "task=%s type=%s file=%s worker=%s completed status=%s "
@@ -283,6 +293,10 @@ def run_file_workers(
         if progress_thread is not None and progress_thread.ident is not None:
             progress_entered.wait()
             progress_thread.join()
+        for transport in worker_transports:
+            set_attempt_callback = getattr(transport, "set_attempt_callback", None)
+            if callable(set_attempt_callback):
+                set_attempt_callback(None)
 
     return _collect_run(
         planned_tasks,
