@@ -1349,6 +1349,9 @@ Optional tooling:
 See the [parallel Python uploader](docs/Uploader_Reference.md#parallel-python-uploader-default)
 for its shared cross-platform behavior. Set `use_python_uploader = False` only
 for temporary rollback to the legacy Bash or PowerShell implementation.
+The Python uploader also supports [opt-in persistent HTTP connections](docs/Uploader_Reference.md#opt-in-persistent-http-connections).
+Set `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE=1` to compare it with the default
+transport; `0` restores the default without changing the target.
 Compatible small test sources can use [opt-in test batching](docs/Uploader_Reference.md#opt-in-test-batching),
 which keeps each process's runtime ID on its events and retains one original
 global ID as the required fallback. Prepared batch buffers are bounded; sources

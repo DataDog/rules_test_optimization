@@ -12,7 +12,7 @@ Per-worker transports provide concurrency without shared connection or retry sta
 from __future__ import annotations
 
 import base64
-from contextlib import closing
+from contextlib import contextmanager
 from contextlib import nullcontext
 from dataclasses import dataclass
 from email.utils import parsedate_to_datetime
@@ -140,28 +140,115 @@ class _RequestTimeoutHTTPSConnection(http.client.HTTPSConnection):
             self.sock.settimeout(self._request_timeout)
 
 
+class _PersistentResponse(http.client.HTTPResponse):
+    """Retain the distinction between chunk-trailer completion and tolerated EOF."""
+
+    trailers_complete = False
+
+    def _read_and_discard_trailer(self) -> None:
+        # HTTPResponse accepts EOF here without raising. Preserve that response
+        # policy, but do not return the dead socket to the worker's idle slot.
+        while True:
+            line = self.fp.readline(http.client._MAXLINE + 1)
+            if len(line) > http.client._MAXLINE:
+                raise http.client.LineTooLong("trailer line")
+            if line in (b"\r\n", b"\n"):
+                self.trailers_complete = True
+                return
+            if not line:
+                return
+
+
+class _PersistentConnection:
+    """Keep at most one socket, owned by one worker and one transport route.
+
+    urllib's default handler explicitly closes every socket. Keep its proxy
+    request rewriting and response processors, but own the HTTPConnection here.
+    Failed requests are never replayed here: the existing attempt loop decides.
+    """
+
+    def __init__(self) -> None:
+        self._key = None
+        self._connection = None
+
+    def close(self) -> None:
+        connection, self._connection = self._connection, None
+        self._key = None
+        if connection is not None:
+            connection.close()
+
+    def open(self, connection_type, request: Request, **kwargs):
+        headers = dict(request.unredirected_hdrs)
+        headers.update({key: value for key, value in request.headers.items() if key not in headers})
+        headers = {key.title(): value for key, value in headers.items()}
+        # Include the destination as well as the proxy/tunnel, so a connection
+        # never crosses origins or proxy identities. The TLS context is fixed
+        # for the owning transport.
+        key = (request.type, request.host, request._tunnel_host,
+            parse_http_url(request.full_url).netloc, headers.get("Proxy-Authorization"))
+        if self._key != key:
+            self.close()
+        if self._connection is None:
+            self._connection = connection_type(request.host, timeout=request.timeout, **kwargs)
+            self._connection.response_class = _PersistentResponse
+            self._key = key
+            if request._tunnel_host:
+                tunnel_headers = {}
+                authorization = headers.pop("Proxy-Authorization", None)
+                if authorization is not None:
+                    tunnel_headers["Proxy-Authorization"] = authorization
+                self._connection.set_tunnel(request._tunnel_host, headers=tunnel_headers)
+        elif request._tunnel_host:
+            # Proxy credentials belong to CONNECT, never to the origin.
+            headers.pop("Proxy-Authorization", None)
+        try:
+            self._connection.request(request.get_method(), request.selector, request.data, headers,
+                encode_chunked=request.has_header("Transfer-encoding"))
+            response = self._connection.getresponse()
+        except OSError as exc:
+            self.close()
+            raise URLError(exc) from exc
+        except BaseException:
+            self.close()
+            raise
+        response.url = request.get_full_url()
+        response.msg = response.reason
+        return response
+
+    def release(self, response) -> None:
+        # Never drain an arbitrarily large response merely to keep its socket.
+        # Only a completely consumed, reusable response can return to idle.
+        framing_complete = response.length == 0 or response.chunked and response.trailers_complete
+        if response.will_close or not response.isclosed() or not framing_complete:
+            self.close()
+
+
 class _RequestTimeoutHTTPHandler(HTTPHandler):
-    def __init__(self, connect_timeout: float) -> None:
+    def __init__(self, connect_timeout: float, persistent: _PersistentConnection | None = None) -> None:
         super().__init__()
+        self._persistent = persistent
         self._connection = partial(
             _RequestTimeoutHTTPConnection,
             connect_timeout=connect_timeout,
         )
 
     def http_open(self, request: Request):
-        return self.do_open(self._connection, request)
+        open_connection = self._persistent.open if self._persistent is not None else self.do_open
+        return open_connection(self._connection, request)
 
 
 class _RequestTimeoutHTTPSHandler(HTTPSHandler):
-    def __init__(self, connect_timeout: float, context: ssl.SSLContext) -> None:
+    def __init__(self, connect_timeout: float, context: ssl.SSLContext, persistent: _PersistentConnection | None = None) -> None:
         super().__init__(context=context)
+        self._persistent = persistent
         self._connection = partial(
             _RequestTimeoutHTTPSConnection,
             connect_timeout=connect_timeout,
         )
 
     def https_open(self, request: Request):
-        return self.do_open(self._connection, request, context=self._context)
+        open_connection = self._persistent.open if self._persistent is not None else self.do_open
+        return open_connection(self._connection, request, context=self._context)
 
 
 class _NoRedirectHandler(HTTPRedirectHandler):
@@ -496,6 +583,7 @@ class HttpTransport:
         clock: Callable[[], float] = time.time,
         ssl_context: ssl.SSLContext | None = None,
         logger: logging.Logger | None = None,
+        keep_alive: bool = False,
     ) -> None:
         if connect_timeout <= 0 or request_timeout <= 0:
             raise ValueError("HTTP timeouts must be positive")
@@ -515,14 +603,33 @@ class HttpTransport:
         self._logger = logger
         self._log_context = ""
         self._attempt_callback: Callable[[], None] | None = None
+        self._persistent = _PersistentConnection() if keep_alive else None
         proxies, no_proxy = _proxy_configuration(proxy_environment)
         handlers = (
             _SnapshotProxyHandler(proxies, no_proxy),
-            _RequestTimeoutHTTPHandler(connect_timeout),
-            _RequestTimeoutHTTPSHandler(connect_timeout, self._ssl_context),
+            _RequestTimeoutHTTPHandler(connect_timeout, self._persistent),
+            _RequestTimeoutHTTPSHandler(connect_timeout, self._ssl_context, self._persistent),
             _NoRedirectHandler(),
         )
         self._opener = build_opener(*handlers)
+
+    def close(self) -> None:
+        """Release this worker's idle connection; safe to call more than once."""
+        if self._persistent is not None:
+            self._persistent.close()
+
+    @contextmanager
+    def _response(self, response):
+        try:
+            yield response
+        except BaseException:
+            self.close()
+            raise
+        else:
+            if self._persistent is not None:
+                self._persistent.release(response)
+        finally:
+            response.close()
 
     def set_measurements(self, measurements: PhaseRecorder | None) -> None:
         """Attach the current file owner's recorder; never share it across workers."""
@@ -643,7 +750,7 @@ class HttpTransport:
                     )
                 except HTTPError as exc:
                     response = exc
-                with closing(response):
+                with self._response(response):
                     status_code = int(response.status)
                     response_excerpt, excerpt_truncated = _bounded_response(
                         response,

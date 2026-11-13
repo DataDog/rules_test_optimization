@@ -61,6 +61,7 @@ class CoordinatorSettings:
     invocation_cwd: Path | None = None
     launcher_directory: Path | None = None
     batch_test_payloads: bool = False
+    http_keep_alive: bool = False
 
     @classmethod
     def from_config(cls, config: UploaderConfig) -> "CoordinatorSettings":
@@ -81,6 +82,7 @@ class CoordinatorSettings:
             invocation_cwd=config.invocation_cwd,
             launcher_directory=config.launcher_directory,
             batch_test_payloads=config.batch_test_payloads,
+            http_keep_alive=config.http_keep_alive,
         )
 
 
@@ -225,6 +227,7 @@ def run_discovered_tasks(
             lambda: HttpTransport(
                 proxy_environment=settings.proxy_environment,
                 logger=logger,
+                keep_alive=settings.http_keep_alive,
             )
         )
         try:

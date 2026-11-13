@@ -79,6 +79,7 @@ class RuleConfig:
     expected_targets_file_short_path: str = ""
     runtime_selection: bool = False
     batch_test_payloads: bool = False
+    http_keep_alive: bool = False
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,7 @@ class UploaderConfig:
     wrapper_temp_root: Path | None = None
     retention_status_file: Path | None = None
     batch_test_payloads: bool = False
+    http_keep_alive: bool = False
 
     @property
     def agentless(self) -> bool:
@@ -241,6 +243,10 @@ def parse_uploader_config(
     if value not in {"", "1", "0", "true", "false", "yes", "no"}:
         raise ConfigError("DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS must be true or false")
     batch_test_payloads = value in {"1", "true", "yes"} if value else rule.batch_test_payloads
+    value = env.get("DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE", "").strip().lower()
+    if value not in {"", "1", "0", "true", "false", "yes", "no"}:
+        raise ConfigError("DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE must be true or false")
+    http_keep_alive = value in {"1", "true", "yes"} if value else rule.http_keep_alive
 
     freshness_source_text = text_option(
         args.freshness_source,
@@ -378,6 +384,7 @@ def parse_uploader_config(
         ci=env.get("CI", "").strip().lower() not in {"", "0", "false", "no"},
         retained_outputs_dir=retained_outputs_dir,
         batch_test_payloads=batch_test_payloads,
+        http_keep_alive=http_keep_alive,
         wrapper_temp_root=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT"]
             if env.get("DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT") else None),
         retention_status_file=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE"]
@@ -445,6 +452,7 @@ def load_rule_config(path: Path) -> RuleConfig:
         ),
         runtime_selection=_json_boolean(raw, "runtime_selection", False),
         batch_test_payloads=_json_boolean(raw, "batch_test_payloads", False),
+        http_keep_alive=_json_boolean(raw, "http_keep_alive", False),
     )
 
 
