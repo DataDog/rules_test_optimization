@@ -2125,7 +2125,8 @@ function Convert-ToMutableObject($Value) {
     foreach ($item in $Value) {
       $arr += ,(Convert-ToMutableObject $item)
     }
-    return $arr
+    # PowerShell otherwise enumerates arrays on return, collapsing [] and [x].
+    return ,$arr
   }
   return $Value
 }
@@ -3722,6 +3723,51 @@ function Merge-FlatMetadataIntoEvent($EventObj, $MetadataObj, [string[]]$Skipped
   }
 }
 
+function Get-ReportingService($ContextObject, $MetadataObject) {
+  $metadata = Ensure-Hashtable $MetadataObject
+  if (@($metadata.Keys) -cnotcontains 'bazel.test_optimization.service_name') { return '' }
+  $context = Ensure-Hashtable $ContextObject
+  foreach ($keys in @(
+    @('bazel.test_optimization.repo_name', 'topt.sync.repository_name'),
+    @('bazel.test_optimization.service_name', 'service.name'),
+    @('bazel.test_optimization.runtime_name', 'runtime.name')
+  )) {
+    $value = $metadata[$keys[0]]
+    $expected = $context[$keys[1]]
+    if (($value -isnot [string]) -or $value.Length -eq 0 -or
+        ($expected -isnot [string]) -or $expected.Length -eq 0 -or
+        -not [System.StringComparer]::Ordinal.Equals($value, $expected)) {
+      throw "reporting service identity mismatch: $($keys[0])"
+    }
+  }
+  return [string]$context['service.name']
+}
+
+function Test-CiReportingEvent($EventObject) {
+  $kind = Get-MapValue $EventObject 'type'
+  return (@('test', 'test_suite_end', 'test_module_end', 'test_session_end') -ccontains $kind) -or (
+    ($null -eq $kind -or $kind -ceq 'span') -and (Get-MapValue (Get-MapValue $EventObject 'content') 'type') -ceq 'test'
+  )
+}
+
+function Get-PayloadReportingService([string]$FilePath) {
+  $metadataPath = Get-BazelTargetMetadataPath $FilePath
+  if ([string]::IsNullOrEmpty($metadataPath)) { return '' }
+  $metadata = Read-JsonObjectFile $metadataPath ""
+  $contextInfo = Get-ContextInfo (Resolve-ContextJsonForPayload $FilePath)
+  $context = if ($contextInfo) { $contextInfo.Object } else { $null }
+  return Get-ReportingService $context $metadata
+}
+
+function Get-TelemetryReportingService([string]$FilePath, $PayloadObject) {
+  $service = Get-PayloadReportingService $FilePath
+  if ($service -and (($PayloadObject -isnot [System.Collections.IDictionary]) -or
+      ($PayloadObject['application'] -isnot [System.Collections.IDictionary]))) {
+    throw 'telemetry application identity is missing'
+  }
+  return $service
+}
+
 function Merge-With-Context([string]$infile, [string]$outfile) {
   try {
     $payload = Get-Content -LiteralPath $infile -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
@@ -3792,6 +3838,8 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
     }
   }
 
+  $reportingService = Get-ReportingService $selectedContextObj $bazelMetadataObj
+
   # Copy context tags into every captured test event, then inject CODEOWNERS.
   # Go test payloads can encode CI Visibility test data as span events, and
   # those events still need Git and Bazel sidecar tags before upload.
@@ -3802,6 +3850,9 @@ function Merge-With-Context([string]$infile, [string]$outfile) {
       $evt.content = Ensure-Hashtable $evt.content
       $evt.content.meta = Ensure-Hashtable $evt.content.meta
       $evt.content.metrics = Ensure-Hashtable $evt.content.metrics
+      if ($reportingService -and (Test-CiReportingEvent $evt)) {
+        $evt.content['service'] = $reportingService
+      }
 
       if ($selectedContextObj) {
         # Keep API key fingerprint out of uploaded event content.
@@ -4610,6 +4661,14 @@ function New-TelemetryAugmentationPlan {
         if (-not $payload) { continue }
         $application = Ensure-Hashtable (Get-MapValue $payload 'application')
         $serviceName = Get-MapValue $application 'service_name'
+        try {
+            $reportingService = Get-TelemetryReportingService $file.FullName $payload
+            if ($reportingService) { $serviceName = $reportingService }
+        } catch {
+            # The upload loop reports and retains this invalid source.
+            Log "warning: skipped telemetry facts anchor: $($_.Exception.Message)"
+            continue
+        }
         $languageName = Get-MapValue $application 'language_name'
         $apiVersion = Get-MapValue $payload 'api_version'
         $requestType = Get-MapValue $payload 'request_type'
@@ -4884,7 +4943,13 @@ function Send-PostRawJson([string]$url, [hashtable]$headers, [string]$file) {
 
 function Upload-SingleTest([string]$FilePath) {
     $body = Join-Path $script:TmpPayloadDir ("test_payload_" + [System.Guid]::NewGuid().ToString("N") + ".json")
-    Merge-With-Context $FilePath $body
+    try {
+        Merge-With-Context $FilePath $body
+    } catch {
+        Log "error: test payload enrichment failed: $($_.Exception.Message)"
+        Remove-Item -LiteralPath $body -Force -ErrorAction SilentlyContinue
+        return [bool]$false
+    }
     Validate-Payload $body
     Dbg "Upload-SingleTest: posting '$FilePath' (body '$body')"
     if ($script:DebugMode) {
@@ -4979,7 +5044,12 @@ function Test-EnrichedPayloadTags([string]$BodyPath, [string]$SourcePath) {
 function DryRun-SingleTest([string]$FilePath) {
     $body = Join-Path $script:TmpPayloadDir ("test_payload_dry_run_" + [System.Guid]::NewGuid().ToString("N") + ".json")
     try {
-        Merge-With-Context $FilePath $body
+        try {
+            Merge-With-Context $FilePath $body
+        } catch {
+            Log "error: test payload enrichment failed: $($_.Exception.Message)"
+            return [bool]$false
+        }
         Validate-Payload $body
         $null = Get-CommonHeaders $body
         if ($script:DebugMode) {
@@ -5114,19 +5184,34 @@ function Upload-SingleTelemetry([string]$DisplayPath, [string]$BodyPath = $null)
     $uploadBodyPath = $BodyPath
     $providerTempBody = $null
     try {
+        try {
+            $payload = Read-JsonObjectFile $BodyPath ""
+            $reportingService = Get-TelemetryReportingService $DisplayPath $payload
+        } catch {
+            Log "error: telemetry enrichment failed: $($_.Exception.Message)"
+            return [bool]$false
+        }
         $providerName = Get-ContextCiProviderName
-        if (-not [string]::IsNullOrWhiteSpace($providerName)) {
+        if ($reportingService -or -not [string]::IsNullOrWhiteSpace($providerName)) {
             # Keep tracer payloads on disk immutable; only rewrite the outbound
             # body used for this upload attempt.
-            $payload = Read-JsonObjectFile $BodyPath ""
             if ($payload) {
+                if ($reportingService) {
+                    $application = Ensure-Hashtable (Get-MapValue $payload 'application')
+                    $application['service_name'] = $reportingService
+                    $payload['application'] = $application
+                }
                 Update-TelemetryProviderTags $payload $providerName
                 $providerTempBody = Write-TelemetryTempBody $payload
                 if (-not [string]::IsNullOrWhiteSpace($providerTempBody) -and (Test-Path -LiteralPath $providerTempBody -PathType Leaf)) {
                     $uploadBodyPath = $providerTempBody
                 } else {
-                    Log "warning: failed to create telemetry provider rewrite body for '$DisplayPath'"
+                    Log "error: failed to create telemetry rewrite body for '$DisplayPath'"
+                    return [bool]$false
                 }
+            } elseif ($reportingService) {
+                Log "error: invalid telemetry payload for '$DisplayPath'"
+                return [bool]$false
             }
         }
 
@@ -5311,6 +5396,16 @@ function Upload-AllTelemetry {
                     Dbg "telemetry augmentation: using temporary outbound body '$bodyPath' for '$($f.FullName)'"
                 }
                 if ($script:DryRun) {
+                    try {
+                        $null = Get-TelemetryReportingService $f.FullName (Read-JsonObjectFile $bodyPath "")
+                    } catch {
+                        Log "error: telemetry enrichment failed: $($_.Exception.Message)"
+                        Mark-FreshOutputHandled $outputsDir.FullName
+                        $failed++
+                        $script:ReportTelemetryFailed++
+                        $script:UploadFailures++
+                        continue
+                    }
                     Log "dry-run kept telemetry payload: $($f.FullName)"
                     Mark-FreshOutputHandled $outputsDir.FullName
                     $total++
@@ -5344,6 +5439,15 @@ function Upload-AllTelemetry {
             }
             Dbg "telemetry augmentation: uploading synthetic body '$($entry.BodyPath)' for anchor '$($entry.AnchorPath)'"
             if ($script:DryRun) {
+                try {
+                    $null = Get-TelemetryReportingService $entry.AnchorPath (Read-JsonObjectFile $entry.BodyPath "")
+                } catch {
+                    Log "error: telemetry enrichment failed: $($_.Exception.Message)"
+                    $failed++
+                    $script:ReportTelemetryFailed++
+                    $script:UploadFailures++
+                    continue
+                }
                 Log "dry-run validated synthetic telemetry augmentation for: $($entry.AnchorPath)"
                 $total++
                 $script:ReportTelemetryProcessed++

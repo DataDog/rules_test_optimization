@@ -114,6 +114,7 @@ def _prepare_worker_inputs(
         discovery.tasks,
         resources.telemetry_facts_paths,
         primary_context=resources.primary_context,
+        context_plan=resources.context_plan,
     )
     fingerprint = check_api_key_fingerprint(
         resources.primary_context,

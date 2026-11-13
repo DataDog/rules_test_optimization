@@ -230,6 +230,10 @@ Go wrapper, treat it as a consumer-specific integration:
 - Preserve repository-local wrapper policy such as tags, scheduling, Docker
   defaults, platform constraints, and flaky-test behavior in the local helper
   layer.
+- Preserve the caller's `DD_SERVICE`, including an unset value, inherited
+  environment and `select()`. Do not inject the reporting service into the test.
+  The uploader validates it against the target sidecar and sync context; legacy
+  Bash rollback requires `jq` for this enrichment.
 - Validate with fresh `bazel-testlogs/<target>/test.outputs/`, inspect
   `bazel_target_metadata.json` for
   `bazel.go.instrumentation.backend = "ddtest"` on Go targets, then run the

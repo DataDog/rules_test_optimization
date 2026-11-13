@@ -18,6 +18,8 @@ import time
 from typing import Any, Callable, Iterable, Mapping
 
 from .json_utils import strict_json_dumps, strict_json_loads
+from .discovery import read_bazel_metadata
+from .enrichment import ContextPlan, ReportingServiceError, payload_repo_key, reporting_service
 from .models import FileTask, PayloadType
 
 
@@ -78,11 +80,12 @@ def build_telemetry_plan(
     facts_paths: Iterable[Path],
     *,
     primary_context: Mapping[str, Any] | None = None,
+    context_plan: ContextPlan | None = None,
     clock: Callable[[], float] = time.time,
 ) -> TelemetryPlan:
     """Match rule facts to tracer streams without materializing outbound files."""
     warnings: list[str] = []
-    sources = _load_sources(tasks, warnings)
+    sources = _load_sources(tasks, warnings, context_plan)
     provider_suffix = _provider_suffix(primary_context)
     if not sources:
         return TelemetryPlan(
@@ -218,7 +221,7 @@ def build_telemetry_plan(
 
 
 def _load_sources(
-    tasks: Iterable[FileTask], warnings: list[str]
+    tasks: Iterable[FileTask], warnings: list[str], context_plan: ContextPlan | None
 ) -> tuple[_TelemetrySource, ...]:
     sources: list[_TelemetrySource] = []
     telemetry_tasks = sorted(
@@ -234,6 +237,16 @@ def _load_sources(
         if not isinstance(application, dict):
             continue
         service_name = _string(application.get("service_name"))
+        if context_plan is not None:
+            metadata, _warning = read_bazel_metadata(task.test_outputs_dir)
+            try:
+                selection = context_plan.select(payload_repo_key(metadata))
+                service_name = reporting_service(selection, metadata) or service_name
+            except ReportingServiceError:
+                # The worker reports the invalid source and leaves it intact;
+                # it cannot receive the facts belonging to a valid stream.
+                warnings.append("telemetry_reporting_service_invalid")
+                continue
         language_name = _string(application.get("language_name"))
         api_version = _string(payload.get("api_version"))
         request_type = _string(payload.get("request_type"))

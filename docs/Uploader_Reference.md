@@ -973,8 +973,9 @@ result.
   1. `DD_TEST_OPTIMIZATION_CONTEXT_JSON` when it points to a readable file
   2. if exactly one bundled context exists, use that context for every payload
   3. if multiple bundled contexts exist, read sibling `bazel_target_metadata.json`, take `bazel.test_optimization.repo_name`, and use the matching bundled context for that payload
-  4. if multiple bundled contexts exist and no match is found, skip only the `context.json` merge for that payload and continue uploading
-  5. if no bundled context resolves, upload without context enrichment
+  4. if no context matches, retain and reject sources that declare a reporting
+     service; older sources without that declaration keep the existing behavior
+     of skipping the context merge
 - When a `context.json` file is available, the uploader enriches each test
   payload by merging its keys into each event's `content.meta` or
   `content.metrics`, and it also normalizes top-level `metadata.*` runtime
@@ -983,12 +984,12 @@ result.
   JSON `null` therefore becomes the meta string `"null"` rather than being
   omitted.
 - Bazel sidecar metadata from `bazel_target_metadata.json` is merged separately.
-  If a multi-context payload has no repo match, those Bazel sidecar tags remain
-  and only the `context.json` merge is skipped.
-- If `context.json` is not present (or `jq` is unavailable on Unix), test
-  payloads are uploaded as-is.
-- `context.json` contains non-secret CI/Git/OS/runtime tags suitable for reuse
-  at test time.
+  For older sources without a reporting-service declaration, an unmatched
+  repository keeps those Bazel tags and skips only the `context.json` merge.
+- The legacy Bash uploader requires `jq`, including for small payloads. It exits
+  with a configuration error when `jq` is absent, before sending any payloads.
+- `context.json` contains non-secret CI/Git/OS/runtime tags for post-test
+  enrichment. Do not add it to Go test inputs merely to select a reporting service.
 - `DD_TEST_OPTIMIZATION_CONTEXT_JSON` is a runtime uploader override only. Do
   not pass it via `--repo_env`, do not treat it as sync-time configuration, and
   do not use it as the normal mixed-runtime wiring path.
@@ -1013,6 +1014,25 @@ result.
 - Matching uses GitHub-style glob semantics with "last matching rule wins".
 - CODEOWNERS enrichment is best-effort: parse/lookup failures and misses do not
   fail uploads; debug mode logs counters and skip reasons.
+
+### Reporting service and application environment
+
+When a target sidecar declares `bazel.test_optimization.service_name`, its
+repository, runtime and service must match the selected sync context. Python,
+Bash and PowerShell apply that context's service to `test`, `test_suite_end`,
+`test_module_end`, and `test_session_end` events. They also recognize legacy CI
+test spans by `content.type = "test"` with an absent or `span` event type.
+Application spans and unknown event kinds retain their original services.
+
+The same identity selects the target's Test Optimization telemetry service and
+the matching sync facts. Runtime IDs, sequence IDs, application spans and
+coverage correlations are preserved. A mismatch fails that source and retains
+it; other valid sources still process. Older sidecars without the service field
+retain their existing behavior.
+
+The Go macro no longer sets `DD_SERVICE`. Declare any environment the application
+test needs through `env` or `env_inherit`; this does not select a different sync
+repository. No change to ddtest's instrumentation or payload format is required.
 
 ### Manifest-driven aggregate contexts
 

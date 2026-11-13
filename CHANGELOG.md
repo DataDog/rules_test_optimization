@@ -17,6 +17,14 @@ versioning.
 
 ### Fixed
 
+- Go instrumentation preserves the test's `DD_SERVICE` environment. The uploader
+  assigns the CI hierarchy and target telemetry to the selected Test Optimization
+  service, validates its repository/runtime identity, and preserves application
+  span services. Tests relying on the former injected default must declare their
+  application environment explicitly.
+- The legacy Bash uploader now requires `jq` and rejects payloads when enrichment
+  fails. It no longer silently sends unenriched data. PowerShell preserves empty
+  and single-item JSON arrays when preparing outbound telemetry.
 - New Go packages can use their selected service's full metadata bundle when
   their importpath is inside the configured Go module. Invalid explicit
   overrides and unproven module misses remain errors.

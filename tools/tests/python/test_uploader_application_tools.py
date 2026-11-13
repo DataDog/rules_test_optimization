@@ -35,6 +35,7 @@ from uploader_py.endpoints import build_endpoints  # noqa: E402
 from uploader_py.freshness import FreshnessError  # noqa: E402
 from uploader_py.logging_utils import configure_logging  # noqa: E402
 from uploader_py.reporting import AggregateReport  # noqa: E402
+from uploader_py.transport import HttpResult  # noqa: E402
 
 
 def _write_payload(output: Path, kind: str, name: str, body: object) -> Path:
@@ -82,6 +83,69 @@ def _bep_test_result(
 
 
 class ApplicationTests(unittest.TestCase):
+    def test_reporting_service_keeps_telemetry_facts_with_each_target(self) -> None:
+        for invalid in ("none", "identity", "application", "application-array"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                arguments = ["--freshness-mode=disabled", "--workers=1"]
+                sources = []
+                for name in ("one", "two"):
+                    context_dir = root / ("repo-" + name)
+                    context_dir.mkdir()
+                    context_file = context_dir / "context.json"
+                    service = "tests-" + name
+                    context_file.write_text(json.dumps({"topt.sync.repository_name": "repo-" + name,
+                        "service.name": service, "runtime.name": "go"}))
+                    (context_dir / "telemetry_facts.json").write_text(json.dumps({"schema_version": 1,
+                        "service_name": service, "runtime_name": "go", "counts": [{"name": "metric-" + name, "value": 1}], "distributions": []}))
+                    arguments.append(f"--context-entry=repo-{name}={context_file}")
+                    arguments.append("--expected-target=//pkg:" + name)
+                    output = root / f"bazel-testlogs/pkg/{name}/test.outputs"
+                    source = _write_payload(output, "telemetry", "batch.json", {"api_version": "v2", "request_type": "message-batch",
+                        "runtime_id": "shared-runtime", "seq_id": 1, "application": {"service_name": "application-service",
+                            "language_name": "go", "tracer_version": "v1.15.0"}, "payload": []})
+                    if invalid.startswith("application") and name == "two":
+                        payload = json.loads(source.read_bytes())
+                        payload["application"] = [payload["application"]] if invalid == "application-array" else None
+                        source.write_text(json.dumps(payload))
+                    sources.append((source, source.read_bytes()))
+                    (output / "bazel_target_metadata.json").write_text(json.dumps({"bazel.target": "//pkg:" + name,
+                        "bazel.test_optimization.repo_name": "repo-" + name,
+                        "bazel.test_optimization.service_name": "wrong-service" if invalid == "identity" and name == "two" else service,
+                        "bazel.test_optimization.runtime_name": "go"}))
+                report_path = root / "report.json"
+                arguments.append(f"--report-json={report_path}")
+                config = self._config(root, dry_run=False, runtime_selection=True,
+                    expected_targets=("//pkg:one", "//pkg:two"), extra_arguments=tuple(arguments),
+                    extra_environment={"DD_API_KEY": "dummy", "DD_TEST_OPTIMIZATION_KEEP_PAYLOADS": "true"})
+                received = []
+
+                class Transport:
+                    def post_json(self, _url, _headers, body, **_kwargs):
+                        received.append(json.loads(Path(body).read_bytes()))
+                        return HttpResult(200, 1)
+
+                    def close(self):
+                        pass
+
+                rc = run_uploader(config, resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config), logger=configure_logging(debug=False, stream=StringIO()),
+                    stream=StringIO(), transport_factory=Transport)
+
+                self.assertEqual(int(invalid != "none"), rc, json.loads(report_path.read_text())["result"])
+                self.assertEqual(["tests-one"] if invalid != "none" else ["tests-one", "tests-two"],
+                    sorted(body["application"]["service_name"] for body in received))
+                for body in received:
+                    name = body["application"]["service_name"].split("-")[-1]
+                    self.assertEqual("shared-runtime", body["runtime_id"])
+                    self.assertEqual(1, body["seq_id"])
+                    self.assertEqual(["metric-" + name], [series["metric"] for message in body["payload"] for series in message["payload"]["series"]])
+                self.assertTrue(all(path.read_bytes() == original for path, original in sources))
+                if invalid != "none":
+                    report = json.loads(report_path.read_text())
+                    code = "reporting_service_invalid" if invalid == "identity" else "invalid_telemetry_metadata"
+                    self.assertEqual(1, report["failures"][code])
+
     def test_log_levels_preserve_payloads_selection_and_reports(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

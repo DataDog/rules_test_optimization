@@ -678,7 +678,7 @@ def _go_macro_single_service_wiring_test_impl(ctx):
     asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_AGENTLESS_ENABLED"))
     asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_AGENTLESS_URL"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
-    asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
@@ -733,7 +733,7 @@ def _go_macro_multi_service_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_multi_service_target_topt_bazel_metadata"))
     asserts.true(env, _has_fragment(captured.data_labels, "test_optimization_data"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
-    asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(
         env,
         "go_macro_multi_service_target_topt_bazel_metadata.json",
@@ -750,7 +750,7 @@ def _go_macro_dynamic_manifest_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_dynamic_manifest_target_topt_payloads"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":test_macro.bzl"))
     asserts.false(env, _has_fragment(captured.data_labels, "virtual_dynamic_repo_that_must_not_resolve"))
-    asserts.equals(env, "dynamic-go-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     return analysistest.end(env)
 
 def _go_macro_dynamic_manifest_payloads_test_impl(ctx):
@@ -769,7 +769,7 @@ def _go_macro_static_wiring_test_impl(ctx):
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_static_target_topt_payloads"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":go_macro_static_target_topt_bazel_metadata"))
     asserts.true(env, _has_label_suffix(captured.data_labels, ":.testoptimization/manifest.txt"))
-    asserts.equals(env, "static-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, ["dd-requires-docker", "manual"], captured.tags)
     return analysistest.end(env)
 
@@ -851,7 +851,7 @@ def _go_macro_env_none_wiring_test_impl(ctx):
     target = analysistest.target_under_test(env)
     captured = target[ToptGoMacroCaptureInfo]
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
-    asserts.equals(env, "go-service", captured.env.get("DD_SERVICE"))
+    asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
     asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(

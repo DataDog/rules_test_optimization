@@ -7944,11 +7944,13 @@ class RuntimeTemplateParityTests(unittest.TestCase):
         self.assertNotIn("$IsWindows", cleanup_block)
 
     def test_bash_runtime_guards_context_enrichment_failures(self) -> None:
-        """Validate bash runtime falls back when jq context enrichment fails."""
+        """Reject unenriched uploads when structural context enrichment fails."""
         bash_text = _runfile("tools/core/uploader_bash_runtime.sh.tpl").read_text(encoding="utf-8")
-        self.assertIn("if ! jq --slurpfile ctx", bash_text)
-        self.assertIn('log "warning: context enrichment failed for payload:', bash_text)
-        self.assertIn('cp "$infile" "$tmpfile"', bash_text)
+        enrichment = self._extract_text_block(bash_text, "enrich_with_context()", "# Emit basic startTime")
+        self.assertIn("if ! jq --slurpfile ctx", enrichment)
+        self.assertIn('log "error: context enrichment failed for payload:', enrichment)
+        self.assertIn("return 1", enrichment)
+        self.assertNotIn('cp "$infile" "$tmpfile"', enrichment)
 
     def test_uploader_rejects_raw_msgpack_test_payloads(self) -> None:
         """Validate test uploads keep the Bazel JSON enrichment contract."""

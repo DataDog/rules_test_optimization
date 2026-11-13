@@ -2216,6 +2216,10 @@ dbg_headers() {
 # Load context.json for enrichment
 JQ_AVAILABLE=0
 if command -v jq >/dev/null 2>&1; then JQ_AVAILABLE=1; fi
+if (( JQ_AVAILABLE == 0 )); then
+  log "error: the legacy Bash uploader requires jq for payload enrichment; install jq or use the default Python uploader" >&2
+  exit 2
+fi
 dbg "jq available: $JQ_AVAILABLE"
 if [[ -n "$PRIMARY_CONTEXT_JSON" ]]; then
   dbg "primary context.json available"
@@ -4073,15 +4077,55 @@ select_context_json_for_payload() {
 # Merge flat sidecar metadata into every captured test event. Go test
 # payloads can encode CI Visibility test data as span events, and those events
 # still need Git and Bazel tags before upload.
+reporting_service_for_payload() {
+  local infile="$1" ctx_file="${2:-}" metadata_file
+  metadata_file="$(find_bazel_target_metadata "$infile" 2>/dev/null || true)"
+  [[ -n "$metadata_file" && -f "$metadata_file" ]] || return 0
+  if [[ -z "$ctx_file" ]]; then
+    ctx_file="$(select_context_json_for_payload "$infile")"
+  fi
+  [[ -n "$ctx_file" && -f "$ctx_file" ]] || ctx_file=/dev/null
+  if ! jq -r --slurpfile ctx "$ctx_file" '
+    . as $target | ($ctx[0] // {}) as $context
+    | if type != "object" or (has("bazel.test_optimization.service_name") | not) then empty
+      elif all([
+        ["bazel.test_optimization.repo_name", "topt.sync.repository_name"],
+        ["bazel.test_optimization.service_name", "service.name"],
+        ["bazel.test_optimization.runtime_name", "runtime.name"]
+      ][]; . as $keys | ($target[$keys[0]] | type == "string" and length > 0)
+        and ($target[$keys[0]] == $context[$keys[1]]))
+      then $target["bazel.test_optimization.service_name"]
+      else error("reporting service identity mismatch") end
+  ' "$metadata_file" 2>/dev/null; then
+    log "error: reporting service identity mismatch: check the target sidecar and selected sync context" >&2
+    return 1
+  fi
+}
+
+validate_telemetry_reporting_identity() {
+  local source="$1" body="${2:-$1}" service
+  service="$(reporting_service_for_payload "$source")" || return 1
+  if [[ -n "$service" ]] && ! jq -e '.application | type == "object"' "$body" >/dev/null 2>&1; then
+    log "error: telemetry application identity is missing" >&2
+    return 1
+  fi
+  printf '%s\n' "$service"
+}
+
 merge_flat_metadata_file() {
   local infile="$1"
   local outfile="$2"
   local metadata_file="$3"
-  if ! jq --slurpfile extra "$metadata_file" '
+  local reporting_service="${4:-}"
+  if ! jq --slurpfile extra "$metadata_file" --arg reporting_service "$reporting_service" '
     def extra_obj: ($extra[0] | if type=="object" then . else {} end);
     (if .events then
         .events |= map(
           .content = (.content // {})
+          | if $reporting_service != "" and (
+              .type == "test" or .type == "test_suite_end" or .type == "test_module_end" or .type == "test_session_end"
+              or ((.type == null or .type == "span") and .content.type == "test")
+            ) then .content.service = $reporting_service else . end
           | .content.meta = (if (.content.meta|type) == "object" then .content.meta else {} end)
           | .content.metrics = (if (.content.metrics|type) == "object" then .content.metrics else {} end)
           | reduce (extra_obj | to_entries[]) as $e (.;
@@ -4107,12 +4151,9 @@ enrich_with_context() {
   local infile="$1"; local tmpfile="$2"
   local selected_ctx_file=""
   selected_ctx_file="$(select_context_json_for_payload "$infile")"
+  local reporting_service
+  reporting_service="$(reporting_service_for_payload "$infile" "$selected_ctx_file")" || return 1
   dbg "enrich_with_context: jq=$JQ_AVAILABLE"
-  if (( JQ_AVAILABLE == 0 )); then
-    # No jq means no structural merge; forward original payload unchanged.
-    cp "$infile" "$tmpfile"
-    return 0
-  fi
   local ctx_file="$selected_ctx_file"
   local cleanup_ctx=""
   if [[ -z "$ctx_file" || ! -f "$ctx_file" ]]; then
@@ -4120,8 +4161,8 @@ enrich_with_context() {
     # normalizes metadata shape without injecting context tags.
     ctx_file="$(mktemp "$TMP_PAYLOAD_DIR/context.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$ctx_file" ]]; then
-      cp "$infile" "$tmpfile"
-      return 0
+      log "error: failed to create temporary enrichment context" >&2
+      return 1
     fi
     echo '{}' > "$ctx_file"
     cleanup_ctx=1
@@ -4170,17 +4211,17 @@ enrich_with_context() {
       else .
       end)
   ' "$infile" > "$tmpfile"; then
-    # Keep uploads resilient when enrichment input is malformed or jq fails.
-    log "warning: context enrichment failed for payload: $infile"
-    cp "$infile" "$tmpfile"
+    log "error: context enrichment failed for payload: $infile" >&2
+    return 1
   fi
 
   local bazel_metadata_file=""
   bazel_metadata_file="$(find_bazel_target_metadata "$infile" 2>/dev/null || true)"
   if [[ -n "$bazel_metadata_file" && -f "$bazel_metadata_file" ]]; then
     local sidecar_tmp="$tmpfile.bazel"
-    if ! merge_flat_metadata_file "$tmpfile" "$sidecar_tmp" "$bazel_metadata_file"; then
-      log "warning: bazel target metadata enrichment failed for payload: $infile"
+    if ! merge_flat_metadata_file "$tmpfile" "$sidecar_tmp" "$bazel_metadata_file" "$reporting_service"; then
+      log "error: bazel target metadata enrichment failed for payload: $infile" >&2
+      return 1
     fi
     mv "$sidecar_tmp" "$tmpfile"
   fi
@@ -4600,61 +4641,25 @@ PY
 # Rewrite outbound telemetry metric tags so Bazel-owned telemetry series can
 # keep the Bazel provider prefix while still exposing the detected CI provider.
 rewrite_telemetry_provider_tags() {
-    local infile="$1"
-    local outfile="$2"
+    local infile="$1" outfile="$2" reporting_service="${3:-}"
     load_telemetry_provider_suffix
-    if [[ -z "$TELEMETRY_PROVIDER_SUFFIX" ]]; then
-        cp "$infile" "$outfile"
-        return 0
-    fi
-    if ! command -v python3 >/dev/null 2>&1; then
-        cp "$infile" "$outfile"
-        return 0
-    fi
-    if ! python3 - "$infile" "$outfile" "$TELEMETRY_PROVIDER_SUFFIX" <<'PY'
-import json
-import sys
-
-infile, outfile, provider = sys.argv[1:4]
-replacement = f"provider:bazel/{provider}"
-
-with open(infile, "rb") as handle:
-    payload = json.loads(handle.read().decode("utf-8-sig"))
-
-def rewrite_series_tags(series_items):
-    if not isinstance(series_items, list):
-        return
-    for series in series_items:
-        if not isinstance(series, dict):
-            continue
-        tags = series.get("tags")
-        if not isinstance(tags, list):
-            continue
-        for idx, tag in enumerate(tags):
-            if tag == "provider:bazel":
-                tags[idx] = replacement
-
-def rewrite_message(message):
-    if not isinstance(message, dict):
-        return
-    request_type = message.get("request_type")
-    payload = message.get("payload")
-    if request_type in ("generate-metrics", "distributions"):
-        if isinstance(payload, dict):
-            rewrite_series_tags(payload.get("series"))
-    elif request_type == "message-batch" and isinstance(payload, list):
-        for child in payload:
-            rewrite_message(child)
-
-rewrite_message(payload)
-
-with open(outfile, "w", encoding = "utf-8", newline = "\n") as handle:
-    json.dump(payload, handle, separators = (",", ":"), ensure_ascii = False)
-    handle.write("\n")
-PY
-    then
-        log "warning: failed to rewrite telemetry provider tags for $infile"
-        cp "$infile" "$outfile"
+    if ! jq --arg provider "$TELEMETRY_PROVIDER_SUFFIX" --arg service "$reporting_service" '
+      def rewrite_provider:
+        if type != "object" then .
+        elif (.request_type == "generate-metrics" or .request_type == "distributions") and (.payload | type == "object") then
+          .payload.series |= (if type == "array" then map(
+            if type == "object" and (.tags | type == "array") then
+              .tags |= map(if . == "provider:bazel" and $provider != "" then "provider:bazel/" + $provider else . end)
+            else . end) else . end)
+        elif .request_type == "message-batch" and (.payload | type == "array") then .payload |= map(rewrite_provider)
+        else . end;
+      (if $service != "" then
+        if (.application | type == "object") then .application.service_name = $service
+        else error("telemetry application identity is missing") end
+      else . end) | rewrite_provider
+    ' "$infile" > "$outfile"; then
+        log "error: failed to prepare telemetry reporting identity for $infile" >&2
+        return 1
     fi
 }
 
@@ -4683,7 +4688,12 @@ build_telemetry_augmentation_plan() {
     fi
 
     resolve_telemetry_facts_sources >"$facts_list" || true
-    list_all_sorted_telemetry_files >"$telemetry_list" || true
+    local telemetry_file reporting_service
+    while IFS= read -r telemetry_file; do
+        if reporting_service="$(reporting_service_for_payload "$telemetry_file")"; then
+            jq -cn --arg path "$telemetry_file" --arg service "$reporting_service" '{path: $path, service: $service}'
+        fi
+    done < <(list_all_sorted_telemetry_files) >"$telemetry_list"
 
     if [[ ! -s "$facts_list" || ! -s "$telemetry_list" ]]; then
         rm -f "$facts_list" "$telemetry_list" 2>/dev/null || true
@@ -4735,20 +4745,21 @@ def _load_json_object(path, *, allow_any = False):
     return payload
 
 facts_sources = _read_paths(facts_list_path)
-telemetry_files = _read_paths(telemetry_list_path)
+telemetry_files = [json.loads(line) for line in _read_paths(telemetry_list_path)]
 
 if not facts_sources or not telemetry_files:
     raise SystemExit(0)
 
 candidates = []
-for path in telemetry_files:
+for entry in telemetry_files:
+    path = entry["path"]
     payload = _load_json_object(path)
     if payload is None:
         continue
     application = payload.get("application")
     if not isinstance(application, dict):
         continue
-    service_name = application.get("service_name")
+    service_name = entry["service"] or application.get("service_name")
     language_name = application.get("language_name")
     api_version = payload.get("api_version")
     request_type = payload.get("request_type")
@@ -5121,7 +5132,10 @@ dry_run_single_test() {
         dbg "dry_run_single_test: failed to create temp file"
         return 1
     fi
-    enrich_with_context "$file" "$body"
+    if ! enrich_with_context "$file" "$body"; then
+        rm -f "$body" 2>/dev/null || true
+        return 1
+    fi
     validate_payload "$body"
     build_common_headers "$body"
     if [[ "$DEBUG" == "1" ]]; then
@@ -5395,7 +5409,10 @@ upload_single_test() {
         log "error: failed to create temporary test payload: $file"
         return 1
     fi
-    enrich_with_context "$file" "$body"
+    if ! enrich_with_context "$file" "$body"; then
+        rm -f "$body" 2>/dev/null || true
+        return 1
+    fi
     validate_payload "$body"
     dbg "upload_single_test: posting '$file' (body '$body')"
     if [[ "$DEBUG" == "1" ]]; then
@@ -5497,7 +5514,8 @@ upload_single_coverage() {
 upload_single_telemetry() {
     local display_file="$1"
     local file="${2:-$display_file}"
-    local meta_file provider_body="" upload_body resp http rc
+    local meta_file provider_body="" upload_body resp http rc reporting_service
+    reporting_service="$(validate_telemetry_reporting_identity "$display_file" "$file")" || return 1
     meta_file="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_meta.XXXXXX" 2>/dev/null || true)"
     if [[ -z "$meta_file" ]]; then
         dbg "upload_single_telemetry: failed to create metadata temp file"
@@ -5505,12 +5523,17 @@ upload_single_telemetry() {
     fi
     upload_body="$file"
     load_telemetry_provider_suffix
-    if [[ -n "$TELEMETRY_PROVIDER_SUFFIX" ]]; then
+    if [[ -n "$TELEMETRY_PROVIDER_SUFFIX" || -n "$reporting_service" ]]; then
         provider_body="$(mktemp "$TMP_PAYLOAD_DIR/telemetry_provider.XXXXXX" 2>/dev/null || true)"
         if [[ -z "$provider_body" ]]; then
-            log "warning: failed to create telemetry provider rewrite temp file"
+            log "error: failed to create telemetry rewrite temp file" >&2
+            rm -f "$meta_file" 2>/dev/null || true
+            return 1
         else
-            rewrite_telemetry_provider_tags "$file" "$provider_body"
+            if ! rewrite_telemetry_provider_tags "$file" "$provider_body" "$reporting_service"; then
+                rm -f "$provider_body" "$meta_file" 2>/dev/null || true
+                return 1
+            fi
             upload_body="$provider_body"
         fi
     fi
@@ -5728,6 +5751,13 @@ upload_all_telemetry() {
                 dbg "telemetry augmentation: using temporary outbound body '$replacement_body' for '$f'"
             fi
             if (( DRY_RUN == 1 )); then
+                if ! validate_telemetry_reporting_identity "$f" "${replacement_body:-$f}" >/dev/null; then
+                    mark_fresh_output_handled "$outputs_dir"
+                    ((++failed))
+                    ((++REPORT_TELEMETRY_FAILED))
+                    ((++UPLOAD_FAILURES))
+                    continue
+                fi
                 log "dry-run kept telemetry payload: $f"
                 mark_fresh_output_handled "$outputs_dir"
                 ((++total))
@@ -5755,6 +5785,12 @@ upload_all_telemetry() {
             [[ "$mode" == "synthetic" ]] || continue
             [[ -n "$synthetic_body" && -f "$synthetic_body" ]] || continue
             if (( DRY_RUN == 1 )); then
+                if ! validate_telemetry_reporting_identity "$anchor_path" "$synthetic_body" >/dev/null; then
+                    ((++failed))
+                    ((++REPORT_TELEMETRY_FAILED))
+                    ((++UPLOAD_FAILURES))
+                    continue
+                fi
                 log "dry-run validated synthetic telemetry augmentation for: $anchor_path"
                 ((++total))
                 ((++REPORT_TELEMETRY_PROCESSED))

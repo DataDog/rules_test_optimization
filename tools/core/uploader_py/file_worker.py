@@ -28,8 +28,10 @@ from validate_payload_schema import validate_payload as validate_schema_payload
 from topt_runtime.bep_execution import test_result_event_count, completed_empty_test_session
 
 from .codeowners import CodeOwnersMatch, CodeOwnersMatcher
+from .discovery import read_bazel_metadata
 from .endpoints import EndpointSet
-from .enrichment import ContextSelection, ContextPlan, enrich_test_payload, payload_repo_key
+from .enrichment import (ContextSelection, ContextPlan, ReportingServiceError,
+    enrich_test_payload, payload_repo_key, reporting_service)
 from .json_utils import strict_json_dumps, strict_json_loads
 from .metrics import PhaseRecorder
 from .models import (
@@ -526,6 +528,8 @@ def _enrich_and_validate_test(
                 codeowners_matcher=runtime.codeowners_matcher,
                 codeowners_cache=codeowners_cache,
             )
+        except ReportingServiceError as exc:
+            return _failed(task, "reporting_service_invalid", str(exc)), context_selection
         except (TypeError, ValueError, OSError) as exc:
             _debug(runtime, task, f"enrichment failed with {type(exc).__name__}")
             return _failed(task, "test_enrichment_failed", type(exc).__name__), context_selection
@@ -782,6 +786,14 @@ def _process_telemetry(
     assert payload is not None
     assert source_bytes is not None
 
+    metadata, sidecar_warning = _load_bazel_metadata(task)
+    try:
+        service = reporting_service(runtime.context_plan.select(payload_repo_key(metadata)), metadata)
+    except ReportingServiceError as exc:
+        return _failed(task, "reporting_service_invalid", str(exc))
+    if service and not isinstance(payload.get("application"), dict):
+        return _failed(task, "invalid_telemetry_metadata", "telemetry application identity is missing")
+
     # A partially successful prior run stores the sole rejected request in the
     # source file. The private marker prevents rule facts from being added a
     # second time and is removed before the retry reaches the backend.
@@ -793,6 +805,8 @@ def _process_telemetry(
         else:
             directive = runtime.telemetry_plan.directive_for(task.source_path)
         warnings: list[str] = []
+        if sidecar_warning:
+            warnings.append(sidecar_warning)
         source_body = _prepare_telemetry_source(
             source_bytes,
             payload,
@@ -800,6 +814,7 @@ def _process_telemetry(
             runtime.telemetry_plan.provider_suffix,
             task_directory,
             warnings,
+            reporting_service_name=service,
         )
     with _phase(runtime, "validation"):
         metadata_failure = _telemetry_metadata_failure(payload)
@@ -964,9 +979,17 @@ def _prepare_telemetry_source(
     provider_suffix: str,
     task_directory: Path,
     warnings: list[str],
+    *,
+    reporting_service_name: str = "",
 ) -> Path:
     changed = False
     application = payload.get("application")
+    if (
+        reporting_service_name and isinstance(application, dict)
+        and application.get("service_name") != reporting_service_name
+    ):
+        application["service_name"] = reporting_service_name
+        changed = True
     if directive.env_override:
         if isinstance(application, dict):
             application["env"] = directive.env_override
@@ -1105,22 +1128,7 @@ def _compact_json_line(payload: Mapping[str, Any]) -> bytes:
 def _load_bazel_metadata(
     task: FileTask,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    if task.test_outputs_dir is None:
-        return None, None
-    sidecar = task.test_outputs_dir / "bazel_target_metadata.json"
-    if not sidecar.is_file():
-        return None, None
-    try:
-        sidecar_resolved = sidecar.resolve(strict=True)
-        output_resolved = task.test_outputs_dir.resolve(strict=True)
-    except OSError:
-        return None, "bazel_metadata_invalid"
-    if sidecar.is_symlink() or sidecar_resolved.parent != output_resolved:
-        return None, "bazel_metadata_unsafe"
-    payload, failure = _read_json_object(sidecar, "Bazel metadata")
-    if failure is not None:
-        return None, "bazel_metadata_invalid"
-    return payload, None
+    return read_bazel_metadata(task.test_outputs_dir)
 
 
 def _read_json_object(
