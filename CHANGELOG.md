@@ -15,6 +15,13 @@ versioning.
 
 ## [Unreleased]
 
+### Added
+
+- The Python uploader can opt in to persistent HTTP connections with
+  `http_keep_alive = True` or `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE=1`.
+  Each worker retains at most one connection, with the existing TLS, proxy
+  and retry policy. The default remains disabled, independently of batching.
+
 ### Changed
 
 - Go tests can explicitly skip duplicate nogo analysis with `nogo = False` while

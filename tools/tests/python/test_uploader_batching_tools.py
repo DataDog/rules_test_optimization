@@ -9,6 +9,7 @@
 
 from copy import deepcopy
 from functools import partial
+from itertools import product
 import gzip
 import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -854,10 +855,10 @@ class BatchConfigurationTests(unittest.TestCase):
             for shell, suffix, template in shells:
                 script = root / ("legacy." + suffix)
                 script.write_text(_render_uploader_runtime_template("tools/core/" + template))
-                for value in ("1", " TRUE ", "yes", "maybe"):
-                    with self.subTest(shell=suffix, value=value):
+                for variable, value in product(("DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS", "DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE"), ("1", " TRUE ", "yes", "maybe")):
+                    with self.subTest(shell=suffix, variable=variable, value=value):
                         env = {key: val for key, val in os.environ.items() if not key.startswith(("DD_", "DATADOG_"))}
-                        env["DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS"] = value
+                        env[variable] = value
                         result = subprocess.run([*shell, str(script)], env=env, cwd=root, capture_output=True, text=True, timeout=20)
                         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
                         self.assertIn("must be true or false" if value == "maybe" else "requires use_python_uploader = True", result.stderr)

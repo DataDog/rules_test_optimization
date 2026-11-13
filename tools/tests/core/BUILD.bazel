@@ -268,6 +268,7 @@ load(
     "legacy_context_capture_rule",
     "legacy_context_direct_file_fallback_test",
     "legacy_context_filegroup_fallback_test",
+    "legacy_http_keep_alive_failure_test",
     "manifest_trim_and_bom_helpers_test",
     "render_template_missing_placeholder_test",
     "render_template_no_recursive_substitution_test",
@@ -506,6 +507,18 @@ dd_payload_uploader(
 legacy_batching_failure_test(
     name = "legacy_batching_failure_test",
     target_under_test = ":legacy_batching_target",
+)
+
+dd_payload_uploader(
+    name = "legacy_http_keep_alive_target",
+    http_keep_alive = True,
+    tags = ["manual"],
+    use_python_uploader = False,
+)
+
+legacy_http_keep_alive_failure_test(
+    name = "legacy_http_keep_alive_failure_test",
+    target_under_test = ":legacy_http_keep_alive_target",
 )
 
 runtime_selection_mixed_source_target_rule(
@@ -1868,6 +1881,7 @@ test_suite(
         ":invalid_manifest_failure_test",
         ":invalid_service_derivation_failure_test",
         ":legacy_batching_failure_test",
+        ":legacy_http_keep_alive_failure_test",
         ":load_github_event_payload_ctx_test",
         ":local_git_metadata_detached_head_has_no_branch_test",
         ":local_git_metadata_fills_empty_fields_test",
