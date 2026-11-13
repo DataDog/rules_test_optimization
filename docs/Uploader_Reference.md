@@ -834,6 +834,10 @@ parent, and a contradictory `bazel.target` sidecar is rejected before upload.
 | `optional` | Fail when `fail_on_error = True`; otherwise report a warning. |
 | `disabled` | No BEP completeness guarantee; other validation policies still apply. |
 
+`--remote-artifacts=required` remains an independent policy: an unavailable
+selected BEP carrier fails even with optional freshness and `fail_on_error=False`.
+The Python uploader processes other usable fresh files before reporting that failure.
+
 Under strict BEP validation, leaving `fail_on_error` false cannot suppress a
 known missing-shard or incomplete-stream failure. Supply an exact expected-target catalog for the
 strongest available check. Without one, only fresh sidecars or recognized test

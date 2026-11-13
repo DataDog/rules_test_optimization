@@ -65,6 +65,7 @@ class FreshnessPlan:
     warning_codes: tuple[str, ...] = ()
     executions: tuple[BepTestExecution, ...] = ()
     require_test_results: bool = False
+    require_remote_artifacts: bool = False
     completeness_errors: tuple[tuple[str, str], ...] = ()
     ambiguous_outputs: frozenset[str] = frozenset()
     ambiguous_labels: frozenset[str] = frozenset()
@@ -512,8 +513,8 @@ def validate_fresh_outputs_accounted(
             raise FreshnessError(error, exit_code=1)
     enforce_test_results = fail_on_error or plan.require_test_results
     remote_outputs = tuple(output for output in plan.remote_only_outputs
-        if output.label in selected_target_set or (plan.require_test_results and not expected_target_set))
-    if remote_outputs and enforce_test_results:
+        if output.label in selected_target_set or ((plan.require_test_results or plan.require_remote_artifacts) and not expected_target_set))
+    if remote_outputs and (enforce_test_results or plan.require_remote_artifacts):
         raise FreshnessError("BEP references remote-only test outputs for " + remote_outputs[0].label + ", but local test.outputs was not found", exit_code=1 if plan.require_test_results else 2)
     results = tuple(results)
     if plan.executions:
@@ -690,6 +691,7 @@ def _build_plan(
         selected_source=selected_source,
         executions=tuple(doctor_freshness.executions),
         require_test_results=resolve_freshness_policy(config.freshness_mode, selected_source, ci=config.ci).strict_bep,
+        require_remote_artifacts=config.remote_artifacts == "required",
         completeness_errors=doctor_freshness.completeness_errors,
         ambiguous_outputs=doctor_freshness.ambiguous_outputs,
         ambiguous_labels=doctor_freshness.ambiguous_labels,

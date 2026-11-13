@@ -516,6 +516,35 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(1, report["payload_types"]["test"]["succeeded"])
             self.assertEqual(1, report["bep"]["remote_only_outputs"])
 
+    def test_required_remote_outputs_fail_after_usable_results_with_optional_freshness(self) -> None:
+        for expected in ((), ("//pkg:instrumented", "//pkg:remote")):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                output = root / "bazel-testlogs/pkg/instrumented/test.outputs"
+                source = _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
+                (output / "bazel_target_metadata.json").write_text(json.dumps({"bazel.target": "//pkg:instrumented"}))
+                remote = _bep_test_result("//pkg:remote")
+                remote["testResult"]["testActionOutput"] = [{
+                    "name": "test.outputs", "pathPrefix": ["bazel-out", "config", "testlogs", "pkg", "remote"],
+                    "uri": "bytestream://cache.example/blobs/remote-log/100",
+                }]
+                bep = root / "bep.json"
+                bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in (
+                    _bep_test_result("//pkg:instrumented", output=output), remote)), invocation=str(bep)))
+                report_path = root / "report.json"
+                config = self._config(root, fail_on_error=False, expected_targets=expected,
+                    allow_cached_payload_uploads=False, extra_arguments=("--freshness-mode=optional",
+                        "--remote-artifacts=required", "--artifact-source=local", f"--bep-json={bep}", f"--report-json={report_path}"))
+
+                rc = run_uploader(config, resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config), logger=configure_logging(debug=False, stream=StringIO()), stream=StringIO())
+
+                report = json.loads(report_path.read_text())
+                self.assertEqual(1, report["payload_types"]["test"]["succeeded"])
+                self.assertTrue(source.exists())
+                self.assertEqual(2, rc, report["result"])
+                self.assertEqual("bep_output_remote_only_without_downloader", report["result"]["reason_code"])
+
     def test_cross_label_output_collision_does_not_block_a_valid_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
