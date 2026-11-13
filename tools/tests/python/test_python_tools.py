@@ -287,6 +287,39 @@ class ValidatePayloadSchemaTests(unittest.TestCase):
             "tools/core/validate_payload_schema.py",
         )
 
+    def test_type_only_leaves_keep_json_types_and_diagnostics(self) -> None:
+        cases = [
+            ("string", "ok", 3),
+            ("integer", 3, True),
+            ("number", 3.5, False),
+            ("boolean", True, 1),
+            ("null", None, "null"),
+            ("array", [None, {"anything": True}], {}),
+            ("object", {"anything": [None]}, []),
+            (["null", "integer"], None, True),
+        ]
+        for expected, accepted, rejected in cases:
+            with self.subTest(expected=expected):
+                schema = {"type": expected}
+                valid = self.mod.validate_payload(accepted, schema)
+                invalid = self.mod.validate_payload(rejected, schema)
+                self.assertTrue(valid.valid)
+                self.assertEqual((f"$: expected type {expected}",), invalid.errors)
+                self.assertEqual((), valid.warnings)
+                self.assertEqual(1, valid.stats["nodes"])
+                self.assertEqual(1, valid.stats["type_checks"])
+                self.assertEqual(valid.stats, invalid.stats)
+                self.assertEqual({"type": expected}, schema)
+
+    def test_type_leaves_do_not_bypass_other_schema_constraints(self) -> None:
+        for constraint in ({"const": "other"}, {"enum": ["other"]}, {"not": {}}):
+            with self.subTest(constraint=constraint):
+                result = self.mod.validate_payload("value", {"type": "string", **constraint})
+                self.assertFalse(result.valid)
+        warned = self.mod.validate_payload("value", {"type": "string", "not": {}}, unsupported_policy="warn")
+        self.assertTrue(warned.valid)
+        self.assertEqual(1, len(warned.warnings))
+
     def _run_main(
         self,
         schema_path: str,
