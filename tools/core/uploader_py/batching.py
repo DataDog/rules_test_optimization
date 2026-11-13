@@ -26,6 +26,52 @@ class BatchCompatibilityError(ValueError):
 
 _TEST_LEVEL_TYPES = frozenset(("test", "test_suite_end", "test_module_end", "test_session_end"))
 _FIXED_TYPES = _TEST_LEVEL_TYPES | {"span"}
+_SHARED_METADATA_PREFIXES = ("bazel.", "git.", "ci.", "os.", "runtime.")
+
+
+def compact_shared_metadata(payload: dict[str, Any]) -> int:
+    """Move common enrichment tags in an owned request to its global defaults.
+
+    Only string tags present with the same value in every supported event can
+    move. Leave keys mentioned in another metadata scope alone: fixed-type
+    overrides have different precedence. Protocol fields and process IDs stay
+    in their existing locations. No caller-owned source file is changed.
+    """
+    metadata, events = payload.get("metadata"), payload.get("events")
+    if type(payload.get("version")) is not int or payload["version"] != 1 or not isinstance(metadata, dict):
+        return 0
+    if not isinstance(events, list) or len(events) < 2:
+        return 0
+    if any(not isinstance(scope, dict) for scope in metadata.values()):
+        return 0
+    global_meta = metadata.get("*")
+    if not isinstance(global_meta, dict):
+        return 0
+    event_metadata = []
+    for event in events:
+        if not isinstance(event, dict) or not isinstance(event.get("type"), str) or event["type"] not in _FIXED_TYPES:
+            return 0
+        content = event.get("content")
+        if not isinstance(content, dict) or not isinstance(content.get("meta"), dict):
+            return 0
+        event_metadata.append(content["meta"])
+    overrides = {key for name, scope in metadata.items() if name != "*" for key in scope}
+    common = {
+        key: value for key, value in event_metadata[0].items()
+        if isinstance(key, str) and key.startswith(_SHARED_METADATA_PREFIXES)
+        and isinstance(value, str) and key not in overrides
+    }
+    for event_meta in event_metadata[1:]:
+        different = [key for key, value in common.items() if event_meta.get(key) != value]
+        for key in different:
+            del common[key]
+        if not common:
+            return 0
+    global_meta.update(common)
+    for event_meta in event_metadata:
+        for key in common:
+            del event_meta[key]
+    return len(common) * len(events)
 
 
 def localize_runtime_ids(payload: dict[str, Any], *, max_additional_bytes: int | None = None) -> bytes:

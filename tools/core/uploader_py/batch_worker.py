@@ -21,7 +21,7 @@ from typing import Any, Iterator
 from validate_payload_schema import validate_payload as validate_schema_payload
 from topt_runtime.bep_execution import test_result_event_count, completed_empty_test_session
 
-from .batching import BatchCompatibilityError, localize_runtime_ids
+from .batching import BatchCompatibilityError, compact_shared_metadata, localize_runtime_ids
 from .file_worker import (
     WorkerRuntime, WorkerTransport, _cleanup_source, _enrich_and_validate_test, _phase, _skipped,
     _failed, _http_failure, _prepare_test_requests, _read_json_object,
@@ -324,6 +324,12 @@ def _prepare_and_send(
             raise ValueError("batch exceeded the uncompressed request guard")
     with _phase(runtime, "validation"):
         document = strict_json_loads(body)
+        with _phase(runtime, "metadata_compaction"):
+            if compact_shared_metadata(document):
+                del body
+                body = compact_json_bytes(document)
+                if len(body) > MAX_TEST_PAYLOAD_BYTES:
+                    raise ValueError("compacted batch exceeded the uncompressed request guard")
         assert runtime.batch_schema is not None
         if not validate_schema_payload(document, runtime.batch_schema).valid:
             return WorkItemOutcome(tuple(_failed(source.task, "invalid_batch_representation", "outbound batch failed schema validation") for source in sources)), None

@@ -15,6 +15,16 @@ versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- Opt-in test batching stores identical common enrichment tags once in the
+  request metadata. Per-event process IDs and varying target metadata are
+  preserved, and the emitted body is validated before upload. Batching remains
+  disabled by default; real intake and representative performance validation
+  remain prerequisites for rollout.
+- Payload schema validation avoids repeated unsupported-keyword scans when a
+  schema node contains none. Validation rules and diagnostics are unchanged.
+
 ### Fixed
 
 - Go instrumentation preserves the test's `DD_SERVICE` environment. The uploader
