@@ -142,6 +142,7 @@ class HttpTransportTests(unittest.TestCase):
     def test_persistent_https_reuses_an_authenticated_connect_tunnel(self) -> None:
         fixtures = Path(__file__).with_name("fixtures")
         server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.minimum_version = ssl.TLSVersion.TLSv1_2
         server_context.load_cert_chain(fixtures / "http-test-cert.pem", fixtures / "http-test-key.pem")
         trusted = ssl.create_default_context(cafile=str(fixtures / "http-test-cert.pem"))
         connects = []
@@ -233,6 +234,7 @@ class HttpTransportTests(unittest.TestCase):
     def test_persistent_https_reuses_verified_tls_and_rejects_untrusted_certificates(self) -> None:
         fixtures = Path(__file__).with_name("fixtures")
         server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        server_context.minimum_version = ssl.TLSVersion.TLSv1_2
         server_context.load_cert_chain(fixtures / "http-test-cert.pem", fixtures / "http-test-key.pem")
         trusted = ssl.create_default_context(cafile=str(fixtures / "http-test-cert.pem"))
         with _server({}, {}, tls_context=server_context) as (server, base):
