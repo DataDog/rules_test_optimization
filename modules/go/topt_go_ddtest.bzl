@@ -19,6 +19,13 @@ load(":topt_go_ddtest_repository.bzl", "DDTEST_RELEASE", "MINI_REPO")
 _BAZEL_TARGET_METADATA_OUTPUT = "bazel_target_metadata.json"
 _SDK_NAME_SETTING = "@io_bazel_rules_go//go/toolchain:sdk_name"
 _MINI_MODULE = "github.com/DataDog/ddtest/ddto"
+_ARG_COUNT = "_DD_TOPT_WRAPPER_ARG_COUNT"
+_ARG_PREFIX = "_DD_TOPT_WRAPPER_ARG_"
+
+ToptGoTestArgsInfo = provider(
+    doc = "Arguments expanded against the raw test's configured data, after rules_go transitions.",
+    fields = {"args": "Expanded arguments in caller order."},
+)
 
 # Mini's testopt library, which the raw test depends on.
 MINI_TESTOPT = Label("@%s//testopt" % MINI_REPO)
@@ -60,6 +67,117 @@ def _mini_check_aspect_impl(target, ctx):
         if ToptGoForeignMiniInfo in dep
     ]
     return [ToptGoForeignMiniInfo(labels = depset(direct, transitive = transitive))]
+
+# Tokenization follows Bazel ShellUtils (Apache-2.0).
+# Copyright 2014 The Bazel Authors. All rights reserved.
+# https://github.com/bazelbuild/bazel/blob/8.4.1/src/main/java/com/google/devtools/build/lib/shell/ShellUtils.java
+def _argument_words(value):
+    """Bazel's Bourne-word splitting (no expansion or shell execution).
+
+    Starlark has no API for TestRunner's already-tokenized args. Match
+    ShellUtils.tokenize so moving args to the raw configuration preserves them.
+    """
+    words = []
+    word = []
+    quote = ""
+    escaped = False
+    force_word = False
+    for char in value.elems():
+        if escaped:
+            if quote == '\"' and char not in ["\\", '\"']:
+                word.append("\\")
+            word.append(char)
+            escaped = False
+        elif quote:
+            if char == quote:
+                quote = ""
+            elif char == "\\" and quote == '\"':
+                escaped = True
+            else:
+                word.append(char)
+        elif char in ["'", '\"']:
+            quote = char
+            force_word = True
+        elif char in [" ", "\t"]:
+            if word or force_word:
+                words.append("".join(word))
+                word = []
+                force_word = False
+        elif char == "\\":
+            escaped = True
+        else:
+            word.append(char)
+    if escaped:
+        fail("ddtest_go_test: backslash at end of argument string")
+    if quote:
+        fail("ddtest_go_test: unterminated argument quotation")
+    if word or force_word:
+        words.append("".join(word))
+    return words
+
+argument_words_for_tests = _argument_words
+
+def _argument_expressions(arg):
+    expressions = []
+    skip_until = 0
+    for offset in range(len(arg)):
+        if offset < skip_until:
+            continue
+        if arg[offset:offset + 2] == "$$":
+            skip_until = offset + 2
+        elif arg[offset:offset + 2] == "$(":
+            end = arg.find(")", offset + 2)
+            if end != -1:
+                expressions.append((offset, end, arg[offset + 2:end]))
+                skip_until = end + 1
+    return expressions
+
+def _expand_argument_locations(ctx, arg, data):
+    # Resolve location functions before Make expansion; returned paths are
+    # literal data, while the caller's $$ escapes remain untouched.
+    fragments = []
+    copied_until = 0
+    for offset, end, expression in _argument_expressions(arg):
+        if expression.split(" ", 1)[0] in ["location", "locations", "execpath", "execpaths", "rootpath", "rootpaths", "rlocationpath", "rlocationpaths"]:
+            # TestRunner expands location(s) as runfiles-root paths.
+            path_expression = expression
+            if expression.startswith("location "):
+                path_expression = "rootpath " + expression[len("location "):]
+            elif expression.startswith("locations "):
+                path_expression = "rootpaths " + expression[len("locations "):]
+            value = ctx.expand_location("$(" + path_expression + ")", targets = data)
+            fragments.extend([arg[copied_until:offset], value.replace("$", "$$")])
+            copied_until = end + 1
+    fragments.append(arg[copied_until:])
+    return "".join(fragments)
+
+def _test_args_aspect_impl(_target, ctx):
+    args = []
+    data = getattr(ctx.rule.attr, "data", []) or []
+    raw_args = getattr(ctx.rule.attr, "args", []) or []
+
+    # Native args also expand locations introduced recursively by --define.
+    # Resolve only reachable variables: unrelated defines can name labels that
+    # are not in this test's data. Native expansion enforces its depth limit.
+    substitutions = {}
+    pending = raw_args
+    for _ in range(11):
+        next_pending = []
+        for value in pending:
+            for _, _, expression in _argument_expressions(value):
+                if expression in ctx.var and expression not in substitutions:
+                    original = ctx.var[expression]
+                    substitutions[expression] = _expand_argument_locations(ctx, original, data)
+                    next_pending.append(original)
+        pending = next_pending
+        if not pending:
+            break
+    for arg in raw_args:
+        expanded = ctx.expand_make_variables("args", _expand_argument_locations(ctx, arg, data), substitutions)
+        args.extend(_argument_words(expanded))
+    return [ToptGoTestArgsInfo(args = args)]
+
+_test_args_aspect = aspect(implementation = _test_args_aspect_impl)
 
 mini_check_aspect = aspect(
     implementation = _mini_check_aspect_impl,
@@ -135,8 +253,8 @@ def _first_target(dep):
     return dep
 
 def _wrapper_output_name(label_name, is_windows):
-    """The launcher's name: Windows runs it as a batch file."""
-    return label_name + (".bat" if is_windows else "")
+    """The launcher's name: Windows runs a native executable."""
+    return label_name + (".exe" if is_windows else "")
 
 wrapper_output_name_for_tests = _wrapper_output_name
 
@@ -161,36 +279,26 @@ if [[ -n "$undeclared_dir" ]]; then
   fi
 fi
 
-"$actual" "$@"
+configured_args=()
+for ((i=0; i<${_DD_TOPT_WRAPPER_ARG_COUNT:-0}; i++)); do
+  argument_name="_DD_TOPT_WRAPPER_ARG_$i"
+  configured_args+=("${!argument_name}")
+  unset "$argument_name"
+done
+unset _DD_TOPT_WRAPPER_ARG_COUNT
+"$actual" ${configured_args[@]+"${configured_args[@]}"} "$@"
 """ % (actual_filename, metadata_filename, _BAZEL_TARGET_METADATA_OUTPUT)
 
-def _windows_wrapper_content(actual_filename, metadata_filename):
-    """The Windows launcher: it copies the target metadata next to the payloads."""
-    return """@echo off
-setlocal
-set "SCRIPT_DIR=%%~dp0"
-set "ACTUAL=%%SCRIPT_DIR%%%s"
-set "UNDECLARED_DIR=%%TEST_UNDECLARED_OUTPUTS_DIR%%"
-
-if not exist "%%ACTUAL%%" (
-  echo ddtest_go_test: wrapped test executable not found: %%ACTUAL%% 1>&2
-  exit /b 1
-)
-
-if not "%%UNDECLARED_DIR%%"=="" (
-  if exist "%%SCRIPT_DIR%%%s" copy /Y "%%SCRIPT_DIR%%%s" "%%UNDECLARED_DIR%%\\%s" >nul
-)
-
-"%%ACTUAL%%" %%*
-exit /b %%ERRORLEVEL%%
-""" % (
-        actual_filename.replace("/", "\\"),
-        metadata_filename.replace("/", "\\"),
-        metadata_filename.replace("/", "\\"),
-        _BAZEL_TARGET_METADATA_OUTPUT,
-    )
-
-windows_wrapper_content_for_tests = _windows_wrapper_content
+def _wrapped_actual_relpath(wrapper_basename, actual_label, executable):
+    # rules_go places <out> under <target>_/. Preserve the whole suffix;
+    # for nested target names that suffix itself has directory components.
+    short_path = executable.short_path
+    if short_path.startswith("../"):
+        short_path = short_path.split("/", 2)[2]
+    package_prefix = actual_label.package + "/" if actual_label.package else ""
+    output_prefix = package_prefix + actual_label.name + "_/"
+    suffix = short_path[len(output_prefix):] if short_path.startswith(output_prefix) else executable.basename
+    return wrapper_basename + "__wrapped_/" + suffix
 
 def _ddtest_go_test_impl(ctx):
     target = _first_target(ctx.attr.actual)
@@ -203,25 +311,52 @@ def _ddtest_go_test_impl(ctx):
     metadata_file = ctx.file.metadata
     is_windows = ctx.target_platform_has_constraint(ctx.attr._windows_constraint[platform_common.ConstraintValueInfo])
     out = ctx.actions.declare_file(_wrapper_output_name(ctx.label.name, is_windows))
-    actual_out = ctx.actions.declare_file(ctx.label.name + "__wrapped_" + dep_exe.basename, sibling = out)
-    metadata_out = ctx.actions.declare_file(ctx.label.name + "__wrapped_" + metadata_file.basename, sibling = out)
+
+    # rules_go's cgo rpaths are relative to the binary's directory, one level
+    # below the package. Keep that depth when materializing the transitioned test.
+    actual_relpath = _wrapped_actual_relpath(out.basename, target.label, dep_exe)
+    actual_out = ctx.actions.declare_file(actual_relpath, sibling = out)
+    metadata_out = ctx.actions.declare_file(out.basename + "__wrapped_" + metadata_file.basename, sibling = out)
 
     # Materialize transitioned inputs next to the wrapper so the launcher does
     # not have to guess which configuration-specific paths Bazel chose.
     ctx.actions.symlink(output = actual_out, target_file = dep_exe)
     ctx.actions.symlink(output = metadata_out, target_file = metadata_file)
-    ctx.actions.write(
-        output = out,
-        content = _windows_wrapper_content(actual_out.basename, metadata_out.basename) if is_windows else _unix_wrapper_content(actual_out.basename, metadata_out.basename),
-        is_executable = True,
-    )
+    configured_args = target[ToptGoTestArgsInfo].args
+    wrapper_files = [actual_out, metadata_out]
+    if is_windows:
+        # A native launcher avoids cmd.exe interpreting configured or runtime
+        # arguments. One shared Go binary serves every test in this platform.
+        configuration = ctx.actions.declare_file(out.basename + ".json", sibling = out)
+        ctx.actions.write(configuration, json.encode({
+            "actual": actual_relpath,
+            "metadata": metadata_out.basename,
+            "args": configured_args,
+        }))
+        ctx.actions.symlink(output = out, target_file = ctx.executable._windows_launcher)
+        wrapper_files.append(configuration)
+    else:
+        ctx.actions.write(
+            output = out,
+            content = _unix_wrapper_content(actual_relpath, metadata_out.basename),
+            is_executable = True,
+        )
     providers = [DefaultInfo(
-        files = depset([out, actual_out, metadata_out]),
-        runfiles = dep_runfiles.merge(ctx.runfiles(files = [actual_out, metadata_out])),
+        files = depset([out] + wrapper_files),
+        runfiles = dep_runfiles.merge(ctx.runfiles(files = wrapper_files)),
         executable = out,
     )]
-    if RunEnvironmentInfo in target:
-        providers.append(target[RunEnvironmentInfo])
+    run_environment = target[RunEnvironmentInfo] if RunEnvironmentInfo in target else None
+    environment = dict(run_environment.environment) if run_environment != None else {}
+    if configured_args and not is_windows:
+        environment[_ARG_COUNT] = str(len(configured_args))
+        for index, arg in enumerate(configured_args):
+            environment[_ARG_PREFIX + str(index)] = arg
+    if run_environment != None or configured_args:
+        providers.append(RunEnvironmentInfo(
+            environment = environment,
+            inherited_environment = run_environment.inherited_environment if run_environment != None else [],
+        ))
     execution_requirements = _test_execution_requirements(ctx.attr.tags)
     if execution_requirements:
         providers.append(testing.ExecutionInfo(requirements = execution_requirements))
@@ -230,11 +365,16 @@ def _ddtest_go_test_impl(ctx):
 ddtest_go_test = rule(
     implementation = _ddtest_go_test_impl,
     attrs = {
+        "_windows_launcher": attr.label(
+            default = "//tools/testwrapper",
+            executable = True,
+            cfg = "target",
+        ),
         "actual": attr.label(
             mandatory = True,
             executable = True,
             cfg = ddtest_transition,
-            aspects = [mini_check_aspect],
+            aspects = [mini_check_aspect, _test_args_aspect],
             doc = "The hidden raw go_test, built with the instrumented SDK.",
         ),
         "metadata": attr.label(

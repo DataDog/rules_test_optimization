@@ -85,3 +85,11 @@ use_repo(
     "test_optimization_data_static_disabled",
     "test_optimization_data_static_module",
 )
+
+# Test-only C shared library; this version is already selected transitively.
+bazel_dep(name = "rules_cc", version = "0.1.5", dev_dependency = True)
+
+private_metadata = use_extension("//tests:private_metadata_repo.bzl", "private_metadata", dev_dependency = True)
+
+# The backing metadata repository is deliberately not imported into this module.
+use_repo(private_metadata, "private_go_descriptor")

@@ -7,7 +7,7 @@
 """Fixtures and analysis tests of the ddtest instrumentation."""
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load("//:topt_go_ddtest.bzl", "ddtest_transition_impl_for_tests")
+load("//:topt_go_ddtest.bzl", "argument_words_for_tests", "ddtest_transition_impl_for_tests")
 
 # The stub sync repository's export, as the macro tests use it.
 TOPT_DATA = {
@@ -48,3 +48,37 @@ def _ddtest_transition_test_impl(ctx):
     return unittest.end(env)
 
 ddtest_transition_test = unittest.make(_ddtest_transition_test_impl)
+
+def _argument_contract_test_impl(ctx):
+    env = unittest.begin(ctx)
+    for value, expected in [
+        ("one two", ["one", "two"]),
+        ("'one two'", ["one two"]),
+        ("''", [""]),
+        ('a"b"c', ["abc"]),
+        ("a\\ b", ["a b"]),
+        ('"a\\q"', ["a\\q"]),
+        ("'a\\b'", ["a\\b"]),
+        ('"a\\\"b"', ['a"b']),
+        ("a\tb", ["a", "b"]),
+        ("a\nb", ["a\nb"]),
+    ]:
+        asserts.equals(env, expected, argument_words_for_tests(value))
+    return unittest.end(env)
+
+argument_contract_test = unittest.make(_argument_contract_test_impl)
+
+def _nested_executable_depth_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    target = analysistest.target_under_test(env)
+    binaries = [file for file in target[DefaultInfo].files.to_list() if "__wrapped_/" in file.short_path]
+    asserts.equals(env, 1, len(binaries))
+    if binaries:
+        asserts.equals(
+            env,
+            "tests/ddtest/nested/shared_answer_test__wrapped_/nested/shared_answer_test__raw_go_test",
+            binaries[0].short_path,
+        )
+    return analysistest.end(env)
+
+nested_executable_depth_test = analysistest.make(_nested_executable_depth_test_impl)

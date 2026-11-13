@@ -13,9 +13,19 @@ Maintainers:
 
 load("//tools/core:common_utils.bzl", "fail_with_prefix", "sanitize_label_fragment")
 
+def summarize_module_groups(module_group_names):
+    """Return a deterministic, bounded catalog sample for analysis errors."""
+    names = sorted(module_group_names)
+    sample = [name[:120] + ("..." if len(name) > 120 else "") for name in names[:5]]
+    return "%d total; sample: %s%s" % (
+        len(names),
+        ", ".join(sample) or "<none>",
+        ", ..." if len(names) > 5 else "",
+    )
+
 def _fail_missing_module_group(expected_name, module_group_names, importpath, module_label_override, failure_context):
     """Fail with actionable diagnostics for explicit module-selection mismatches."""
-    available = ", ".join(sorted(module_group_names)) if module_group_names else "<none>"
+    available = summarize_module_groups(module_group_names)
     if module_label_override:
         msg = (
             "module_label_override '%s' resolved to '%s', but no matching module group exists. " +

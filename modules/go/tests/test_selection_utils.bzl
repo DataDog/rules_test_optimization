@@ -7,6 +7,7 @@
 """Unit tests for Go-specific selection and macro helper functions."""
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
+load("@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl", "summarize_module_groups")
 load(
     "@datadog-rules-test-optimization-go//:topt_go_infer.bzl",
     "go_runtime_module_identifiers_for_tests",
@@ -55,6 +56,16 @@ def _resolve_topt_service_key_prefers_exact_then_sanitized_test(ctx):
 def _select_module_group_name_test(ctx):
     """Validate module-group selection helper and override behavior."""
     env = unittest.begin(ctx)
+    asserts.equals(env, "0 total; sample: <none>", summarize_module_groups([]))
+    asserts.equals(env, "2 total; sample: a, b", summarize_module_groups(["b", "a"]))
+    names = ["module_" + ("000" + str(index))[-4:] + "_" + "x" * 1000 for index in range(1000)]
+    summary = summarize_module_groups(names)
+    asserts.true(env, summary.startswith("1000 total; sample: module_0000_"))
+    asserts.true(env, summary.endswith(", ..."))
+    asserts.true(env, "module_0004_" in summary)
+    asserts.false(env, "module_0005_" in summary)
+    asserts.true(env, len(summary) < 700)
+    asserts.equals(env, summary, summarize_module_groups(names[::-1]))
     groups = [
         "module_github_com_example_mod_pkg",
         "module_custom_override",

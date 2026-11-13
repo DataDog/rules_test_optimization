@@ -268,6 +268,17 @@ the hidden test's compile and link actions stay remote-capable.
 Attributes that 2.0.0 removed fail at loading with a migration message; see the
 [migration note](../CHANGELOG.md#migrating-go-consumers).
 
+Windows launchers are native `.exe` files with a declared JSON argument file
+beside them. A shared Go launcher copies target metadata and starts the raw test
+without a command shell. Configured `args` precede runtime `--test_arg` values;
+the child inherits the test environment, streams, and exit status. No local Go
+installation is required at test runtime.
+
+User `args` keep Bazel Make-variable expansion and Bourne word splitting.
+Their `$(location)`/`$(rlocationpath)` inputs are resolved from the raw Go test's
+configured dependencies, including `data` selected by `race` or `pure`. Data
+binaries retain their `x_defs` and selected Go configuration.
+
 ### Explicit single-service Go descriptor
 
 `dd_topt_go_test` also accepts a local-static `topt_data` descriptor for a
@@ -282,6 +293,15 @@ topt_data = {
     # "manifest_label": "@test_optimization_data_service//:custom/manifest.txt",
 }
 ```
+
+An extension-owned descriptor may also set `repository_label` to a `Label` or
+canonical label string resolved in that extension's repository mapping. This
+lets a test use metadata repositories that the root module has not imported
+with `use_repo`. The macro derives physical dependency labels from that
+repository, while `repo_name` remains the logical identity checked against the
+repository state and uploader context. An explicit `manifest_label` must use
+the same canonical repository prefix. Without `repository_label`, the existing
+apparent-name behavior is unchanged.
 
 The descriptor is literal configuration; it does not load the external
 repository's `export.bzl`. The macro derives

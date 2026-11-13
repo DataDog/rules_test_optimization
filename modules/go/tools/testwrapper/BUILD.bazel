@@ -1,0 +1,27 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "testwrapper_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/DataDog/rules_test_optimization/modules/go/tools/testwrapper",
+    visibility = ["//visibility:private"],
+)
+
+go_binary(
+    name = "testwrapper",
+    embed = [":testwrapper_lib"],
+    pure = "on",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "testwrapper_test",
+    srcs = ["main_test.go"],
+    embed = [":testwrapper_lib"],
+)

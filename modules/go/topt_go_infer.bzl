@@ -43,6 +43,7 @@ load(
     "@datadog-rules-test-optimization//tools/core:topt_selection_utils.bzl",
     "select_module_group_name",
     "selected_payload_runfiles",
+    "summarize_module_groups",
 )
 
 # In rules_go v0.51+, GoLibrary and GoSource were merged into GoInfo.
@@ -173,7 +174,7 @@ def _resolve_payload_selection(ctx):
                 ) % (
                     ip,
                     ", ".join(_go_runtime_module_identifiers(ip)),
-                    ", ".join(sorted(module_group_names)) or "<none>",
+                    summarize_module_groups(module_group_names),
                 ),
             )
 
