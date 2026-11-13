@@ -74,6 +74,7 @@ load(
 )
 load("@io_bazel_rules_go//go:def.bzl", "go_test")
 load("//:topt_go_ddtest.bzl", "MINI_TESTOPT", "ddtest_go_test", "topt_go_ddtest_registration")
+load("//:topt_go_ddtest_restore.bzl", ddtest_go_restore_test = "ddtest_go_test")
 load("//:topt_go_infer.bzl", "topt_go_bazel_metadata", "topt_go_payloads_selector")
 
 _service_mapping_entries = service_mapping_entries
@@ -316,6 +317,8 @@ def dd_topt_go_test(
         # behavior. Production go_binary targets are unaffected because this
         # macro only forwards flags to its hidden raw go_test target.
         enable_test_binary_linker_optimization = True,
+        nogo = True,
+        restore_non_go_settings = False,
         **kwargs):
     """Define a Go test with Datadog Test Optimization support.
 
@@ -355,6 +358,13 @@ def dd_topt_go_test(
         in Bazel modes where rules_go is not already stripping and the user did
         not explicitly request debug/no-strip behavior. Set false to restore
         caller-provided linker flags exactly if this optimization causes issues.
+      nogo: Keep the configured nogo analysis for the instrumented build by
+        default. Set false only when another build analyzes the same sources.
+        Disabled Test Optimization exports retain the ordinary test's policy.
+      restore_non_go_settings: Non-configurable boolean. Set true only with a
+        consumer-patched rules_go that restores sdk_name and bootstrap_nogo
+        from original_sdk_name and original_bootstrap_nogo on non-Go edges.
+        Upstream rules_go 0.59.0-0.65.0 does not implement that contract.
       **kwargs: Forwarded to underlying go_test (e.g., srcs, deps, data, tags, ...).
         The raw test also gets Mini's `testopt` library and the registration
         file of its package.
@@ -367,6 +377,8 @@ def dd_topt_go_test(
     if topt_data == None or not _is_dict(topt_data):
         fail_with_prefix("dd_topt_go_test", "topt_data is required and must be the dict from @<repo>//:export.bzl (single-service) or the aggregator mapping")
     _reject_removed_orchestrion_attrs(kwargs)
+    if type(restore_non_go_settings) != "bool":
+        fail_with_prefix("dd_topt_go_test", "restore_non_go_settings must be a non-configurable boolean")
     if go_test_rule == None:
         fail_with_prefix("dd_topt_go_test", "go_test_rule override cannot be None")
 
@@ -664,9 +676,11 @@ def dd_topt_go_test(
         **kwargs
     )
 
-    ddtest_go_test(
+    wrapper_rule = ddtest_go_restore_test if restore_non_go_settings else ddtest_go_test
+    wrapper_rule(
         name = name,
         actual = ":" + raw_name,
         metadata = ":" + metadata_name,
+        nogo = nogo,
         **wrapper_kwargs
     )

@@ -230,6 +230,14 @@ Go wrapper, treat it as a consumer-specific integration:
 - Preserve repository-local wrapper policy such as tags, scheduling, Docker
   defaults, platform constraints, and flaky-test behavior in the local helper
   layer.
+- Keep nogo enabled by default. Set `nogo = False` only for an enabled
+  instrumented copy whose sources the ordinary build also analyzes. Verify a
+  deliberate analyzer violation still fails the ordinary build. Disabled sync
+  exports must retain that analysis even when the wrapper passes this option.
+- Leave `restore_non_go_settings = False` with upstream rules_go. Enable it only
+  after verifying the consumer's original SDK/nogo setting and restoration
+  transition contract in the configuration reference. Adding settings alone
+  cannot restore dependency configurations; never patch rules_go implicitly.
 - Preserve the caller's `DD_SERVICE`, including an unset value, inherited
   environment and `select()`. Do not inject the reporting service into the test.
   The uploader validates it against the target sidecar and sync context; legacy

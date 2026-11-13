@@ -18,6 +18,9 @@ load(":topt_go_ddtest_repository.bzl", "DDTEST_RELEASE", "MINI_REPO")
 
 _BAZEL_TARGET_METADATA_OUTPUT = "bazel_target_metadata.json"
 _SDK_NAME_SETTING = "@io_bazel_rules_go//go/toolchain:sdk_name"
+_SKIP_NOGO_SETTING = "@io_bazel_rules_go//go/private:bootstrap_nogo"
+_ORIGINAL_SDK_NAME_SETTING = "@io_bazel_rules_go//go/toolchain:original_sdk_name"
+_ORIGINAL_SKIP_NOGO_SETTING = "@io_bazel_rules_go//go/private:original_bootstrap_nogo"
 _MINI_MODULE = "github.com/DataDog/ddtest/ddto"
 _ARG_COUNT = "_DD_TOPT_WRAPPER_ARG_COUNT"
 _ARG_PREFIX = "_DD_TOPT_WRAPPER_ARG_"
@@ -30,15 +33,46 @@ ToptGoTestArgsInfo = provider(
 # Mini's testopt library, which the raw test depends on.
 MINI_TESTOPT = Label("@%s//testopt" % MINI_REPO)
 
-def _ddtest_transition_impl(_settings, _attr):
-    return {_SDK_NAME_SETTING: DDTEST_RELEASE.sdk_name}
+def _ddtest_transition_impl(settings, attr):
+    # This publicly visible implementation setting exists throughout the tested
+    # rules_go range. Do not override a caller that already disabled analysis.
+    values = {
+        _SDK_NAME_SETTING: DDTEST_RELEASE.sdk_name,
+        _SKIP_NOGO_SETTING: settings[_SKIP_NOGO_SETTING] or not getattr(attr, "nogo", True),
+    }
+    return values
+
+def _record_original_settings(settings, values):
+    for key, original_key in [
+        (_SDK_NAME_SETTING, _ORIGINAL_SDK_NAME_SETTING),
+        (_SKIP_NOGO_SETTING, _ORIGINAL_SKIP_NOGO_SETTING),
+    ]:
+        original = settings[original_key]
+        if values[key] != settings[key] and not original:
+            original = json.encode(settings[key])
+        values[original_key] = original
+
+def _ddtest_restore_transition_impl(settings, attr):
+    values = _ddtest_transition_impl(settings, attr)
+    _record_original_settings(settings, values)
+    return values
 
 ddtest_transition_impl_for_tests = _ddtest_transition_impl
+ddtest_restore_transition_impl_for_tests = _ddtest_restore_transition_impl
 
 ddtest_transition = transition(
     implementation = _ddtest_transition_impl,
-    inputs = [],
-    outputs = [_SDK_NAME_SETTING],
+    inputs = [_SKIP_NOGO_SETTING],
+    outputs = [_SDK_NAME_SETTING, _SKIP_NOGO_SETTING],
+)
+
+# Referencing these labels is safe until the restored transition is applied.
+# Consumers must explicitly select it and supply rules_go's restoration support.
+_restored_settings = [_SDK_NAME_SETTING, _SKIP_NOGO_SETTING, _ORIGINAL_SDK_NAME_SETTING, _ORIGINAL_SKIP_NOGO_SETTING]
+_ddtest_restore_transition = transition(
+    implementation = _ddtest_restore_transition_impl,
+    inputs = _restored_settings,
+    outputs = _restored_settings,
 )
 
 # --- A single Mini --------------------------------------------------------
@@ -362,32 +396,38 @@ def _ddtest_go_test_impl(ctx):
         providers.append(testing.ExecutionInfo(requirements = execution_requirements))
     return providers
 
-ddtest_go_test = rule(
-    implementation = _ddtest_go_test_impl,
-    attrs = {
-        "_windows_launcher": attr.label(
-            default = "//tools/testwrapper",
-            executable = True,
-            cfg = "target",
-        ),
-        "actual": attr.label(
-            mandatory = True,
-            executable = True,
-            cfg = ddtest_transition,
-            aspects = [mini_check_aspect, _test_args_aspect],
-            doc = "The hidden raw go_test, built with the instrumented SDK.",
-        ),
-        "metadata": attr.label(
-            mandatory = True,
-            allow_single_file = True,
-            cfg = ddtest_transition,
-            doc = "Bazel-owned target metadata copied next to emitted test payloads.",
-        ),
-        "_allowlist_function_transition": attr.label(
-            default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
-        ),
-        "_windows_constraint": attr.label(default = "@platforms//os:windows"),
-    },
-    test = True,
-    doc = "The public test target of a Go test instrumented by ddtest.",
-)
+def ddtest_go_test_rule(restore_non_go_settings = False):
+    """Construct the wrapper rule; its exporting module keeps the ddtest_go_test name."""
+    configuration = _ddtest_restore_transition if restore_non_go_settings else ddtest_transition
+    return rule(
+        implementation = _ddtest_go_test_impl,
+        attrs = {
+            "_windows_launcher": attr.label(
+                default = "//tools/testwrapper",
+                executable = True,
+                cfg = "target",
+            ),
+            "actual": attr.label(
+                mandatory = True,
+                executable = True,
+                cfg = configuration,
+                aspects = [mini_check_aspect, _test_args_aspect],
+                doc = "The hidden raw go_test, built with the instrumented SDK.",
+            ),
+            "metadata": attr.label(
+                mandatory = True,
+                allow_single_file = True,
+                cfg = configuration,
+                doc = "Bazel-owned target metadata copied next to emitted test payloads.",
+            ),
+            "_allowlist_function_transition": attr.label(
+                default = "@bazel_tools//tools/allowlists/function_transition_allowlist",
+            ),
+            "_windows_constraint": attr.label(default = "@platforms//os:windows"),
+            "nogo": attr.bool(default = True, doc = "Whether to retain the configured nogo analysis for the instrumented build."),
+        },
+        test = True,
+        doc = "The public test target of a Go test instrumented by ddtest.",
+    )
+
+ddtest_go_test = ddtest_go_test_rule()

@@ -7,7 +7,7 @@
 """Fixtures and analysis tests of the ddtest instrumentation."""
 
 load("@bazel_skylib//lib:unittest.bzl", "analysistest", "asserts", "unittest")
-load("//:topt_go_ddtest.bzl", "argument_words_for_tests", "ddtest_transition_impl_for_tests")
+load("//:topt_go_ddtest.bzl", "argument_words_for_tests", "ddtest_restore_transition_impl_for_tests", "ddtest_transition_impl_for_tests")
 
 # The stub sync repository's export, as the macro tests use it.
 TOPT_DATA = {
@@ -40,11 +40,31 @@ foreign_mini_failure_test = analysistest.make(
 
 def _ddtest_transition_test_impl(ctx):
     env = unittest.begin(ctx)
-    asserts.equals(
-        env,
-        {"@io_bazel_rules_go//go/toolchain:sdk_name": "ddto"},
-        ddtest_transition_impl_for_tests(None, None),
-    )
+    sdk = "@io_bazel_rules_go//go/toolchain:sdk_name"
+    skip = "@io_bazel_rules_go//go/private:bootstrap_nogo"
+    original_sdk = "@io_bazel_rules_go//go/toolchain:original_sdk_name"
+    original_skip = "@io_bazel_rules_go//go/private:original_bootstrap_nogo"
+
+    # The stdlib warmup also uses this transition, without a nogo attribute.
+    asserts.equals(env, {sdk: "ddto", skip: False}, ddtest_transition_impl_for_tests({skip: False}, struct()))
+    for nogo in [False, True]:
+        for incoming_skip in [False, True]:
+            attr = struct(nogo = nogo)
+            incoming = {skip: incoming_skip}
+            expected = {sdk: "ddto", skip: incoming_skip or not nogo}
+            values = ddtest_transition_impl_for_tests(incoming, attr)
+            asserts.equals(env, expected, values)
+            asserts.equals(env, values, ddtest_transition_impl_for_tests(values, attr))
+
+            for incoming_sdk in ["", "custom-sdk", "ddto"]:
+                for saved_sdk, saved_skip in [("", ""), (json.encode("parent-sdk"), "false")]:
+                    incoming = {sdk: incoming_sdk, skip: incoming_skip, original_sdk: saved_sdk, original_skip: saved_skip}
+                    restored = ddtest_restore_transition_impl_for_tests(incoming, attr)
+                    expected = dict(values)
+                    expected[original_sdk] = saved_sdk or (json.encode(incoming_sdk) if incoming_sdk != "ddto" else "")
+                    expected[original_skip] = saved_skip or (json.encode(incoming_skip) if values[skip] != incoming_skip else "")
+                    asserts.equals(env, expected, restored)
+                    asserts.equals(env, restored, ddtest_restore_transition_impl_for_tests(restored, attr))
     return unittest.end(env)
 
 ddtest_transition_test = unittest.make(_ddtest_transition_test_impl)

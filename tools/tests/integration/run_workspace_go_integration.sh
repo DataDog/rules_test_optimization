@@ -76,6 +76,7 @@ HERMETIC_TEST_FLAGS=(
 )
 
 source "$REPO_ROOT/tools/tests/integration/go_integration_mock_server.sh"
+source "$REPO_ROOT/tools/tests/integration/go_integration_nogo.sh"
 
 shutdown_bazel_workspace_servers() {
   local workspace_dir
@@ -929,6 +930,11 @@ datadog_go_test_optimization_workspace_repositories(
 EOF
   fi
 
+  local nogo_registration=""
+  if nogo_regression_enabled; then
+    nogo_registration='go_register_nogo(nogo = "@io_bazel_rules_go//:tools_nogo", includes = ["@//:__subpackages__"])'
+  fi
+
   cat >> "$ws_dir/WORKSPACE" <<EOF
 
 http_archive(
@@ -940,7 +946,9 @@ http_archive(
     ],
 )
 
-load("@io_bazel_rules_go//go:deps.bzl", "go_register_toolchains", "go_rules_dependencies")
+load("@io_bazel_rules_go//go:deps.bzl", "go_register_nogo", "go_register_toolchains", "go_rules_dependencies")
+
+${nogo_registration}
 load("@bazel_gazelle//:deps.bzl", "gazelle_dependencies")
 load("@datadog-rules-test-optimization-go//:topt_go_workspace.bzl", "dd_topt_go_workspace_sync_repositories")
 
@@ -1054,6 +1062,11 @@ run_positive_fixture() {
   write_positive_workspace "$ws_dir" "$repo_mode"
   write_shared_fixture_sources "$ws_dir"
   write_fixture_bazelrc "$ws_dir"
+  if nogo_regression_enabled; then
+    write_nogo_fixture "$ws_dir" "io_bazel_rules_go"
+    run_nogo_regression "$ws_dir" "${BAZEL_EXTRA_ARGS[@]}" --noenable_bzlmod --enable_workspace --config=test-optimization
+    [[ "$INTEGRATION_SCENARIO_MODE" != "nogo" ]] || return 0
+  fi
   run_positive_subscenario "$ws_dir" "standard"
   assert_stale_base_sdk_fails "$ws_dir"
   run_positive_subscenario "$ws_dir" "hermetic"
@@ -1148,6 +1161,9 @@ start_go_integration_mock_server "$TMP_ROOT" "$MODULE_IMPORTPATH"
 BAZEL_EXTRA_ARGS+=("${GO_INTEGRATION_MOCK_REPO_ENVS[@]}")
 
 case "$INTEGRATION_SCENARIO_MODE" in
+  nogo)
+    run_positive_fixture "local"
+    ;;
   release)
     run_positive_fixture "archive"
     ;;
