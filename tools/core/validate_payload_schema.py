@@ -275,25 +275,26 @@ def _validate(
     if not isinstance(schema, dict):
         return
 
-    for keyword in _UNSUPPORTED_KEYWORDS:
-        if keyword in schema:
-            if unsupported_policy == "error":
-                errors.append(
-                    f"{path}: unsupported JSON Schema keyword '{keyword}' "
-                    "is not supported by this validator"
-                )
-                return
-            if keyword not in warned_unsupported:
-                warning = (
-                    f"warning: unsupported JSON Schema keyword '{keyword}' "
-                    f"at {path} is ignored"
-                )
-                if warning_output is None:
-                    if enabled("WARN"):
-                        print(warning, file=sys.stderr)
-                else:
-                    warning_output(warning)
-                warned_unsupported.add(keyword)
+    if not _UNSUPPORTED_KEYWORDS.isdisjoint(schema):
+        for keyword in _UNSUPPORTED_KEYWORDS:
+            if keyword in schema:
+                if unsupported_policy == "error":
+                    errors.append(
+                        f"{path}: unsupported JSON Schema keyword '{keyword}' "
+                        "is not supported by this validator"
+                    )
+                    return
+                if keyword not in warned_unsupported:
+                    warning = (
+                        f"warning: unsupported JSON Schema keyword '{keyword}' "
+                        f"at {path} is ignored"
+                    )
+                    if warning_output is None:
+                        if enabled("WARN"):
+                            print(warning, file=sys.stderr)
+                    else:
+                        warning_output(warning)
+                    warned_unsupported.add(keyword)
 
     if "$ref" in schema:
         try:

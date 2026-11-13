@@ -31,6 +31,7 @@ from uploader_test_support import add_uploader_runtime_to_path, resolve_runfile
 add_uploader_runtime_to_path()
 
 from uploader_py.batching import BatchCompatibilityError, localize_runtime_ids, schema_for_event_runtime_ids  # noqa: E402
+from uploader_py import batching as batch_metadata  # noqa: E402
 from uploader_py.application import run_uploader  # noqa: E402
 from uploader_py.config import ConfigError, parse_uploader_config  # noqa: E402
 from uploader_py.endpoints import build_endpoints  # noqa: E402
@@ -61,6 +62,105 @@ def _runtime(root, **changes):
     values = {"schema": schema, "batch_schema": schema_for_event_runtime_ids(schema)}
     values.update(changes)
     return _base_runtime(root, **values)
+
+
+class SharedMetadataTests(unittest.TestCase):
+    def shared_payload(self):
+        body = payload()
+        body["events"] *= 2
+        body["events"] = deepcopy(body["events"])
+        # Build independent event metadata, including different process IDs.
+        body["events"][1] = deepcopy(body["events"][0])
+        for index, event in enumerate(body["events"]):
+            event["content"]["meta"].update({
+                "runtime-id": f"process-{index}",
+                "git.commit.sha": "a" * 40,
+                "ci.pipeline.id": "pipeline",
+                "os.platform": "linux",
+                "bazel.target": f"//package:test_{index}",
+                "test.codeowners": '["@team"]',
+            })
+        return body
+
+    def test_moves_only_common_enrichment_tags_and_preserves_identities(self):
+        body = self.shared_payload()
+        original = deepcopy(body)
+        self.assertGreater(batch_metadata.compact_shared_metadata(body), 0)
+        for key in ("git.commit.sha", "ci.pipeline.id", "os.platform"):
+            self.assertEqual(original["events"][0]["content"]["meta"][key], body["metadata"]["*"][key])
+            self.assertTrue(all(key not in e["content"]["meta"] for e in body["events"]))
+        for before, after in zip(original["events"], body["events"]):
+            restored = deepcopy(after)
+            for key in ("git.commit.sha", "ci.pipeline.id", "os.platform"):
+                restored["content"]["meta"][key] = body["metadata"]["*"][key]
+            self.assertEqual(before, restored)
+        self.assertEqual("process-a", body["metadata"]["*"]["runtime-id"])
+
+    def test_mixed_event_types_keep_effective_defaults_and_compaction_is_idempotent(self):
+        body = self.shared_payload()
+        body["events"] = [deepcopy(body["events"][0]) for _ in range(5)]
+        for kind, event in zip(("test", "test_suite_end", "test_module_end", "test_session_end", "span"), body["events"]):
+            event["type"] = kind
+        body["metadata"]["*"]["git.commit.sha"] = "shadowed-default"
+        body["metadata"]["test_levels"] = {"ci.pipeline.id": "level-default"}
+        body["metadata"]["span"] = {"os.platform": "type-override"}
+        batch_metadata.compact_shared_metadata(body)
+        self.assertEqual("a" * 40, body["metadata"]["*"]["git.commit.sha"])
+        for event in body["events"]:
+            self.assertNotIn("git.commit.sha", event["content"]["meta"])
+            self.assertEqual("pipeline", event["content"]["meta"]["ci.pipeline.id"])
+            self.assertEqual("linux", event["content"]["meta"]["os.platform"])
+        compacted = deepcopy(body)
+        self.assertEqual(0, batch_metadata.compact_shared_metadata(body))
+        self.assertEqual(compacted, body)
+
+    def test_scope_overrides_missing_and_nonstring_values_are_preserved(self):
+        for scope in ("test", "test_levels", "opaque"):
+            body = self.shared_payload()
+            body["metadata"][scope] = {"git.commit.sha": "override"}
+            for event in body["events"]:
+                event["content"]["meta"]["ci.object"] = {"nested": "value"}
+            body["events"][1]["content"]["meta"].pop("ci.pipeline.id")
+            original = deepcopy(body)
+            batch_metadata.compact_shared_metadata(body)
+            self.assertEqual(original["metadata"][scope], body["metadata"][scope])
+            for before, after in zip(original["events"], body["events"]):
+                for key in ("git.commit.sha", "ci.pipeline.id", "ci.object"):
+                    self.assertEqual(before["content"]["meta"].get(key), after["content"]["meta"].get(key))
+
+    def test_unsupported_shapes_are_not_modified(self):
+        for change in ("future-version", "boolean-version", "future-event", "array-event-type", "bad-scope", "bad-meta", "single-event"):
+            body = self.shared_payload()
+            if change == "future-version": body["version"] = 2
+            elif change == "boolean-version": body["version"] = True
+            elif change == "future-event": body["events"][1]["type"] = "future"
+            elif change == "array-event-type": body["events"][1]["type"] = ["test"]
+            elif change == "bad-scope": body["metadata"]["opaque"] = None
+            elif change == "bad-meta": body["events"][1]["content"]["meta"] = None
+            else: body["events"] = body["events"][:1]
+            original = deepcopy(body)
+            with self.subTest(change=change):
+                self.assertEqual(0, batch_metadata.compact_shared_metadata(body))
+                self.assertEqual(original, body)
+
+    def test_actual_batch_compacts_metadata_without_changing_retained_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tasks = []
+            for index in range(2):
+                source = root / f"{index}.json"
+                source.write_text(json.dumps(payload(f"process-{index}")))
+                tasks.append(FileTask(str(index), source, source.name, PayloadType.TEST))
+            originals = [task.source_path.read_bytes() for task in tasks]
+            transport = _FakeTransport()
+            run = run_file_workers(tasks, workers=1, runtime=_runtime(root, keep_payloads=True),
+                transport_factory=lambda: transport, process_file=process_file, prepare_work=prepare_test_work_items)
+            self.assertTrue(all(r.status is FileStatus.SUCCEEDED for r in run.results))
+            self.assertEqual(1, len(transport.json_calls))
+            document = json.loads(transport.json_calls[0]["body"])
+            self.assertEqual("abcdef", document["metadata"]["*"]["git.commit.sha"])
+            self.assertTrue(all("git.commit.sha" not in e["content"]["meta"] for e in document["events"]))
+            self.assertEqual(originals, [task.source_path.read_bytes() for task in tasks])
 
 
 class BatchEnvelopeTests(unittest.TestCase):

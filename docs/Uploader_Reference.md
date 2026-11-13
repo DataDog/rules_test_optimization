@@ -255,6 +255,21 @@ type and test-level scopes after they have been copied to events. The uploader
 does not generate a replacement process identity.
 Real intake acceptance and rejection behavior still need validation before rollout.
 
+In the opt-in batch path, string tags beginning with `bazel.`, `git.`, `ci.`,
+`os.`, or `runtime.` move from event metadata to `metadata["*"]` only when every
+supported event has the same value. A key mentioned in another metadata scope
+stays in each event, preserving the precedence above. Different target tags,
+`test.*` fields, hierarchy IDs, services and per-event `runtime-id` values keep
+their existing locations. Unknown versions or event shapes are left unchanged.
+The emitted body is schema-validated after compaction and remains subject to
+the existing uncompressed byte limit. The JSON report records its CPU and wall
+time under `performance.worker_phases.metadata_compaction`.
+
+Compaction reduces repeated data before final validation and gzip. It does not
+change the gzip level or introduce another setting; disabling batching also
+disables compaction. Ordinary per-file uploads, coverage and telemetry retain
+their current representations.
+
 HTTP success acknowledges all whole sources in that request. A rejected batch
 with status 400, 413, or 422 gets one per-source pass to isolate the rejection.
 Authentication, transport, rate-limit, and server failures use the existing
