@@ -20,6 +20,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from uploader_test_support import complete_bep_json
 from uploader_test_support import (
     add_uploader_runtime_to_path,
     resolve_runfile as _runfile,
@@ -93,7 +94,7 @@ class ApplicationTests(unittest.TestCase):
                 events.append(_bep_test_result("//pkg:" + name, output=output, cached_locally=cached))
             original = [path.read_bytes() for path in paths]
             bep = root / "bep.json"
-            bep.write_text("\n".join(json.dumps(event) for event in events))
+            bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in events), invocation=str(bep)))
             report_path = root / "report.json"
             reports = []
             for level in ("ERROR", "WARN", "INFO", "DEBUG"):
@@ -442,7 +443,7 @@ class ApplicationTests(unittest.TestCase):
                         event["id"]["testResult"]["shard"] = shard
                         events.append(event)
                     bep = root / "bep.ndjson"
-                    bep.write_text("\n".join(json.dumps(event) for event in events))
+                    bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in events), invocation=str(bep)))
                     report_path = root / "report.json"
                     config = self._config(root, fail_on_error=fail_on_error,
                         expected_targets=("//pkg:target",) if explicit_targets else (),
@@ -475,7 +476,7 @@ class ApplicationTests(unittest.TestCase):
                 cached = _bep_test_result("//pkg:ambiguous", output=output, cached_locally=True)
                 cached["id"]["testResult"]["run"] = 2
                 bep = root / "bep.json"
-                bep.write_text("\n".join(json.dumps(event) for event in (fresh, cached)))
+                bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in (fresh, cached)), invocation=str(bep)))
                 report_path = root / "report.json"
                 config = self._config(root, allow_cached_payload_uploads=False,
                     extra_arguments=("--freshness-mode=optional", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -501,8 +502,8 @@ class ApplicationTests(unittest.TestCase):
                 "uri": "bytestream://cache.example/blobs/ordinary-log/100",
             }]
             bep = root / "bep.json"
-            bep.write_text("\n".join(json.dumps(event) for event in (
-                _bep_test_result("//pkg:instrumented", output=output), remote)))
+            bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in (
+                _bep_test_result("//pkg:instrumented", output=output), remote)), invocation=str(bep)))
             report_path = root / "report.json"
             config = self._config(root, fail_on_error=True, allow_cached_payload_uploads=False,
                 extra_arguments=("--freshness-mode=optional", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -514,6 +515,35 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(0, rc, report["result"])
             self.assertEqual(1, report["payload_types"]["test"]["succeeded"])
             self.assertEqual(1, report["bep"]["remote_only_outputs"])
+
+    def test_required_remote_outputs_fail_after_usable_results_with_optional_freshness(self) -> None:
+        for expected in ((), ("//pkg:instrumented", "//pkg:remote")):
+            with self.subTest(expected=expected), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                output = root / "bazel-testlogs/pkg/instrumented/test.outputs"
+                source = _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
+                (output / "bazel_target_metadata.json").write_text(json.dumps({"bazel.target": "//pkg:instrumented"}))
+                remote = _bep_test_result("//pkg:remote")
+                remote["testResult"]["testActionOutput"] = [{
+                    "name": "test.outputs", "pathPrefix": ["bazel-out", "config", "testlogs", "pkg", "remote"],
+                    "uri": "bytestream://cache.example/blobs/remote-log/100",
+                }]
+                bep = root / "bep.json"
+                bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in (
+                    _bep_test_result("//pkg:instrumented", output=output), remote)), invocation=str(bep)))
+                report_path = root / "report.json"
+                config = self._config(root, fail_on_error=False, expected_targets=expected,
+                    allow_cached_payload_uploads=False, extra_arguments=("--freshness-mode=optional",
+                        "--remote-artifacts=required", "--artifact-source=local", f"--bep-json={bep}", f"--report-json={report_path}"))
+
+                rc = run_uploader(config, resolver=RunfilesResolver.from_environment(cwd=root, environ={}),
+                    endpoints=build_endpoints(config), logger=configure_logging(debug=False, stream=StringIO()), stream=StringIO())
+
+                report = json.loads(report_path.read_text())
+                self.assertEqual(1, report["payload_types"]["test"]["succeeded"])
+                self.assertTrue(source.exists())
+                self.assertEqual(2, rc, report["result"])
+                self.assertEqual("bep_output_remote_only_without_downloader", report["result"]["reason_code"])
 
     def test_cross_label_output_collision_does_not_block_a_valid_sibling(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -530,7 +560,7 @@ class ApplicationTests(unittest.TestCase):
             contested = outputs[1] / "payloads/tests/events.json"
             original = contested.read_bytes()
             bep = root / "bep.json"
-            bep.write_text("\n".join(json.dumps(event) for event in events))
+            bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in events), invocation=str(bep)))
             report_path = root / "report.json"
             config = self._config(root, expected_targets=("//pkg:valid", "//pkg:contested", "//pkg:other"),
                 allow_cached_payload_uploads=False,
@@ -560,7 +590,7 @@ class ApplicationTests(unittest.TestCase):
                 duplicate["id"]["testResult"]["run"] = 2
                 events.append(duplicate)
                 bep = root / "bep.json"
-                bep.write_text("\n".join(json.dumps(event) for event in events))
+                bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in events), invocation=str(bep)))
                 report_path = root / "report.json"
                 config = self._config(root, allow_cached_payload_uploads=False,
                     expected_targets=("//pkg:valid", "//pkg:ambiguous"),
@@ -580,7 +610,7 @@ class ApplicationTests(unittest.TestCase):
                 output = root / "bazel-testlogs/pkg/core/test.outputs"
                 _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
                 bep = root / "bep.json"
-                bep.write_text(json.dumps(_bep_test_result("//pkg:core", output=output)))
+                bep.write_text(complete_bep_json(json.dumps(_bep_test_result("//pkg:core", output=output)), invocation=str(bep)))
                 report_path = root / "report.json"
                 config = self._config(root, allow_cached_payload_uploads=False,
                     extra_arguments=(f"--freshness-mode={mode}", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -597,7 +627,7 @@ class ApplicationTests(unittest.TestCase):
             event = _bep_test_result("//pkg:target", output=output)
             event["testResult"]["status"] = {}
             bep = root / "bep.json"
-            bep.write_text(json.dumps(event))
+            bep.write_text(complete_bep_json(json.dumps(event), invocation=str(bep)))
             report_path = root / "report.json"
             config = self._config(root, allow_cached_payload_uploads=False,
                 extra_arguments=("--freshness-mode=required", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -635,7 +665,7 @@ class ApplicationTests(unittest.TestCase):
                     event["id"]["testResult"]["shard"] = shard
                     events.append(event)
                 bep = root / "bep.json"
-                bep.write_text("\n".join(json.dumps(event) for event in events))
+                bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in events), invocation=str(bep)))
                 report_path = root / "report.json"
                 config = self._config(root, allow_cached_payload_uploads=False,
                     extra_arguments=("--freshness-mode=required", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -651,7 +681,7 @@ class ApplicationTests(unittest.TestCase):
                 (root / "bazel-testlogs").mkdir()
                 event = _bep_test_result("//pkg:cached", cached_locally=not remote, cached_remotely=remote)
                 bep = root / "bep.json"
-                bep.write_text("\n".join(json.dumps(item) for item in (event, _bep_test_result("//pkg:ordinary", cached_locally=True))))
+                bep.write_text(complete_bep_json("\n".join(json.dumps(item) for item in (event, _bep_test_result("//pkg:ordinary", cached_locally=True))), invocation=str(bep)))
                 report_path = root / "report.json"
                 config = self._config(root, dry_run=False, expected_targets=("//pkg:cached",), allow_cached_payload_uploads=False,
                     extra_arguments=("--freshness-mode=required", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -681,7 +711,7 @@ class ApplicationTests(unittest.TestCase):
                     events.append({"id": {"targetCompleted": {"label": "//pkg:ambiguous", "configuration": {"id": "config"}}},
                         "aborted": {"reason": "SKIPPED"}})
                 bep = root / "bep.json"
-                bep.write_text("\n".join(json.dumps(event) for event in events))
+                bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in events), invocation=str(bep)))
                 report_path = root / "report.json"
                 config = self._config(root, expected_targets=("//pkg:valid", "//pkg:ambiguous"), allow_cached_payload_uploads=False,
                     extra_arguments=("--freshness-mode=required", f"--artifact-source={source}", f"--artifact-staging-dir={root}/staged", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -702,7 +732,7 @@ class ApplicationTests(unittest.TestCase):
             records = [_bep_test_result("//pkg:target", output=output, cached_locally=True), _bep_test_result("//pkg:target", output=None)]
             records[1]["id"]["testResult"]["shard"] = 2
             bep = root / "bep.json"
-            bep.write_text("\n".join(json.dumps(record) for record in records))
+            bep.write_text(complete_bep_json("\n".join(json.dumps(record) for record in records), invocation=str(bep)))
             report_path = root / "report.json"
             config = self._config(root, allow_cached_payload_uploads=False,
                 extra_arguments=("--freshness-mode=required", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -722,7 +752,7 @@ class ApplicationTests(unittest.TestCase):
                 (output / "bazel_target_metadata.json").write_text(json.dumps({"bazel.target": "//pkg:target"}))
                 events.append(_bep_test_result("//pkg:target", attempt=attempt, status="FAILED" if attempt == 1 else "PASSED", output=output))
             bep = root / "bep.ndjson"
-            bep.write_text("\n".join(json.dumps(event) for event in events))
+            bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in events), invocation=str(bep)))
             report_path = root / "report.json"
             config = self._config(root, expected_targets=("//pkg:target",), allow_cached_payload_uploads=False,
                 extra_arguments=("--freshness-source=bep", "--freshness-mode=required", f"--bep-json={bep}", f"--report-json={report_path}"))
@@ -758,7 +788,7 @@ class ApplicationTests(unittest.TestCase):
             )
             bep = root / "bep.ndjson"
             bep.write_text(
-                "\n".join(
+                complete_bep_json("\n".join(
                     json.dumps(
                         _bep_test_result(
                             "//pkg:target",
@@ -769,7 +799,7 @@ class ApplicationTests(unittest.TestCase):
                     )
                     for attempt, output in enumerate(attempts, start=1)
                 )
-                + "\n",
+                + "\n", invocation=str(bep)),
                 encoding="utf-8",
             )
             report_path = root / "report.json"
@@ -822,7 +852,7 @@ class ApplicationTests(unittest.TestCase):
                 _bep_test_result("//pkg:missing", status="TIMEOUT"),
             )
             bep.write_text(
-                "\n".join(json.dumps(event) for event in events) + "\n",
+                complete_bep_json("\n".join(json.dumps(event) for event in events) + "\n", invocation=str(bep)),
                 encoding="utf-8",
             )
             report_path = root / "report.json"
@@ -935,7 +965,7 @@ class ApplicationTests(unittest.TestCase):
                 },
             }
             bep.write_text(
-                json.dumps(skipped_event) + "\n",
+                complete_bep_json(json.dumps(skipped_event) + "\n", invocation=str(bep)),
                 encoding="utf-8",
             )
             report_path = root / "report.json"
@@ -979,7 +1009,7 @@ class ApplicationTests(unittest.TestCase):
             self.assertEqual(0, report["requests"]["attempted"])
 
             bep.write_text(
-                "\n".join(
+                complete_bep_json("\n".join(
                     json.dumps(event)
                     for event in (
                         skipped_event,
@@ -989,7 +1019,7 @@ class ApplicationTests(unittest.TestCase):
                         ),
                     )
                 )
-                + "\n",
+                + "\n", invocation=str(bep)),
                 encoding="utf-8",
             )
             conflict_log = StringIO()

@@ -100,6 +100,7 @@ load(
     "wrapper_output_name_target_rule",
     "wrapper_output_name_windows_test",
 )
+load(":test_module_boundary.bzl", "module_boundary_tests")
 load(
     ":test_payloads_selector.bzl",
     "selector_embed_precedence_target",
@@ -994,3 +995,5 @@ test_suite(
         ":wrapper_output_name_windows_test",
     ],
 )
+
+module_boundary_tests()

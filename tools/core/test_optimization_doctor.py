@@ -33,6 +33,7 @@ import uuid
 import zipfile
 from topt_runtime.bep_execution import (
     BepTestExecution, ambiguous_execution_outputs, missing_test_shards,
+    bep_topology_errors, first_bep_completeness_error, resolve_freshness_policy, completed_empty_test_session,
     canonical_output_directory_key, find_test_output_directories, test_result_event_count, exclusively_cached_labels,
 )
 from topt_runtime.log_levels import enabled, resolve_log_level
@@ -46,6 +47,7 @@ VALID_GO_PAYLOAD_SELECTIONS = {
     "module",
     "module_override",
     "full_bundle_disabled",
+    "full_bundle_importpath_miss",
     "full_bundle_no_match",
 }
 VALID_GO_PAYLOAD_SELECTIONS_TEXT = ", ".join(sorted(VALID_GO_PAYLOAD_SELECTIONS))
@@ -53,6 +55,7 @@ DEFAULT_ALLOWED_GO_PAYLOAD_SELECTIONS = {
     "module",
     "module_override",
     "full_bundle_disabled",
+    "full_bundle_importpath_miss",
 }
 DOCTOR_EXECROOT_ENV = "DD_TEST_OPTIMIZATION_DOCTOR_EXECROOT"
 VALID_FRESHNESS_MODES = {"auto", "required", "optional", "disabled"}
@@ -129,6 +132,7 @@ class BepFreshness:
         executions: list[BepTestExecution] | None = None,
         ambiguous_outputs: set[str] | None = None,
         ambiguous_labels: set[str] | None = None,
+        completeness_errors: list[tuple[str, str]] | None = None,
     ) -> None:
         self.eligible_outputs = eligible_outputs
         self.cached_outputs = cached_outputs
@@ -141,6 +145,7 @@ class BepFreshness:
             key for _, key in eligible_outputs.intersection(cached_outputs)).union(ambiguous_outputs or ())
         self.ambiguous_labels = frozenset(ambiguous_labels or ())
         self.ambiguous_outputs = self.ambiguous_outputs.union(key for execution in self.executions if execution.identity[1] in self.ambiguous_labels for key in execution.output_keys)
+        self.completeness_errors = tuple(completeness_errors or ())
         self.identified_labels: set[str] = set()
 
 
@@ -1658,7 +1663,9 @@ def _bep_document_identity(path: Path, lines: list[str], seen_uuids: dict[str, s
 
 def _bep_execution_identity(invocation: str, result_id: dict[str, Any]) -> tuple:
     configuration = result_id.get("configuration", {})
-    configuration_id = configuration.get("id", "") if isinstance(configuration, dict) else ""
+    if not isinstance(configuration, dict):
+        _fail("invalid BEP TestResult configuration identity")
+    configuration_id = configuration.get("id", "")
     if not isinstance(configuration_id, str):
         _fail("invalid BEP TestResult configuration identity")
     indexes = []
@@ -1685,6 +1692,7 @@ def _parse_bep_freshness(
     skipped_targets: set[str] = set()
     test_result_labels: set[str] = set()
     executions: list[BepTestExecution] = []
+    completeness_errors: list[tuple[str, str]] = []
     seen_files: set[Path] = set()
     seen_uuids: dict[str, str] = {}
     ambiguous_output_mappings: set[str] = set()
@@ -1704,7 +1712,18 @@ def _parse_bep_freshness(
                 return None
             _fail(f"BEP JSON file not found: {bep_file}")
         try:
-            lines = bep_file.read_text(encoding="utf-8-sig").splitlines()
+            lines = []
+            for line_number, raw_line in enumerate(bep_file.read_bytes().splitlines(), start=1):
+                try:
+                    lines.append(raw_line.decode("utf-8-sig" if line_number == 1 else "utf-8"))
+                except UnicodeDecodeError:
+                    if not unavailable_is_error:
+                        _warn(f"invalid BEP UTF-8 in {bep_file}:{line_number}; preserving historical local output validation")
+                        return None
+                    completeness_errors.append(("", f"invalid BEP UTF-8 in {bep_file}:{line_number}"))
+                    # Preserve invalid-byte identity in the UUID fingerprint,
+                    # without interpreting replacement characters as JSON data.
+                    lines.append("\0" + hashlib.sha256(raw_line).hexdigest())
         except OSError as exc:
             if not unavailable_is_error:
                 _warn(
@@ -1718,6 +1737,7 @@ def _parse_bep_freshness(
         if invocation is None:
             continue
 
+        topology_events = []
         for line_number, raw_line in enumerate(lines, start=1):
             if not raw_line.strip():
                 continue
@@ -1730,8 +1750,25 @@ def _parse_bep_freshness(
                         "BEP freshness validation and preserving historical local output validation"
                     )
                     return None
-                _fail(f"invalid BEP JSON in {bep_file}:{line_number}: {exc}")
-            event_id = event.get("id") if isinstance(event, dict) else {}
+                completeness_errors.append(("", f"invalid BEP JSON in {bep_file}:{line_number}: {exc}"))
+                continue
+            if not isinstance(event, dict):
+                completeness_errors.append(("", "invalid BEP event: expected an object"))
+                continue
+            topology_events.append({key: value for key, value in event.items()
+                if key in {"id", "children", "started", "finished", "lastMessage", "last_message", "testSummary", "test_summary", "testResult", "test_result"}})
+            for result_key in ("testResult", "test_result"):
+                if isinstance(topology_events[-1].get(result_key), dict):
+                    original_result = topology_events[-1][result_key]
+                    info = _coalesced_field(original_result, "executionInfo", "execution_info", {})
+                    topology_events[-1][result_key] = {
+                        "cachedLocally": _coalesced_field(original_result, "cachedLocally", "cached_locally", False),
+                        "executionInfo": {"cachedRemotely": _coalesced_field(info, "cachedRemotely", "cached_remotely", False)},
+                    }
+            event_id = event.get("id") or {}
+            if not isinstance(event_id, dict):
+                completeness_errors.append(("", "invalid BEP event identity"))
+                continue
             target_completed_id = _coalesced_field(
                 event_id, "targetCompleted", "target_completed", {}
             )
@@ -1859,6 +1896,8 @@ def _parse_bep_freshness(
             if not mapped_any and not remote_any and not (cached_locally or cached_remotely):
                 missing_output_mappings.add(label)
 
+        completeness_errors.extend(bep_topology_errors(topology_events, invocation, _bep_execution_identity))
+
     conflicting_labels = skipped_targets.intersection(test_result_labels)
 
     return BepFreshness(
@@ -1869,6 +1908,7 @@ def _parse_bep_freshness(
         artifact_references=artifact_references,
         skipped_targets=skipped_targets,
         executions=executions,
+        completeness_errors=completeness_errors,
         ambiguous_outputs=ambiguous_output_mappings,
         ambiguous_labels=conflicting_labels,
     )
@@ -2219,6 +2259,7 @@ def _validate_outputs(
     expected_payload_selection_by_target: dict[str, str] | None = None,
     target_by_output_dir: dict[Path, str] | None = None,
     test_result_outputs: dict[Path, str] | None = None,
+    empty_session_outputs: dict[Path, str] | None = None,
 ) -> dict[str, int]:
     """Validate local test.outputs payloads and return payload-selection counts."""
     allowed_selections = _effective_allowed_payload_selections(
@@ -2234,6 +2275,7 @@ def _validate_outputs(
     selection_summary: dict[str, int] = {}
     for output_dir in output_dirs:
         has_test_events = False
+        has_empty_session = False
         output_label = target_lookup.get(output_dir.resolve())
         payloads = _payload_files(output_dir)
         msgpack_payloads = _msgpack_payload_files(output_dir)
@@ -2254,12 +2296,17 @@ def _validate_outputs(
             doc = _load_json(payload)
             if output_dir / "payloads" / "tests" in payload.parents and isinstance(doc, dict):
                 has_test_events = has_test_events or test_result_event_count(doc) > 0
+                has_empty_session = has_empty_session or completed_empty_test_session(doc)
 
         if require_bazel_metadata and not metadata:
             _fail(f"missing bazel_target_metadata.json under {output_dir}")
         for metadata_file in metadata:
             doc = _load_json(metadata_file)
             selection = doc.get("bazel.go.payload_selection")
+            if selection == "full_bundle_importpath_miss":
+                ip, root = doc.get("bazel.go.importpath"), doc.get("bazel.go.runtime_module_path")
+                if not (isinstance(ip, str) and isinstance(root, str) and root and (ip == root or ip.startswith(root + "/"))):
+                    _fail(f"{metadata_file} reports full_bundle_importpath_miss without a canonical Go module boundary")
             if selection is not None and selection not in VALID_GO_PAYLOAD_SELECTIONS:
                 _fail(
                     f"{metadata_file} has unsupported bazel.go.payload_selection={selection!r}; "
@@ -2283,6 +2330,8 @@ def _validate_outputs(
                         f"{target_label}; expected {expected!r}"
                     )
 
+        if empty_session_outputs is not None and has_empty_session and output_label:
+            empty_session_outputs[output_dir.resolve()] = output_label
         if test_result_outputs is not None and has_test_events and output_label:
             test_result_outputs[output_dir.resolve()] = output_label
 
@@ -2620,6 +2669,8 @@ def _update_diagnostic_bep(
                 }
                 for item in freshness.remote_only_outputs
             ],
+            "completeness_errors": [{"label": label, "message": message} for label, message in freshness.completeness_errors],
+            "strict_completeness": resolve_freshness_policy(report["config"]["freshness_mode"], "bep").strict_bep,
             "missing_output_mappings": sorted(freshness.missing_output_mappings),
             "skipped_targets": sorted(freshness.skipped_targets),
             "artifact_references": len(freshness.artifact_references),
@@ -2999,7 +3050,8 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
     staging_requested = _artifact_staging_requested(args)
     if args.artifact_source == "bep" and not bep_files:
         _fail("--artifact-source=bep requires --bep-json or DD_TEST_OPTIMIZATION_BEP_JSON")
-    strict_bep_required = args.freshness_mode == "required"
+    policy = resolve_freshness_policy(args.freshness_mode, "bep")
+    strict_bep_required = policy.source_required
     if args.freshness_source == "execution_log" and strict_bep_required:
         _fail("doctor freshness validation only supports BEP; use --freshness-source=bep")
 
@@ -3153,7 +3205,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             )
 
         if args.freshness_mode != "disabled" and freshness is not None:
-            required = strict_bep_required or args.freshness_mode == "auto"
+            required = policy.strict_bep
             output_key_by_output_dir = {item.output_dir.resolve(): item.output_key for item in staged}
             label_by_output_dir = {item.output_dir.resolve(): item.label for item in staged}
             if expected_targets:
@@ -3179,6 +3231,10 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             target_by_output_dir.update(label_by_output_dir)
         if freshness is not None and freshness.ambiguous_labels.intersection(expected_targets):
             _fail("BEP freshness is ambiguous: target reported as both platform-skipped and executed")
+        if freshness is not None and policy.strict_bep:
+            error = first_bep_completeness_error(freshness.completeness_errors, freshness.identified_labels.union(expected_targets))
+            if error:
+                _fail(error)
         if not output_dirs:
             non_fresh_expected_targets = False
             if expected_targets and freshness is not None:
@@ -3211,6 +3267,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
         )
         allowed_payload_selections = set(config.get("allowed_payload_selections") or [])
         test_result_outputs: dict[Path, str] = {}
+        empty_session_outputs: dict[Path, str] = {}
         selection_summary = _validate_outputs(
             output_dirs,
             require_json_payloads=config["require_json_payloads"],
@@ -3221,6 +3278,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             expected_payload_selection_by_target=config.get("expected_payload_selection_by_target", {}),
             target_by_output_dir=target_by_output_dir,
             test_result_outputs=test_result_outputs,
+            empty_session_outputs=empty_session_outputs,
         )
         if freshness is not None:
             selected_labels = freshness.identified_labels.union(expected_targets).union(
@@ -3233,11 +3291,17 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 _fail("BEP freshness is ambiguous: target reported as both platform-skipped and executed")
             if ambiguous_keys:
                 _fail("BEP freshness has ambiguous execution provenance for " + sorted(ambiguous_keys)[0])
-            if args.freshness_mode in {"required", "auto"}:
+            if policy.strict_bep:
                 proven = {(label, output_key_by_output_dir.get(path) or _local_test_output_key(path, testlogs_dir=testlogs_dir))
                           for path, label in test_result_outputs.items()}
                 freshness.identified_labels.update(test_result_outputs.values())
-                missing = missing_test_shards(freshness.executions, proven, freshness.identified_labels.union(expected_targets))
+                freshness.identified_labels.update(empty_session_outputs.values())
+                error = first_bep_completeness_error(freshness.completeness_errors, freshness.identified_labels.union(expected_targets))
+                if error:
+                    _fail(error)
+                empty = {(label, output_key_by_output_dir.get(path) or _local_test_output_key(path, testlogs_dir=testlogs_dir))
+                         for path, label in empty_session_outputs.items()}
+                missing = missing_test_shards(freshness.executions, proven, freshness.identified_labels.union(expected_targets), empty)
                 if missing:
                     invocation, label, configuration, run, shard = missing[0]
                     _fail(f"fresh shard produced no test-result evidence: {label} configuration={configuration!r} run={run} shard={shard} invocation={invocation}")

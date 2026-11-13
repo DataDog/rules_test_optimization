@@ -59,3 +59,47 @@ def add_uploader_runtime_to_path() -> Path:
     if str(core_directory) not in sys.path:
         sys.path.insert(0, str(core_directory))
     return core_directory
+
+
+def complete_bep_json(text: str, *, invocation: str = "unit-fixture") -> str:
+    """Build a complete synthetic stream around result-only unit fixtures.
+
+    Tests for truncation and malformed streams deliberately do not use this.
+    Captured streams and explicit invocation-identity fixtures stay unchanged.
+    """
+    import hashlib
+    import json
+    try:
+        events = [json.loads(line) for line in text.splitlines() if line.strip()]
+    except (ValueError, AttributeError):
+        return text
+    if not events or any(not isinstance(event, dict) or "id" not in event for event in events):
+        return text
+    if any("started" in event or "finished" in event for event in events):
+        return text
+    groups = {}
+    for event in events:
+        rid = event.get("id", {}).get("testResult", event.get("id", {}).get("test_result"))
+        if isinstance(rid, dict) and "label" in rid:
+            config = rid.get("configuration", {})
+            key = (rid["label"], json.dumps(config, sort_keys=True))
+            groups.setdefault(key, []).append(rid)
+    targets, summaries = [], []
+    for (label, config), ids in groups.items():
+        config = json.loads(config)
+        base = {"label": label, "configuration": config}
+        summary_id = {"testSummary": base}
+        unique = {(rid.get("run", 1), rid.get("shard", 0), rid.get("attempt", 1)) for rid in ids}
+        targets.append({"id": {"targetCompleted": base}, "completed": {"success": True},
+            "children": [{"testResult": rid} for rid in ids] + [summary_id]})
+        summaries.append({"id": summary_id, "testSummary": {"totalRunCount": len(unique),
+            "runCount": max(run for run, _, _ in unique),
+            "shardCount": max(shard for _, shard, _ in unique)}})
+    root_children = [event["id"] for event in targets] + [{"buildFinished": {}}]
+    uuid = hashlib.sha256(invocation.encode()).hexdigest()
+    complete = [{"id": {"started": {}}, "started": {"uuid": uuid}, "children": root_children}]
+    complete.extend(targets)
+    complete.extend(events)
+    complete.extend(summaries)
+    complete.append({"id": {"buildFinished": {}}, "finished": {"overallSuccess": True}, "lastMessage": True})
+    return "\n".join(json.dumps(event) for event in complete) + "\n"

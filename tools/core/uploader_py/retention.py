@@ -21,7 +21,7 @@ import tempfile
 from typing import Iterable
 
 from .discovery import DiscoveryResult
-from .freshness import FreshnessPreparation, collect_test_result_evidence, represented_test_targets
+from .freshness import FreshnessPreparation, collect_test_result_evidence, collect_empty_session_evidence, represented_test_targets
 from .json_utils import strict_json_dumps
 from .models import FileStatus
 from .reporting import AggregateReport
@@ -154,7 +154,7 @@ def retain_pending_outputs(
             proven, labels = collect_test_result_evidence(discovery, report.results if report else ())
             labels.update(expected_targets)
             labels.update(task.target_label for task in discovery.tasks if task.target_label)
-            deficits = {"missing_test_shards": [list(identity) for identity in missing_test_shards(preparation.plan.executions, proven, labels)],
+            deficits = {"missing_test_shards": [list(identity) for identity in missing_test_shards(preparation.plan.executions, proven, labels, collect_empty_session_evidence(discovery, report.results if report else ()))],
                 "missing_expected_targets": (sorted(set(expected_targets).difference(represented_test_targets(preparation.plan)))
                     if preparation.plan.selected_source == "bep" else []),
                 "missing_output_labels": sorted(preparation.plan.missing_output_labels),

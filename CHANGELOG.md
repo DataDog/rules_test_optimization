@@ -17,6 +17,16 @@ versioning.
 
 ### Fixed
 
+- New Go packages can use their selected service's full metadata bundle when
+  their importpath is inside the configured Go module. Invalid explicit
+  overrides and unproven module misses remain errors.
+- Doctor and the Python uploader detect missing announced BEP results,
+  inconsistent run/shard/attempt summaries and incomplete streams. `auto`
+  with BEP now applies the same strict checks as `required`, independently of
+  `fail_on_error`; usable fresh files are still processed before failure.
+- A PASSED empty shard can be accounted for by Mini's explicit completed
+  zero-tests session, in ordinary and opt-in batched uploads.
+
 - Instrumented Go tests preserve configured argument expansion and runtime
   arguments, including locations in `data` selected by Go's `pure` or `race`
   configuration. Data binaries keep their linker definitions. Internal helpers

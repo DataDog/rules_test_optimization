@@ -122,7 +122,9 @@ def _resolve_payload_selection(ctx):
         module_group_names = state.module_group_names
         module_group_by_identifier = state.module_group_by_identifier
         module_files_by_name = state.module_files_by_name
+        runtime_module_path = state.runtime_module_path
     else:
+        runtime_module_path = ctx.attr.runtime_module_path
         module_group_names = ctx.attr.module_group_names
         module_group_by_identifier = ctx.attr.module_group_by_identifier
         if module_group_names:
@@ -134,6 +136,9 @@ def _resolve_payload_selection(ctx):
             module_group_names[index]: ctx.attr.module_groups[index][DefaultInfo].files
             for index in range(len(module_group_names))
         }
+    within_module = bool(ip and runtime_module_path) and (
+        ip == runtime_module_path or ip.startswith(runtime_module_path + "/")
+    )
     strict_selection = ctx.attr.include_per_module and len(module_group_names) > 0 and (
         bool(ctx.attr.explicit_importpath) or bool(ctx.attr.module_label_override)
     )
@@ -165,7 +170,7 @@ def _resolve_payload_selection(ctx):
                 )
                 if selected_name:
                     break
-        if not selected_name and strict_selection:
+        if not selected_name and strict_selection and not within_module:
             fail_with_prefix(
                 "topt_go_payloads_selector",
                 (
@@ -183,13 +188,14 @@ def _resolve_payload_selection(ctx):
     if chosen_files != None:
         selection = "module_override" if ctx.attr.module_label_override else "module"
     elif ctx.attr.include_per_module and len(module_group_names) > 0:
-        selection = "full_bundle_no_match"
+        selection = "full_bundle_importpath_miss" if within_module else "full_bundle_no_match"
     else:
         selection = "full_bundle_disabled"
 
     return struct(
         importpath = ip,
         importpath_source = importpath_source,
+        runtime_module_path = runtime_module_path,
         selected_name = selected_name or "",
         chosen_files = chosen_files,
         selection = selection,
@@ -315,6 +321,7 @@ def _topt_go_bazel_metadata_impl(ctx):
         "bazel.test_optimization.runtime_name": "go",
         "bazel.go.importpath": selection.importpath,
         "bazel.go.importpath_source": selection.importpath_source,
+        "bazel.go.runtime_module_path": selection.runtime_module_path,
         "bazel.go.payload_selection": selection.selection,
         "bazel.go.attr.cgo": ctx.attr.cgo,
         "bazel.go.attr.pure": ctx.attr.pure,
@@ -369,6 +376,7 @@ topt_go_payloads_selector = rule(
 
         # Exact raw backend identifier -> logical module group mapping.
         "module_group_by_identifier": attr.string_dict(),
+        "runtime_module_path": attr.string(),
 
         # Whether to prefer per-module files when available
         "include_per_module": attr.bool(default = True),
@@ -394,6 +402,7 @@ topt_go_bazel_metadata = rule(
         "fallback_importpath": attr.string(),
         "module_group_names": attr.string_list(),
         "module_group_by_identifier": attr.string_dict(),
+        "runtime_module_path": attr.string(),
         "module_groups": attr.label_list(),
         "include_per_module": attr.bool(default = True),
         "module_label_override": attr.string(),

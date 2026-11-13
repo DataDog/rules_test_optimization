@@ -497,6 +497,7 @@ def dd_topt_go_test(
         runtime_module_label = "%s//:test_optimization_runtime_module" % _svc["_repo_prefix"]
         expected_service_name = _svc["service_name"]
         expected_runtime_module_path = _svc["runtime_module_path"]
+        runtime_module_path = expected_runtime_module_path
     else:
         module_labels = resolve_module_labels(_svc, sync_repo_name, macro_name = "dd_topt_go_test")
         module_group_names = resolve_module_group_names(
@@ -509,6 +510,7 @@ def dd_topt_go_test(
         runtime_module_label = None
         expected_service_name = ""
         expected_runtime_module_path = ""
+        runtime_module_path = (_svc.get("runtimes") or {}).get("go", {}).get("module_path") or ""
 
     # Mirror rules_go's fallback for the actual hidden go_test label. rules_go
     # only inherits an embed importpath when that path is explicit; otherwise
@@ -543,6 +545,7 @@ def dd_topt_go_test(
         expected_repo_name = sync_repo_name if is_local_static else "",
         expected_service_name = expected_service_name,
         expected_runtime_module_path = expected_runtime_module_path,
+        runtime_module_path = runtime_module_path,
     )
 
     # Emit a small Bazel-owned metadata file next to the built test artifacts.
@@ -568,6 +571,7 @@ def dd_topt_go_test(
         expected_repo_name = sync_repo_name if is_local_static else "",
         expected_service_name = expected_service_name,
         expected_runtime_module_path = expected_runtime_module_path,
+        runtime_module_path = runtime_module_path,
         bazel_package = "//%s" % pkg_path if pkg_path else "//",
         bazel_target = "//%s:%s" % (pkg_path, name) if pkg_path else "//:%s" % name,
         repo_name = sync_repo_name,

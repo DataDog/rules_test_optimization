@@ -19,6 +19,7 @@ import unittest
 from unittest import mock
 import zipfile
 
+from uploader_test_support import complete_bep_json
 from uploader_test_support import (
     add_uploader_runtime_to_path,
     resolve_runfile as _runfile,
@@ -375,7 +376,7 @@ class FreshnessTests(unittest.TestCase):
                 )
             bep = root / "bep.ndjson"
             bep.write_text(
-                json.dumps(
+                complete_bep_json(json.dumps(
                     {
                         "id": {
                             "testResult": {
@@ -393,7 +394,7 @@ class FreshnessTests(unittest.TestCase):
                         },
                     }
                 )
-                + "\n",
+                + "\n", invocation=str(bep)),
                 encoding="utf-8",
             )
             config = self._config(

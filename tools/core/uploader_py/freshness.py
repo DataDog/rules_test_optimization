@@ -23,7 +23,8 @@ import sys
 from types import ModuleType
 from typing import Iterable
 
-from topt_runtime.bep_execution import BepTestExecution, exclusively_cached_labels, missing_test_shards, test_result_event_count
+from topt_runtime.bep_execution import (BepTestExecution, exclusively_cached_labels, missing_test_shards,
+    first_bep_completeness_error, resolve_freshness_policy, test_result_event_count, completed_empty_test_session)
 from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
 from .config import UploaderConfig
@@ -64,6 +65,8 @@ class FreshnessPlan:
     warning_codes: tuple[str, ...] = ()
     executions: tuple[BepTestExecution, ...] = ()
     require_test_results: bool = False
+    require_remote_artifacts: bool = False
+    completeness_errors: tuple[tuple[str, str], ...] = ()
     ambiguous_outputs: frozenset[str] = frozenset()
     ambiguous_labels: frozenset[str] = frozenset()
 
@@ -262,14 +265,6 @@ def prepare_freshness(
 
     if staging_owner is not None:
         staging_owner.plan = plan
-    if plan.remote_only_outputs and (config.freshness_mode == "required" or config.remote_artifacts == "required"):
-        # Callers with an owner retain completed downloads before reporting the
-        # missing carrier; standalone preparation preserves its old cleanup.
-        if staging_owner is None and staged_artifacts and doctor_runtime is not None and staging_base_path is not None:
-            doctor_runtime._cleanup_staged_bep_run_roots(staged_artifacts, staging_base=staging_base_path)
-        raise FreshnessError("BEP references remote-only test outputs for "
-            f"{plan.remote_only_outputs[0].label}, but local test.outputs was not found")
-
     scan_roots: list[ScanRoot] = []
     if local_testlogs_root is not None:
         scan_roots.append(ScanRoot(local_testlogs_root))
@@ -356,7 +351,7 @@ def filter_discovery_for_freshness(
         sidecar_label = target_label
         metadata_path = output.path / "bazel_target_metadata.json"
         if plan.eligibility_enabled and (metadata_path.is_symlink() or (metadata_exists[output.output_key] and not target_label)):
-            if freshness_mode == "required":
+            if (plan.require_test_results or freshness_mode == "required"):
                 raise FreshnessError("BEP required freshness cannot authorize output because bazel.target metadata is missing or unsafe")
             skipped_output_keys.append(output.output_key)
             continue
@@ -387,7 +382,7 @@ def filter_discovery_for_freshness(
             selected_outputs.append(output)
             continue
         if not target_label:
-            if plan.selected_source == "bep" and freshness_mode == "required":
+            if plan.selected_source == "bep" and (plan.require_test_results or freshness_mode == "required"):
                 raise FreshnessError(
                     "BEP required freshness cannot authorize "
                     f"{output.path} because bazel.target metadata is missing"
@@ -429,7 +424,8 @@ def _recognized_test_source(task: FileTask) -> bool:
     # Core-only fallback and ambiguous outputs lack a trusted sidecar. This
     # bounded one-file-at-a-time probe is absent from the companion fast path.
     try:
-        return test_result_event_count(strict_json_loads(task.source_path.read_text(encoding="utf-8-sig"))) > 0
+        payload = strict_json_loads(task.source_path.read_text(encoding="utf-8-sig"))
+        return test_result_event_count(payload) > 0 or completed_empty_test_session(payload)
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
 
@@ -454,6 +450,15 @@ def collect_test_result_evidence(
             if task.output_key and (result.status is FileStatus.SUCCEEDED or result.requests_attempted > 0):
                 proven_outputs.add((task.target_label, task.output_key))
     return proven_outputs, labels
+
+
+def collect_empty_session_evidence(discovery: DiscoveryResult, results: Iterable[FileResult]) -> set[tuple[str, str]]:
+    """Positive completion evidence, with the same delivery policy as real tests."""
+    results_by_id = {result.task_id: result for result in results}
+    return {(task.target_label, task.output_key) for task in discovery.tasks
+        if task.payload_type is PayloadType.TEST and task.target_label and task.output_key
+        and task.task_id in results_by_id and results_by_id[task.task_id].empty_test_session
+        and (results_by_id[task.task_id].status is FileStatus.SUCCEEDED or results_by_id[task.task_id].requests_attempted > 0)}
 
 
 def represented_test_targets(plan: FreshnessPlan) -> frozenset[str]:
@@ -502,17 +507,22 @@ def validate_fresh_outputs_accounted(
                 exit_code=1,
             )
 
+    if plan.require_test_results:
+        error = first_bep_completeness_error(plan.completeness_errors, selected_target_set)
+        if error:
+            raise FreshnessError(error, exit_code=1)
     enforce_test_results = fail_on_error or plan.require_test_results
     remote_outputs = tuple(output for output in plan.remote_only_outputs
-        if output.label in selected_target_set)
-    if remote_outputs and enforce_test_results:
-        raise FreshnessError("BEP references remote-only test outputs for " + remote_outputs[0].label + ", but local test.outputs was not found")
+        if output.label in selected_target_set or ((plan.require_test_results or plan.require_remote_artifacts) and not expected_target_set))
+    if remote_outputs and (enforce_test_results or plan.require_remote_artifacts):
+        raise FreshnessError("BEP references remote-only test outputs for " + remote_outputs[0].label + ", but local test.outputs was not found", exit_code=1 if plan.require_test_results else 2)
     results = tuple(results)
     if plan.executions:
         results_by_id = {result.task_id: result for result in results}
         proven_outputs, observed_labels = collect_test_result_evidence(discovery, results)
         selected_labels = set(selected_target_set).union(observed_labels)
-        missing = missing_test_shards(plan.executions, proven_outputs, selected_labels)
+        empty_outputs = collect_empty_session_evidence(discovery, results)
+        missing = missing_test_shards(plan.executions, proven_outputs, selected_labels, empty_outputs)
         if missing:
             invocation, label, configuration, run, shard = missing[0]
             message = ("fresh shard produced no test-result evidence: "
@@ -589,9 +599,7 @@ def _select_source(
         if config.execution_log_json is not None:
             warning_codes.append("freshness_disabled_execution_log_ignored")
         return "none"
-    freshness_required = config.freshness_mode == "required" or (
-        config.freshness_mode == "auto" and config.ci
-    )
+    freshness_required = resolve_freshness_policy(config.freshness_mode, config.freshness_source, ci=config.ci).source_required
     if config.freshness_source == "bep":
         if bep_configured:
             return "bep"
@@ -676,13 +684,15 @@ def _build_plan(
         missing_output_labels.intersection_update(expected_targets)
         skipped_targets.intersection_update(expected_targets)
 
-    if remote_outputs and config.freshness_mode != "required" and config.remote_artifacts != "required":
+    if remote_outputs and not resolve_freshness_policy(config.freshness_mode, selected_source).strict_bep and config.remote_artifacts != "required":
         warning_codes.append("bep_remote_only_outputs_skipped")
 
     return FreshnessPlan(
         selected_source=selected_source,
         executions=tuple(doctor_freshness.executions),
-        require_test_results=config.freshness_mode == "required",
+        require_test_results=resolve_freshness_policy(config.freshness_mode, selected_source, ci=config.ci).strict_bep,
+        require_remote_artifacts=config.remote_artifacts == "required",
+        completeness_errors=doctor_freshness.completeness_errors,
         ambiguous_outputs=doctor_freshness.ambiguous_outputs,
         ambiguous_labels=doctor_freshness.ambiguous_labels,
         eligibility_enabled=selected_source == "bep",

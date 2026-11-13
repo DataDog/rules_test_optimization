@@ -320,11 +320,18 @@ symbols and also checks the external-test `<importpath>_test` identifier. When
 one binary contains internal and external package tests, its base package group
 contains both sets of backend metadata.
 
-Static descriptors use the same fallback contract as generated exports. An
-explicit `importpath` or `module_label_override` that is absent from a populated
-catalog fails analysis. An inferred or label-derived miss uses the canonical
-full bundle and reports `full_bundle_no_match`. An empty catalog uses the full
-bundle and reports `full_bundle_disabled`.
+Static descriptors and generated exports use the same fallback contract. A
+missing package may use its selected service's full bundle when the importpath
+is the canonical Go module path or lies below it at a `/` boundary. This reports
+`full_bundle_importpath_miss`, with `bazel.go.runtime_module_path` recording the
+boundary. The doctor checks the importpath against that value before accepting
+the fallback. With per-module selection enabled and a populated catalog, an
+explicit `module_label_override` miss remains an analysis error, as does an explicit importpath miss outside or without a known module.
+
+An inferred or label-derived miss without a proven boundary retains
+`full_bundle_no_match`, rejected by the doctor by default. An empty catalog
+uses `full_bundle_disabled`. An exact catalog match still selects only its
+module group.
 
 ### Go target compatibility and wildcard commands
 
@@ -362,7 +369,8 @@ adds its keys to the target's events.
 | `bazel.test_optimization.runtime_name` | `go` |
 | `bazel.go.importpath` | Import path used for payload selection |
 | `bazel.go.importpath_source` | `explicit`, `inferred`, or `fallback` |
-| `bazel.go.payload_selection` | `module`, `module_override`, `full_bundle_disabled`, or `full_bundle_no_match` |
+| `bazel.go.runtime_module_path` | Canonical Go module path used to prove a full-bundle importpath miss |
+| `bazel.go.payload_selection` | `module`, `module_override`, `full_bundle_disabled`, `full_bundle_importpath_miss`, or `full_bundle_no_match` |
 | `bazel.go.attr.cgo`, `bazel.go.attr.pure`, `bazel.go.attr.race`, `bazel.go.attr.msan`, `bazel.go.attr.linkmode` | The test's rules_go attributes, or their defaults |
 | `bazel.go.attr.goos`, `bazel.go.attr.goarch` | The test's `goos` and `goarch`, only when set |
 | `bazel.go.test_binary_linker_optimization` | Whether the macro added `-s -w` |
@@ -512,7 +520,7 @@ Rule: `dd_payload_uploader(...)`
 | `name` | string | required | Target name |
 | `quiescent_sec` | int | `10` | Seconds to wait for filesystem to settle before uploading |
 | `max_wait_sec` | int | `300` | Maximum seconds to wait for payloads (`0` skips waiting when no payloads are present) |
-| `fail_on_error` | bool | `False` | Exit with error if no payloads found when tests ran |
+| `fail_on_error` | bool | `False` | Fail when tests ran without payloads; also enforce known missing test-result evidence in optional freshness mode. Required and auto-with-BEP completeness failures do not depend on this attribute |
 | `debug` | bool | `False` | Enable debug logging |
 | `keep_payloads` | bool | `False` | Keep payload files after successful upload |
 | `filter_prefix` | bool | `False` | Only upload files matching `span_events_*.json` or `coverage_*.json` |
@@ -543,10 +551,10 @@ delete, or rewrite source payloads.
 | `require_git_metadata` | bool | `True` | Require `git.repository_url`, `git.commit.sha`, and `git.branch` or `git.tag` in synced context data |
 | `require_bazel_metadata` | bool | `True` | Require `bazel_target_metadata.json` next to selected payload outputs |
 | `require_json_payloads` | bool | `True` | Require parseable `.json` payload files |
-| `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"`. Valid selection values are `module`, `module_override`, `full_bundle_disabled`, and `full_bundle_no_match`; the last one is accepted only when this attr is `False` |
+| `forbid_full_bundle_no_match` | bool | `True` | Fail when Go metadata reports `bazel.go.payload_selection = "full_bundle_no_match"`. Valid selection values are `module`, `module_override`, `full_bundle_disabled`, `full_bundle_importpath_miss`, and `full_bundle_no_match`; the last one is accepted only when this attr is `False` |
 | `forbid_msgpack_payloads` | bool | `True` | Fail when tests emitted `.msgpack` or `.msgpack.gz` payloads instead of Bazel JSON payload files |
 | `forbid_dd_git_test_env` | bool | `True` | Fail when workspace `.bazelrc` files pass sync metadata, upload credentials, or upload endpoints through `--test_env`; use `--repo_env` for sync metadata and pass credentials only to the uploader runtime |
-| `allowed_payload_selections` | string_list | `[]` | Optional explicit allowlist for `bazel.go.payload_selection`; empty means `module`, `module_override`, and `full_bundle_disabled` are accepted, with `full_bundle_no_match` still rejected by default |
+| `allowed_payload_selections` | string_list | `[]` | Optional explicit allowlist for `bazel.go.payload_selection`; empty means `module`, `module_override`, `full_bundle_disabled`, and boundary-proven `full_bundle_importpath_miss` are accepted, with `full_bundle_no_match` still rejected by default |
 | `expected_payload_selection_by_target` | string_dict | `{}` | Optional map from local target label to the exact expected `bazel.go.payload_selection` value |
 
 Doctor notes:
@@ -953,6 +961,46 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON` | Optional explicit legacy execution-log fallback path; default execution-log files are not auto-discovered |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset |
 | `TESTLOGS_DIR` | Explicit `bazel-testlogs` path for non-standard layouts |
+
+### Effective freshness policy
+
+This policy applies to the doctor and the default Python uploader. The legacy
+shell uploader remains a rollback path and does not implement the new BEP
+topology and empty-shard checks.
+
+| Requested mode | With a selected BEP | Without a BEP |
+| --- | --- | --- |
+| `required` | Check complete stream, announced results, summary topology and fresh shard evidence | Doctor fails; uploader requires a supported source. An execution log can filter outputs but cannot prove BEP topology |
+| `auto` | The same strict BEP checks, including outside CI | Doctor keeps local diagnostics. Uploader requires a source in CI and otherwise uses best-effort local discovery |
+| `optional` | Filter using available BEP results; do not claim complete topology. `fail_on_error` still enforces known missing payloads | Preserve local discovery fallback |
+| `disabled` | Skip freshness filtering and completeness checks | Other payload and metadata validation still applies |
+
+A strict BEP must include `started`, `BuildFinished`, the final `last_message`
+event, every announced event and consistent `TestSummary` counts. A completed
+build with failed tests is valid input. Results are accounted for separately by
+invocation, target, configuration, run, shard and attempt. Cached retries may be collapsed to one result while their summary retains
+historical attempt counts. They still need complete run/shard coverage and do
+not hide fresh attempts; a later populated retry can satisfy an earlier failed
+attempt of the same logical shard.
+
+A fresh shard needs actual test events, or Mini's explicit completed zero-tests
+session (`test.session.empty_reason=zero_tests`, successful exit) bound to a
+PASSED result. A generic session-end event or absent payload is insufficient.
+The existing undeclared-output download policy is enough; these checks do not
+require `test.xml`.
+
+The uploader processes independently authorized fresh files before reporting a
+strict completeness failure with exit 1, even when `fail_on_error=False`.
+Invalid configuration or unsafe provenance retains exit 2. HTTP failure policy
+is unchanged. Reports include the requested mode, selected source,
+`strict_completeness` and `completeness_errors`.
+
+An exact expected-target list can detect a wholly missing target. Without one,
+sidecars or recognized test payloads identify instrumented targets, after which
+all their announced runs and shards are checked. A wholly lost unknown target
+cannot be identified from other ordinary tests in the BEP. Required handling
+of explicitly selected remote artifacts remains conservative when they cannot
+be materialized.
 
 Uploader CLI flags:
 

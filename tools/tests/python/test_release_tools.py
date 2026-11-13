@@ -6,6 +6,7 @@
 
 """Offline regression tests for the exact bytes and snippets shipped in releases."""
 
+from uploader_test_support import complete_bep_json
 import ast
 import hashlib
 import importlib.util
@@ -96,7 +97,7 @@ class ReleaseConsumerHarnessTests(unittest.TestCase):
                     if use_symlink:
                         (workspace / "bazel-testlogs").symlink_to(testlogs, target_is_directory=True)
                     bep = root / "fresh.bep.json"
-                    bep.write_text(json.dumps({"testResult": {"testActionOutput": [{"name": "test.outputs", "uri": output.as_uri()}]}}) + "\n", encoding="utf-8")
+                    bep.write_text(complete_bep_json(json.dumps({"testResult": {"testActionOutput": [{"name": "test.outputs", "uri": output.as_uri()}]}}) + "\n", invocation=str(bep)), encoding="utf-8")
                     try:
                         result = subprocess.run(
                             ["bash", "-c", "set -euo pipefail\nsimulate_bep_artifact_only_outputs() {" + function + '\n}\nsimulate_bep_artifact_only_outputs "$1" "$2"', "bep-copy", str(workspace), str(bep)],

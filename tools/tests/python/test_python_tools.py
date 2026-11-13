@@ -143,6 +143,12 @@ _DOCTOR_RUNTIME_RLOC = "tools/core/test_optimization_doctor.py"
 _NON_SIBLING_DOCTOR_RUNTIME_RLOC = "tools/tests/python/fixtures/runtime_doctor/test_optimization_doctor.py"
 
 
+def complete_bep_json(text: str, *, invocation: str = "unit-fixture") -> str:
+    # Lazy loading preserves this suite's isolated runpy entrypoint.
+    helper = _load_module("bep_fixture_support", "tools/tests/python/uploader_test_support.py")
+    return helper.complete_bep_json(text, invocation=invocation)
+
+
 class QuietSimpleHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
     """HTTP handler that keeps unit test stderr deterministic."""
 
@@ -1227,7 +1233,7 @@ class SupportBundleTests(unittest.TestCase):
             )
             bep = root / "one.bep.json"
             bep.write_text(
-                json.dumps({
+                complete_bep_json(json.dumps({
                     "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
                     "testResult": {
                         "cachedLocally": False,
@@ -1246,7 +1252,7 @@ class SupportBundleTests(unittest.TestCase):
                             }
                         ],
                     },
-                }) + "\n",
+                }) + "\n", invocation=str(bep)),
                 encoding="utf-8",
             )
             command_manifest = root / "flags.json"
@@ -1397,7 +1403,7 @@ class SupportBundleTests(unittest.TestCase):
             )
             bep = root / "remote.bep.json"
             bep.write_text(
-                json.dumps({
+                complete_bep_json(json.dumps({
                     "id": {"testResult": {"label": "//pkg:target", "run": 1, "shard": 1, "attempt": 1}},
                     "testResult": {
                         "cachedLocally": False,
@@ -1405,7 +1411,7 @@ class SupportBundleTests(unittest.TestCase):
                             {"name": "outputs.zip", "uri": "bytestream://remote-cas/blobs/deadbeef/123"}
                         ],
                     },
-                }) + "\n",
+                }) + "\n", invocation=str(bep)),
                 encoding="utf-8",
             )
             output = root / "support.zip"
@@ -1590,7 +1596,7 @@ class SupportBundleTests(unittest.TestCase):
                     },
                 },
             ]
-            bep.write_text("\n".join(json.dumps(event) for event in events) + "\n", encoding="utf-8")
+            bep.write_text(complete_bep_json("\n".join(json.dumps(event) for event in events) + "\n", invocation=str(bep)), encoding="utf-8")
 
             summary = self.mod.summarize_bep(bep)
 
@@ -1907,7 +1913,7 @@ class TestOptimizationDoctorTests(unittest.TestCase):
     def _write_bep(path: Path, events: list[dict[str, object]]) -> None:
         """Write newline-delimited BEP JSON events."""
         path.write_text(
-            "".join(json.dumps(event) + "\n" for event in events),
+            complete_bep_json("".join(json.dumps(event) + "\n" for event in events), invocation=str(path)),
             encoding="utf-8",
         )
 
@@ -5773,7 +5779,7 @@ Path(out).mkdir(parents=True)
 
     def test_validate_outputs_accepts_known_payload_selection(self) -> None:
         """Validate known Go payload selection values pass the doctor."""
-        for selection in ["module", "module_override", "full_bundle_disabled"]:
+        for selection in ["module", "module_override", "full_bundle_disabled", "full_bundle_importpath_miss"]:
             with self.subTest(selection=selection):
                 with tempfile.TemporaryDirectory() as tmp:
                     output = Path(tmp) / "pkg" / "target" / "test.outputs"
@@ -5781,7 +5787,7 @@ Path(out).mkdir(parents=True)
                     payload_dir.mkdir(parents=True)
                     (payload_dir / "span_events_1.json").write_text("{}", encoding="utf-8")
                     (output / "bazel_target_metadata.json").write_text(
-                        json.dumps({"bazel.go.payload_selection": selection}),
+                        json.dumps({"bazel.go.payload_selection": selection, "bazel.go.importpath": "example.com/app/new", "bazel.go.runtime_module_path": "example.com/app"}),
                         encoding="utf-8",
                     )
                     self.mod._validate_outputs([output], True, True, True, True)
@@ -7605,7 +7611,7 @@ class RuntimeTemplateParityTests(unittest.TestCase):
                         }),
                         encoding="utf-8",
                     )
-                    bep.write_text(unrelated_bep, encoding="utf-8")
+                    bep.write_text(complete_bep_json(unrelated_bep, invocation=str(bep)), encoding="utf-8")
                     report = root / f"{name.lower()}-empty-report.json"
                     result = subprocess.run(
                         [

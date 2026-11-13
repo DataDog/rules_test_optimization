@@ -242,13 +242,13 @@ def go_macro_single_service_target(name, tags = None):
         tags = tags,
     )
 
-def go_macro_dynamic_manifest_target(name, tags = None):
+def go_macro_dynamic_manifest_target(name, tags = None, importpath = "example.com/explicit/pkg"):
     """Target under test for explicit labels from one dynamic manifest entry."""
     dd_topt_go_test(
         name = name,
         topt_data = _dynamic_manifest_topt_data(),
         go_test_rule = _go_test_capture_rule,
-        importpath = "example.com/explicit/pkg",
+        importpath = importpath,
         tags = tags,
     )
 

@@ -74,6 +74,7 @@ class FileResult:
     source_bytes: int = field(default=0, compare=False)
     prepared_body_bytes: int = field(default=0, compare=False)
     test_events: int = 0
+    empty_test_session: bool = False
     request_ids: tuple[str, ...] = ()
 
 

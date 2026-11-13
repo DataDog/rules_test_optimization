@@ -64,6 +64,15 @@ Keep the RFC contract intact:
   If BEP still points at HTTP/HTTPS `outputs.zip` artifacts, use
   `--remote-artifacts=download` or `required` without a downloader. Use a
   downloader only for bytestream/CAS/custom-auth artifact providers.
+- Pass complete BEP streams. Both `required` and `auto` with a selected BEP
+  validate closure and every fresh execution, independently of uploader
+  `fail_on_error`. Mini's explicit completed zero-tests session can account for
+  a PASSED empty shard; a generic hierarchy event cannot. The uploader still
+  processes valid fresh payloads before returning a completeness failure.
+- A new package inside the configured Go module may report
+  `full_bundle_importpath_miss` with `bazel.go.runtime_module_path`. The doctor
+  accepts that proven boundary by default. Do not disable generic no-match
+  protection to onboard new packages; check their importpath and module path.
 - Run pilot tests with a fresh `--build_event_json_file` path per Bazel test
   invocation; pass the same paths to doctor/uploader with `--bep-json`.
 - In CI, keep a per-job diagnostic report directory with

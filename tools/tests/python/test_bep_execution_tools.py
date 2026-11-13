@@ -17,6 +17,7 @@ from unittest import mock
 from pathlib import Path
 import tempfile
 import unittest
+from uploader_test_support import complete_bep_json
 from uploader_test_support import add_uploader_runtime_to_path
 
 add_uploader_runtime_to_path()
@@ -55,7 +56,7 @@ class BepExecutionTests(unittest.TestCase):
                     record["testResult"]["testActionOutput"].append({"name": "test.log" if filename.endswith(".log") else "test.xml", "uri": log.as_uri()})
                     records.append(record)
                 bep = root / "bep.json"
-                bep.write_text("\n".join(json.dumps(record) for record in records))
+                bep.write_text(complete_bep_json("\n".join(json.dumps(record) for record in records), invocation=str(bep)))
                 parsed = doctor._parse_bep_freshness([bep])
                 self.assertFalse(parsed.ambiguous_outputs)
                 self.assertEqual(set(keys), {key for _, key in parsed.eligible_outputs})
@@ -79,7 +80,7 @@ class BepExecutionTests(unittest.TestCase):
                 bep = root / "bep.json"
                 fresh = _bep_test_result("//pkg:test", output=output)
                 cached = _bep_test_result("//pkg:test", output=output, cached_locally=True)
-                bep.write_text(json.dumps(fresh) + "\n" + json.dumps(cached))
+                bep.write_text(complete_bep_json(json.dumps(fresh) + "\n" + json.dumps(cached), invocation=str(bep)))
                 config = TestOptimizationDoctorTests._write_doctor_config(root, ["//pkg:test"] if catalog else [])
                 settings = json.loads(config.read_text())
                 settings["require_bazel_metadata"] = sidecar
@@ -91,7 +92,7 @@ class BepExecutionTests(unittest.TestCase):
                     self.assertIn("ambiguous", stderr.getvalue())
                     missing = _bep_test_result("//pkg:test")
                     missing["id"]["testResult"]["shard"] = 2
-                    bep.write_text(json.dumps(fresh) + "\n" + json.dumps(missing))
+                    bep.write_text(complete_bep_json(json.dumps(fresh) + "\n" + json.dumps(missing), invocation=str(bep)))
                     self.assertEqual(0, doctor.main(["--config", str(config), "--bep-json", str(bep), "--freshness-mode=optional"]))
 
     def test_global_discovery_ignores_named_ancestors_with_real_sidecars(self):
@@ -202,7 +203,7 @@ class BepExecutionTests(unittest.TestCase):
                             "uri": "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/fresh_attempt/payload_test/test.outputs"}]}}
                     with tempfile.TemporaryDirectory() as tmp:
                         bep = Path(tmp) / "events.json"
-                        bep.write_text(json.dumps(fresh) + "\n" + json.dumps(event) + "\n")
+                        bep.write_text(complete_bep_json(json.dumps(fresh) + "\n" + json.dumps(event) + "\n", invocation=str(bep)))
                         parsed = doctor._parse_bep_freshness([bep], workspace=Path(tmp))
                     self.assertFalse(parsed.ambiguous_outputs)
                     self.assertEqual(1, len(parsed.eligible_outputs))
@@ -238,13 +239,13 @@ class BepExecutionTests(unittest.TestCase):
                 _write_payload(outputs[0], "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
                 second = _write_payload(outputs[1], "coverage", "coverage.json", {"files": []})
                 records = []
-                for shard, output in enumerate(outputs):
+                for shard, output in enumerate(outputs, start=1):
                     (output / "bazel_target_metadata.json").write_text(json.dumps({"bazel.target": "//pkg:target", "bazel.go.payload_selection": "module"}))
                     record = _bep_test_result("//pkg:target", output=output)
                     record["id"]["testResult"]["shard"] = shard
                     records.append(record)
                 bep = root / "bep.json"
-                bep.write_text("\n".join(json.dumps(record) for record in records))
+                bep.write_text(complete_bep_json("\n".join(json.dumps(record) for record in records), invocation=str(bep)))
                 cfg = TestOptimizationDoctorTests._write_doctor_config(root, ["//pkg:target"] if explicit_targets else [])
                 argv = ["--config", str(cfg), "--bep-json", str(bep), "--freshness-mode=required"]
                 stderr = StringIO()
@@ -252,7 +253,7 @@ class BepExecutionTests(unittest.TestCase):
                     with self.assertRaises(SystemExit) as failed:
                         doctor.main(argv)
                     self.assertEqual(1, failed.exception.code)
-                    self.assertIn("shard=1", stderr.getvalue())
+                    self.assertIn("shard=2", stderr.getvalue())
                     # With actual test events in both shards, the same command passes.
                     second.unlink()
                     _write_payload(outputs[1], "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
@@ -277,7 +278,7 @@ class BepExecutionTests(unittest.TestCase):
                 record["testResult"]["testActionOutput"] = [{"name": "test.outputs/bazel_target_metadata.json", "uri": metadata.as_uri()}]
                 records.append(record)
             bep = root.parent / "bep.json"
-            bep.write_text("\n".join(json.dumps(record) for record in records))
+            bep.write_text(complete_bep_json("\n".join(json.dumps(record) for record in records), invocation=str(bep)))
             parsed = doctor._parse_bep_freshness([bep])
             keys = {"pkg/target/shard_2_of_2/test_attempts/attempt_1.outputs/test.outputs", "pkg/target/shard_2_of_2/test.outputs"}
             self.assertEqual(keys, {key for _, key in parsed.eligible_outputs})
@@ -324,7 +325,7 @@ class BepExecutionTests(unittest.TestCase):
             second = _bep_test_result("//pkg:target", output=None)
             second["id"]["testResult"]["shard"] = 2
             bep = root / "bep.json"
-            bep.write_text(json.dumps(first) + "\n" + json.dumps(second))
+            bep.write_text(complete_bep_json(json.dumps(first) + "\n" + json.dumps(second), invocation=str(bep)))
             cfg = TestOptimizationDoctorTests._write_doctor_config(root, ["//pkg:target"])
             stderr = StringIO()
             with mock.patch.dict(os.environ, {"TESTLOGS_DIR": str(root / "bazel-testlogs"), "BUILD_WORKSPACE_DIRECTORY": str(root)}), redirect_stderr(stderr):
@@ -356,7 +357,7 @@ class BepExecutionTests(unittest.TestCase):
             output = root / "bazel-testlogs/pkg/core/test.outputs"
             _write_payload(output, "tests", "events.json", {"events": [{"type": "test", "content": {}}]})
             bep = root / "bep.json"
-            bep.write_text(json.dumps(_bep_test_result("//pkg:core", output=output)))
+            bep.write_text(complete_bep_json(json.dumps(_bep_test_result("//pkg:core", output=output)), invocation=str(bep)))
             cfg = TestOptimizationDoctorTests._write_doctor_config(root, [])
             config = json.loads(cfg.read_text())
             config["require_bazel_metadata"] = False
