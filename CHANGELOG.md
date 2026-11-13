@@ -17,6 +17,11 @@ versioning.
 
 ### Changed
 
+- Go tests can explicitly skip duplicate nogo analysis with `nogo = False` while
+  disabled Test Optimization retains the ordinary analysis policy. An optional
+  adapter records original SDK/nogo settings for consumers whose rules_go already
+  restores them on non-Go edges; upstream consumers keep the existing path.
+
 - Opt-in test batching stores identical common enrichment tags once in the
   request metadata. Per-event process IDs and varying target metadata are
   preserved, and the emitted body is validated before upload. Batching remains

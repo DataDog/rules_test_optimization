@@ -230,6 +230,8 @@ accepts:
 | `stage_sources` | `False` | Stage direct `srcs` and `embedsrcs` in runtime runfiles so the test can open its source files for metadata such as `test.source.end`. Sets `rundir` to `.` unless the caller sets `rundir` |
 | `ci_visibility_enabled` | `True` | Set `DD_CIVISIBILITY_ENABLED=true` in the test environment. Set `False` only when the caller owns that variable |
 | `enable_test_binary_linker_optimization` | `True` | Add `-s -w` to the hidden test's `gc_linkopts` where rules_go does not already strip (see below) |
+| `nogo` | `True` | Retain the configured nogo analysis. `False` skips analysis for the enabled instrumented test and its Go dependency closure. It does not disable analysis for a plain test when the sync export is disabled |
+| `restore_non_go_settings` | `False` | Record incoming SDK/nogo settings for a consumer-patched rules_go that restores them on non-Go edges. Non-configurable; requires the contract described below |
 | `go_test_rule` | rules_go `go_test` | Override for tests and low-level experiments; keep repository policy in a wrapper outside the macro |
 | `**kwargs` | | Forwarded to `go_test` (`srcs`, `deps`, `embed`, `data`, `env`, `tags`, ...) |
 
@@ -278,6 +280,36 @@ User `args` keep Bazel Make-variable expansion and Bourne word splitting.
 Their `$(location)`/`$(rlocationpath)` inputs are resolved from the raw Go test's
 configured dependencies, including `data` selected by `race` or `pure`. Data
 binaries retain their `x_defs` and selected Go configuration.
+
+### Go analysis and non-Go configuration
+
+`nogo = True` preserves the workspace's existing analysis policy, including an
+opt-out already selected by the caller. If the ordinary build analyzes the same
+sources, the central wrapper can pass `nogo = False` for the instrumented copy.
+This skips nogo for its Go dependencies too; it is not the per-package `no-nogo`
+tag. A disabled sync export still creates an ordinary test with its normal
+analysis policy. This option uses rules_go's publicly visible
+`//go/private:bootstrap_nogo` implementation setting, verified across the
+supported 0.59.0–0.65.0 range.
+
+`restore_non_go_settings = True` is an additional opt-in for a workspace whose
+rules_go already restores SDK/nogo settings on non-Go dependency edges. It
+requires both `//go/toolchain:original_sdk_name` and
+`//go/private:original_bootstrap_nogo`, plus transitions that restore their
+JSON-encoded caller values and clear the records on those edges. Defining the
+labels alone does not implement restoration. Upstream rules_go 0.59.0–0.65.0
+does not provide this contract; leave the attribute false there. An unsupported
+opt-in fails analysis on the missing settings instead of silently claiming
+restoration.
+
+The adapter records the incoming values before selecting `sdk_name = "ddto"`
+or skipping nogo. Existing records survive repeated transition application.
+The consumer's rules_go owns restoring them for native, data or proto
+dependencies; the adapter does not patch rules_go or change SDK registration.
+Caller-owned Go builds reached through those restored edges retain their normal
+analysis policy, including embedded libraries requested by metadata helpers.
+Both modes retain the `ddtest_go` test language. All SDK version, mirror,
+experiment and variant settings keep their existing configuration surface.
 
 ### Explicit single-service Go descriptor
 

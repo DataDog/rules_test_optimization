@@ -84,6 +84,7 @@ BAZEL_EXTRA_ARGS+=(
 )
 
 source "$REPO_ROOT/tools/tests/integration/go_integration_mock_server.sh"
+source "$REPO_ROOT/tools/tests/integration/go_integration_nogo.sh"
 
 shutdown_bazel_workspace_servers() {
   local workspace_dir
@@ -886,6 +887,7 @@ module(name = "bzlmod_go_integration")
 bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
 bazel_dep(name = "rules_go", version = "${RULES_GO_VERSION}")
+bazel_dep(name = "bazel_skylib", version = "1.8.2")
 
 archive_override(
     module_name = "datadog-rules-test-optimization",
@@ -921,6 +923,16 @@ topt_go_ddtest = use_extension(
 )
 topt_go_ddtest.sdk(go_version = "${GO_VERSION}")
 EOF
+  if nogo_regression_enabled; then
+    cat >> "$ws_dir/MODULE.bazel" <<'EOF'
+
+go_sdk_for_nogo = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk_for_nogo.nogo(
+    nogo = "@rules_go//:tools_nogo",
+    includes = ["//:__subpackages__"],
+)
+EOF
+  fi
 }
 
 # A companion dependency can raise the requested version through Bzlmod's
@@ -957,6 +969,11 @@ run_fixture() {
   write_fixture_bazelrc "$ws_dir"
   assert_resolved_rules_go_version "$ws_dir"
   assert_plain_build_fetches_no_instrumentation "$ws_dir"
+  if nogo_regression_enabled; then
+    write_nogo_fixture "$ws_dir" "rules_go"
+    run_nogo_regression "$ws_dir" "${BAZEL_EXTRA_ARGS[@]}" --enable_bzlmod --config=test-optimization
+    [[ "$INTEGRATION_SCENARIO_MODE" != "nogo" ]] || return 0
+  fi
   run_fixture_subscenario "$ws_dir" "standard"
   assert_unconfigured_sdk_version_fails "$ws_dir"
   run_fixture_subscenario "$ws_dir" "hermetic"
@@ -1156,7 +1173,7 @@ if [[ "$WINDOWS_SMOKE_ONLY" == "1" ]]; then
 fi
 
 case "$INTEGRATION_SCENARIO_MODE" in
-  full | release) ;;
+  full | release | nogo) ;;
   *)
     echo "error: unsupported INTEGRATION_SCENARIO_MODE=$INTEGRATION_SCENARIO_MODE" >&2
     exit 1

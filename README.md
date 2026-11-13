@@ -1979,6 +1979,15 @@ Target metadata records the instrumentation in
 `bazel.go.sdk.name`, and `bazel.go.sdk.version`. See
 [Go target metadata](docs/Configuration_Reference.md#go-target-metadata).
 
+Go analysis follows the workspace's nogo policy by default. A workspace that
+already analyzes the same sources in its ordinary build can set `nogo = False`
+on its instrumented tests. Disabled sync exports retain the ordinary analysis
+policy. A separate `restore_non_go_settings` opt-in supports consumers whose
+rules_go already restores the original SDK/nogo configuration on non-Go edges;
+it requires that capability and stays off for unpatched upstream rules_go.
+See [Go analysis and non-Go configuration](docs/Configuration_Reference.md#go-analysis-and-non-go-configuration)
+for the contract and compatibility limits.
+
 If the test runtime needs runtime-visible source files for metadata such as
 `test.source.end`, enable source staging explicitly:
 
