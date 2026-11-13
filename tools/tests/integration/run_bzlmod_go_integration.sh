@@ -744,8 +744,8 @@ func TestBzlmodGoEnvWiring(t *testing.T) {
 	if got := os.Getenv("DD_CIVISIBILITY_AGENTLESS_URL"); got != "" {
 		t.Fatalf("DD_CIVISIBILITY_AGENTLESS_URL = %q, want unset so Bazel file mode is not proxied", got)
 	}
-	if got := os.Getenv("DD_SERVICE"); got != wantServiceName {
-		t.Fatalf("DD_SERVICE = %q, want %s", got, wantServiceName)
+	if got, present := os.LookupEnv("DD_SERVICE"); present {
+		t.Fatalf("DD_SERVICE = %q, want unset like the ordinary Go test", got)
 	}
 
 	manifestRloc := os.Getenv("DD_TEST_OPTIMIZATION_MANIFEST_FILE")

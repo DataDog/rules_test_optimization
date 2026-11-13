@@ -33,6 +33,10 @@ TOP_LEVEL_EVENT_METADATA_KEYS = (
 CONTEXT_EXCLUDED_EVENT_KEYS = frozenset({"topt.api_key_fingerprint"})
 
 
+class ReportingServiceError(ValueError):
+    """A declared target service disagrees with its selected sync context."""
+
+
 @dataclass(frozen=True)
 class ContextRecord:
     repo_key: str
@@ -88,6 +92,36 @@ def payload_repo_key(bazel_metadata: Mapping[str, Any] | None) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
+def reporting_service(
+    context_selection: ContextSelection,
+    bazel_metadata: Mapping[str, Any] | None,
+) -> str:
+    """Authorize a reporting service without changing legacy unscoped payloads.
+
+    The service field declares this contract. Older sidecars lacking it keep
+    their existing behavior; a declared identity must match all three fields.
+    """
+    if bazel_metadata is None or "bazel.test_optimization.service_name" not in bazel_metadata:
+        return ""
+    context = context_selection.values or {}
+    identities = (
+        ("bazel.test_optimization.repo_name", "topt.sync.repository_name"),
+        ("bazel.test_optimization.service_name", "service.name"),
+        ("bazel.test_optimization.runtime_name", "runtime.name"),
+    )
+    for target_key, context_key in identities:
+        value = bazel_metadata.get(target_key)
+        if not isinstance(value, str) or not value or value != context.get(context_key):
+            raise ReportingServiceError("reporting service identity mismatch: " + target_key)
+    return str(context["service.name"])
+
+
+def _is_ci_event(event: Mapping[str, Any], content: Mapping[str, Any]) -> bool:
+    return event.get("type") in TOP_LEVEL_EVENT_METADATA_KEYS or (
+        event.get("type") in (None, "span") and content.get("type") == "test"
+    )
+
+
 def enrich_test_payload(
     payload: dict[str, Any],
     *,
@@ -100,6 +134,7 @@ def enrich_test_payload(
 ) -> EnrichmentResult:
     """Apply the complete non-I/O enrichment sequence to one worker payload."""
     context = context_selection.values or {}
+    service = reporting_service(context_selection, bazel_metadata)
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         metadata = {}
@@ -154,6 +189,8 @@ def enrich_test_payload(
             if not isinstance(content, dict):
                 content = {}
                 event["content"] = content
+            if service and _is_ci_event(event, content):
+                content["service"] = service
             meta = content.get("meta")
             if not isinstance(meta, dict):
                 meta = {}

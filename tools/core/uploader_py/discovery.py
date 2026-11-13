@@ -36,17 +36,30 @@ class DiscoveryError(ValueError):
     """Configured testlogs discovery cannot be performed safely."""
 
 
-def read_target_label(output_dir: Path) -> str | None:
-    """Read an optional regular sidecar without following it outside its output."""
+def read_bazel_metadata(output_dir: Path | None) -> tuple[dict | None, str | None]:
+    """Read one regular target sidecar without following it outside its output."""
+    if output_dir is None:
+        return None, None
     metadata_file = output_dir / "bazel_target_metadata.json"
+    if not metadata_file.is_file():
+        return None, None
     try:
-        if metadata_file.is_symlink():
-            return None
-        if metadata_file.resolve(strict=True).parent != output_dir.resolve(strict=True):
-            return None
+        resolved = metadata_file.resolve(strict=True)
+        output_resolved = output_dir.resolve(strict=True)
+    except OSError:
+        return None, "bazel_metadata_invalid"
+    if metadata_file.is_symlink() or resolved.parent != output_resolved:
+        return None, "bazel_metadata_unsafe"
+    try:
         value = strict_json_loads(metadata_file.read_text(encoding="utf-8-sig"))
     except (OSError, UnicodeError, json.JSONDecodeError):
-        return None
+        return None, "bazel_metadata_invalid"
+    return (value, None) if isinstance(value, dict) else (None, "bazel_metadata_invalid")
+
+
+def read_target_label(output_dir: Path) -> str | None:
+    """Read an optional regular sidecar without following it outside its output."""
+    value, _warning = read_bazel_metadata(output_dir)
     label = value.get("bazel.target") if isinstance(value, dict) else None
     return label if isinstance(label, str) and label else None
 

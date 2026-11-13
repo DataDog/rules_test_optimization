@@ -32,6 +32,10 @@ rg -n -- "rules_go_patches|patches = \\[|patch_tool|patch_args|full_bundle_no_ma
 
 Interpretation:
 
+- The Go wrapper must preserve the caller's `DD_SERVICE`, including an unset
+  value, `env_inherit` and `select()`. Verify application behavior with ordinary
+  and instrumented tests, then verify the selected reporting service at the
+  uploader's receiver. Bash rollback requires `jq`.
 - `--test_env=DD_GIT_*` is invalid outside explicit negative tests or docs that
   warn against it.
 - `DD_TEST_OPTIMIZATION_AGENT_URL` and `DD_TEST_OPTIMIZATION_AGENTLESS_URL`

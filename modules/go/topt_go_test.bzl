@@ -61,7 +61,6 @@ load(
     "@datadog-rules-test-optimization//tools/core:topt_macro_utils.bzl",
     "append_data_dependencies",
     "build_module_labels",
-    "merge_optional_env_defaults",
     "merge_user_env",
     "normalize_user_data",
     "resolve_files_label",
@@ -80,7 +79,6 @@ load("//:topt_go_infer.bzl", "topt_go_bazel_metadata", "topt_go_payloads_selecto
 _service_mapping_entries = service_mapping_entries
 _normalize_user_data = normalize_user_data
 _append_data_dependencies = append_data_dependencies
-_merge_optional_env_defaults = merge_optional_env_defaults
 _merge_user_env = merge_user_env
 
 def _resolve_topt_service_key(service_entries, topt_service):
@@ -476,15 +474,8 @@ def dd_topt_go_test(
     # ------------------------------------------------------------------
     # Prepare env map using a selector rule that infers importpath via aspect
     # Same `pop` pattern keeps final go_test kwargs clean and explicit.
+    # The uploader owns the reporting service; leave application DD_SERVICE alone.
     user_env = kwargs.pop("env", None)
-
-    # Default DD_SERVICE from sync metadata so Mini does not fall back to
-    # platform-specific executable names when callers omit the service.
-    user_env = _merge_optional_env_defaults(
-        user_env,
-        {"DD_SERVICE": _svc.get("service_name")},
-        macro_name = "dd_topt_go_test",
-    )
 
     # Generated exports pass their module labels directly. Local-static
     # descriptors keep those labels behind the repository-state provider so

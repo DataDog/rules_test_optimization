@@ -31,6 +31,7 @@ sh_test(
         "test_log_level_tools.py",
         "test_python_tools.py",
         "test_release_tools.py",
+        "test_reporting_service_tools.py",
         "test_target_selection_tools.py",
         "test_uploader_application_tools.py",
         "test_uploader_batching_tools.py",

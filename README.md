@@ -465,10 +465,12 @@ use_repo(topt_go_ddtest, "topt_go_ddtest_mini")
 override_repo(go_deps, com_github_datadog_ddtest_ddto = "topt_go_ddtest_mini")
 ```
 
-By default, `dd_topt_go_test` also sets `DD_SERVICE` from the selected sync
-metadata service name. If you already set `DD_SERVICE` in the test target's
-`env`, the macro preserves your explicit value. If you pass `env = select(...)`,
-the macro leaves that configurable env unchanged in this release.
+`dd_topt_go_test` preserves the test's `DD_SERVICE`, including when it is unset,
+inherited, explicit, or selected with `env = select(...)`. The uploader assigns
+CI events and Test Optimization telemetry to the service declared by the
+target's matching sync context. Application spans retain their original service.
+If a test needs `DD_SERVICE` for its own behavior, declare it in the test's `env`
+or `env_inherit` just as you would for an ordinary `go_test`.
 
 The generated `.bazelrc` block is managed between
 `# BEGIN Datadog Test Optimization Bazelrc` and
@@ -1338,11 +1340,11 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
   `powershell.exe` and uses .NET `HttpClient`.
 
 Optional tooling:
-- **jq** (Linux/macOS, legacy rollback only) - Used by the legacy uploader to
-  enrich test payloads with `context.json` and split oversized test payloads. If
-  missing, legacy uploads proceed without enrichment; payloads up to the
-  5,000,000-byte intake limit can still be sent intact, but larger payloads fail
-  because their `events` array cannot be partitioned.
+- **jq** (Linux/macOS, required for legacy rollback) - Used by the legacy Bash
+  uploader to enrich payloads with `context.json`, validate the reporting service,
+  and split oversized test payloads. Without it, the uploader exits with a
+  configuration error before sending payloads. Install `jq` or use the default
+  Python uploader; Python and PowerShell uploaders do not require `jq`.
 
 See the [parallel Python uploader](docs/Uploader_Reference.md#parallel-python-uploader-default)
 for its shared cross-platform behavior. Set `use_python_uploader = False` only
@@ -2129,9 +2131,10 @@ args, wrapper script, etc.), but the required contract is always:
 2. Set `DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES = "true"`
 3. Write payloads to `TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}`
 
-First-class companion macros in this repository also default `DD_SERVICE` from
-the selected sync metadata service name. They never override an explicit caller
-`DD_SERVICE`, and they leave `env = select(...)` unchanged.
+The Go companion preserves `DD_SERVICE`; its uploader selects the reporting
+service from validated target metadata and the matching sync context. Other
+language companions still default `DD_SERVICE` from the selected sync metadata
+service without overriding explicit values or `env = select(...)`.
 
 ### Building a first-class companion module
 
