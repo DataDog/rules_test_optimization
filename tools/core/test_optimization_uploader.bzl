@@ -675,6 +675,8 @@ def _uploader_impl(ctx):
         fail_with_prefix("test_optimization_uploader", "workers must be a positive integer")
     if ctx.attr.batch_test_payloads and not ctx.attr.use_python_uploader:
         fail_with_prefix("test_optimization_uploader", "batch_test_payloads requires use_python_uploader = True")
+    if ctx.attr.http_keep_alive and not ctx.attr.use_python_uploader:
+        fail_with_prefix("test_optimization_uploader", "http_keep_alive requires use_python_uploader = True")
     expected_targets_file = ctx.file.expected_targets_file
     if ctx.attr.runtime_selection and (ctx.attr.data or ctx.attr.expected_targets or expected_targets_file):
         fail_with_prefix("test_optimization_uploader", "runtime_selection cannot be combined with configured data, expected_targets, or expected_targets_file")
@@ -737,6 +739,7 @@ def _uploader_impl(ctx):
             "filter_prefix": filter_prefix_enabled,
             "gzip_payloads": gzip_payloads,
             "batch_test_payloads": ctx.attr.batch_test_payloads,
+            "http_keep_alive": ctx.attr.http_keep_alive,
             "workers": workers,
             "rules_version": RULES_VERSION,
             "uploader_version": UPLOADER_VERSION,
@@ -945,6 +948,7 @@ _dd_payload_uploader_rule = rule(
         "filter_prefix": attr.bool(default = False, doc = "Boolean gate: only upload files matching span_events_*.json or coverage_*.json; telemetry uploads are always eligible (env: DD_TEST_OPTIMIZATION_FILTER_PREFIX)"),
         "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TEST_OPTIMIZATION_GZIP)"),
         "batch_test_payloads": attr.bool(default = False, doc = "Opt in to bounded whole-source test batches with event-local runtime IDs; requires the Python uploader (env: DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS)."),
+        "http_keep_alive": attr.bool(default = False, doc = "Opt in to one persistent HTTP connection per worker; requires the Python uploader (env: DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE)."),
         "workers": attr.int(default = 8, doc = "Maximum number of independent payload-file workers (env: DD_TEST_OPTIMIZATION_WORKERS, CLI: --workers)"),
         "use_python_uploader": attr.bool(default = True, doc = "Use the default cross-platform Python uploader; set False only for temporary rollback to the legacy platform runtime."),
         # Optional files to place in runfiles (e.g., a generated context.json)

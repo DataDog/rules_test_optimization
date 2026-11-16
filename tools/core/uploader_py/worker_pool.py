@@ -95,10 +95,26 @@ def run_file_workers(
         return WorkerPoolRun((), 0, 0)
 
     worker_count = min(workers, len(planned_tasks))
+    worker_transports: list[TransportType] = []
+
+    def close_transports() -> None:
+        for transport in worker_transports:
+            close = getattr(transport, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    if logger is not None:
+                        logger.warning("worker transport cleanup failed")
+
     try:
         with measurements.phase("transport_setup") if measurements is not None else nullcontext():
-            worker_transports = tuple(transport_factory() for _ in range(worker_count))
-    except Exception as exc:
+            for _ in range(worker_count):
+                worker_transports.append(transport_factory())
+    except BaseException as exc:
+        close_transports()
+        if not isinstance(exc, Exception):
+            raise
         raise WorkerPoolError(
             f"failed to initialize worker transport: {type(exc).__name__}"
         ) from exc
@@ -192,15 +208,19 @@ def run_file_workers(
             finally:
                 task_queue.task_done()
 
-    worker_threads = tuple(
-        threading.Thread(
-            target=worker_loop,
-            args=(transport,),
-            name=f"dd-uploader-worker-{index + 1}",
-            daemon=False,
+    try:
+        worker_threads = tuple(
+            threading.Thread(
+                target=worker_loop,
+                args=(transport,),
+                name=f"dd-uploader-worker-{index + 1}",
+                daemon=False,
+            )
+            for index, transport in enumerate(worker_transports)
         )
-        for index, transport in enumerate(worker_transports)
-    )
+    except BaseException:
+        close_transports()
+        raise
     started_threads: list[threading.Thread] = []
 
     def stop_started_workers() -> None:
@@ -312,6 +332,7 @@ def run_file_workers(
             set_attempt_callback = getattr(transport, "set_attempt_callback", None)
             if callable(set_attempt_callback):
                 set_attempt_callback(None)
+        close_transports()
         close = getattr(work_items, "close", None)
         if close is not None:
             close()

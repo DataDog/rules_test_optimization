@@ -45,6 +45,49 @@ def _tasks(count: int) -> tuple[FileTask, ...]:
 
 
 class WorkerPoolTests(unittest.TestCase):
+    def test_owned_transports_close_after_success_failure_or_interrupt(self) -> None:
+        for outcome in ("success", "failure", "interrupt"):
+            with self.subTest(outcome=outcome):
+                transport = mock.Mock()
+
+                def prepare(tasks, _runtime):
+                    if outcome == "interrupt":
+                        raise KeyboardInterrupt
+                    yield PreparedWorkItem(tasks)
+
+                def process(task, _runtime, _transport):
+                    if outcome == "failure":
+                        raise ValueError("source failure")
+                    return FileResult(task.task_id, task.display_path, task.payload_type, FileStatus.SUCCEEDED)
+
+                def run():
+                    return run_file_workers(_tasks(1), workers=1, runtime=None,
+                        transport_factory=lambda: transport, process_file=process, prepare_work=prepare)
+
+                if outcome == "interrupt":
+                    with self.assertRaises(WorkerPoolInterrupted):
+                        run()
+                else:
+                    result = run()
+                    self.assertEqual(FileStatus.FAILED if outcome == "failure" else FileStatus.SUCCEEDED, result.results[0].status)
+                transport.close.assert_called_once_with()
+
+    def test_partial_transport_creation_closes_previous_transports(self) -> None:
+        transport = mock.Mock()
+        with self.assertRaises(WorkerPoolError):
+            run_file_workers(_tasks(2), workers=2, runtime=None,
+                transport_factory=mock.Mock(side_effect=[transport, OSError("setup")]),
+                process_file=mock.Mock())
+        transport.close.assert_called_once_with()
+
+    def test_thread_creation_failure_closes_unstarted_transports(self) -> None:
+        transport = mock.Mock()
+        with mock.patch("uploader_py.worker_pool.threading.Thread", side_effect=RuntimeError("thread")):
+            with self.assertRaises(RuntimeError):
+                run_file_workers(_tasks(1), workers=1, runtime=None,
+                    transport_factory=lambda: transport, process_file=mock.Mock())
+        transport.close.assert_called_once_with()
+
     def test_bounded_task_queue_applies_backpressure(self) -> None:
         for prepared in (False, True):
             with self.subTest(prepared=prepared):

@@ -140,6 +140,19 @@ RULE_ATTRIBUTES = {
 
 
 class UploaderConfigTests(unittest.TestCase):
+    def test_http_keep_alive_defaults_and_strict_runtime_override(self) -> None:
+        self.assertFalse(self.parse().http_keep_alive)
+        self.write_config(http_keep_alive=True)
+        self.assertTrue(self.parse().http_keep_alive)
+        self.assertFalse(self.parse(environ={"DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE": " false "}).http_keep_alive)
+        self.write_config(http_keep_alive=False)
+        self.assertTrue(self.parse(environ={"DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE": "YES"}).http_keep_alive)
+        with self.assertRaisesRegex(ConfigError, "must be true or false"):
+            self.parse(environ={"DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE": "maybe"})
+        self.write_config(http_keep_alive="true")
+        with self.assertRaises(ConfigError):
+            self.parse()
+
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
         self.root = Path(self.temp_dir.name)

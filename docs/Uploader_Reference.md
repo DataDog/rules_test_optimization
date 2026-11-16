@@ -225,6 +225,33 @@ precedence. Leave
 `use_python_uploader` unset for the Python implementation. Set it to `False`
 only for temporary rollback to the legacy Bash or PowerShell implementation.
 
+#### Opt-in persistent HTTP connections
+
+Set `http_keep_alive = True` on the uploader, or set
+`DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE=1` at runtime, to reuse a connection
+within each Python uploader worker. The default is disabled. The environment
+overrides the rule attribute; `0`, `false`, or `no` disables it. Accepted values
+are `1`/`0`, `true`/`false`, and `yes`/`no`, ignoring case and outer whitespace.
+Legacy uploaders reject an enabled setting.
+
+Each worker owns at most one connection. Changing the origin, proxy, or tunnel
+discards that connection. Only fully consumed responses can leave a connection
+available for reuse; a server close, oversized response, or transport error
+discards it. TLS verification, proxy bypass rules and request headers follow
+the existing transport policy. Connections close when the worker pool finishes,
+including errors and interruption.
+
+A stale connection can fail after the server received a request. Recovery uses
+the existing retry budget and replays the same prepared body; it does not add
+an independent reconnect retry or promise exactly-once delivery. Batching is a
+separate opt-in and can be tested independently.
+
+For a comparison, retain the same input payloads with `--keep-payloads`, keep
+the worker count and batching setting fixed, and alternate runs with this
+environment variable set to `0` and `1`. Compare wall time, HTTP phase timings,
+CPU time, request counts and encoded bytes in the JSON reports. A local result
+does not establish the improvement on a consumer's intake or proxy route.
+
 #### Opt-in test batching
 
 Set `batch_test_payloads = True` on the uploader, or pass

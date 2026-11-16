@@ -7,6 +7,16 @@
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
+$httpKeepAlive = ([string]$env:DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE).Trim().ToLowerInvariant()
+if ($httpKeepAlive -in @('1', 'true', 'yes')) {
+    [Console]::Error.WriteLine('[dd-uploader] error: http_keep_alive requires use_python_uploader = True')
+    exit 2
+}
+if ($httpKeepAlive -notin @('', '0', 'false', 'no')) {
+    [Console]::Error.WriteLine('[dd-uploader] error: DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE must be true or false')
+    exit 2
+}
+
 $batchTestPayloads = ([string]$env:DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS).Trim().ToLowerInvariant()
 if ($batchTestPayloads -in @('1', 'true', 'yes')) {
     [Console]::Error.WriteLine('[dd-uploader] error: batch_test_payloads requires use_python_uploader = True')

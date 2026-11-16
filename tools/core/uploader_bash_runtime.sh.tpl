@@ -7,6 +7,13 @@
 
 set -euo pipefail
 
+HTTP_KEEP_ALIVE=$(printf '%s' "${DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE:-}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+case "$HTTP_KEEP_ALIVE" in
+    ''|0|false|no) ;;
+    1|true|yes) echo '[dd-uploader] error: http_keep_alive requires use_python_uploader = True' >&2; exit 2 ;;
+    *) echo '[dd-uploader] error: DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE must be true or false' >&2; exit 2 ;;
+esac
+
 BATCH_TEST_PAYLOADS=$(printf '%s' "${DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS:-}" | tr '[:upper:]' '[:lower:]' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
 case "$BATCH_TEST_PAYLOADS" in
     ''|0|false|no) ;;
