@@ -55,6 +55,25 @@ dd_topt_go_test(
     }),
 )
 
+# The original attempt deliberately fails; only a managed retry in a
+# fresh process can make the target pass with parent-only enablement.
+dd_topt_go_test(
+    name = "process_retry_test",
+    srcs = ["process_retry_test.go"],
+    env = {
+        "DD_CIVISIBILITY_EARLY_FLAKE_DETECTION_ENABLED": "false",
+        "DD_CIVISIBILITY_FLAKY_RETRY_COUNT": "1",
+        "DD_CIVISIBILITY_FLAKY_RETRY_ENABLED": "true",
+        "DD_CIVISIBILITY_RETRY_EXECUTION_MODE": "process",
+    },
+    importpath = "example.com/processretryfixture",
+    topt_data = TOPT_DATA,
+    deps = [
+        "@topt_go_ddtest_mini//propagation",
+        "@topt_go_ddtest_mini//testopt",
+    ],
+)
+
 # Its only source comes through embed, which the registration also reads.
 go_library(
     name = "widget",

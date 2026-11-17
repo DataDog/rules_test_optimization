@@ -7,6 +7,9 @@
 package ddtestfixture
 
 import (
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/DataDog/ddtest/ddto/propagation"
@@ -18,5 +21,31 @@ import (
 func TestInstrumented(t *testing.T) {
 	if _, ok := propagation.FromContext(testopt.Context(t)); !ok {
 		t.Fatal("the test's context has no trace: the test is not instrumented")
+	}
+}
+
+func TestAuxiliaryProcessKeepsNativeFailure(t *testing.T) {
+	if os.Getenv("RTO_AUXILIARY_FAILURE") == "1" {
+		t.Cleanup(func() { t.Error("intentional auxiliary failure") })
+		return
+	}
+
+	child := exec.Command(os.Args[0], "-test.run=^TestAuxiliaryProcessKeepsNativeFailure$", "-test.v")
+	// Keep the inherited CI Visibility switch: the macro must prevent ordinary
+	// helpers from becoming test sessions, even when process retries are enabled.
+	child.Env = append(os.Environ(),
+		"RTO_AUXILIARY_FAILURE=1",
+		"DD_CIVISIBILITY_RETRY_EXECUTION_MODE=process",
+		"DD_CIVISIBILITY_EARLY_FLAKE_DETECTION_ENABLED=false",
+		"DD_CIVISIBILITY_FLAKY_RETRY_ENABLED=true",
+		"DD_CIVISIBILITY_FLAKY_RETRY_COUNT=1",
+		"TEST_UNDECLARED_OUTPUTS_DIR="+t.TempDir(),
+	)
+	output, err := child.CombinedOutput()
+	exitError, ok := err.(*exec.ExitError)
+	if !ok || exitError.ExitCode() != 1 ||
+		!strings.Contains(string(output), "--- FAIL: TestAuxiliaryProcessKeepsNativeFailure") ||
+		!strings.Contains(string(output), "intentional auxiliary failure") {
+		t.Fatalf("auxiliary test lost its native failure: %v\n%s", err, output)
 	}
 }

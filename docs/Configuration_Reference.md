@@ -228,7 +228,7 @@ accepts:
 | `topt_service` | `None` | With the multi-service mapping, the raw or sanitized service key to use |
 | `module_label_override` | `None` | Sanitized module label suffix to use when automatic module detection does not match |
 | `stage_sources` | `False` | Stage direct `srcs` and `embedsrcs` in runtime runfiles so the test can open its source files for metadata such as `test.source.end`. Sets `rundir` to `.` unless the caller sets `rundir` |
-| `ci_visibility_enabled` | `True` | Set `DD_CIVISIBILITY_ENABLED=true` in the test environment. Set `False` only when the caller owns that variable |
+| `ci_visibility_enabled` | `True` | Set `DD_CIVISIBILITY_ENABLED=parent`: instrument the test process; ordinary subprocesses inherit `false` after Mini starts. Mini's managed retries still run. Set `False` only when the caller owns that variable |
 | `enable_test_binary_linker_optimization` | `True` | Add `-s -w` to the hidden test's `gc_linkopts` where rules_go does not already strip (see below) |
 | `nogo` | `True` | Retain the configured nogo analysis. `False` skips analysis for the enabled instrumented test and its Go dependency closure. It does not disable analysis for a plain test when the sync export is disabled |
 | `restore_non_go_settings` | `False` | Record incoming SDK/nogo settings for a consumer-patched rules_go that restores them on non-Go edges. Non-configurable; requires the contract described below |
