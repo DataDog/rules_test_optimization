@@ -510,6 +510,12 @@ build does not ask for debug or unstripped binaries; set
 flags unchanged. See
 [`dd_topt_go_test` attributes](docs/Configuration_Reference.md#dd_topt_go_test-attributes).
 
+The test environment sets `DD_CIVISIBILITY_ENABLED=parent`. Mini instruments
+the test process and manages its own retry children, while ordinary subprocesses
+inherit `false` after Mini starts. This preserves native Go test output for
+self-executed helpers that intentionally fail. Set `ci_visibility_enabled = False`
+only when the caller owns `DD_CIVISIBILITY_ENABLED`.
+
 An explicit per-service integration can pass the same macro a local-static
 descriptor instead of loading an external repository's `export.bzl`:
 

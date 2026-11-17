@@ -32,7 +32,7 @@ Checks:
 - Does the repo-local wrapper inject `topt_data` from the actual generated
   service repository, for example `@test_optimization_data_<service>//:export.bzl`?
 - Does the target keep the default `ci_visibility_enabled = True`? The macro
-  then sets `DD_CIVISIBILITY_ENABLED=true` for the test.
+  then sets `DD_CIVISIBILITY_ENABLED=parent` for the test.
 - With remote execution/cache, did the test config use
   `--remote_download_minimal --remote_download_regex=.*test[.]outputs.*`
   plus `--zip_undeclared_test_outputs`?

@@ -673,13 +673,13 @@ def _go_macro_single_service_wiring_test_impl(ctx):
         captured.env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
     )
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
-    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, "parent", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(env, None, captured.env.get("DD_TRACE_AGENT_URL"))
     asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_AGENTLESS_ENABLED"))
     asserts.equals(env, None, captured.env.get("DD_CIVISIBILITY_AGENTLESS_URL"))
     asserts.equals(env, "1", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, None, captured.env.get("DD_SERVICE"))
-    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, "parent", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.true(env, captured.rundir.endswith("tests"))
     return analysistest.end(env)
 
@@ -853,7 +853,7 @@ def _go_macro_env_none_wiring_test_impl(ctx):
     asserts.equals(env, None, captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
-    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, "parent", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(
         env,
         "go_macro_env_none_target_topt_bazel_metadata.json",
@@ -875,7 +875,7 @@ def _go_macro_select_inputs_wiring_test_impl(ctx):
     asserts.equals(env, "from_select", captured.env.get("CUSTOM_ENV"))
     asserts.equals(env, None, captured.env.get("DD_SERVICE"))
     asserts.equals(env, "true", captured.env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
-    asserts.equals(env, "true", captured.env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, "parent", captured.env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(
         env,
         "go_macro_select_inputs_target_topt_bazel_metadata.json",
@@ -1005,7 +1005,7 @@ def _go_macro_public_wrapper_test_impl(ctx):
         run_env.get("DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME"),
     )
     asserts.equals(env, "true", run_env.get("DD_TEST_OPTIMIZATION_PAYLOADS_IN_FILES"))
-    asserts.equals(env, "true", run_env.get("DD_CIVISIBILITY_ENABLED"))
+    asserts.equals(env, "parent", run_env.get("DD_CIVISIBILITY_ENABLED"))
     asserts.equals(env, None, run_env.get("DD_TRACE_AGENT_URL"))
     asserts.equals(env, None, run_env.get("DD_CIVISIBILITY_AGENTLESS_ENABLED"))
     asserts.equals(env, None, run_env.get("DD_CIVISIBILITY_AGENTLESS_URL"))

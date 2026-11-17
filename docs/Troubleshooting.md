@@ -1017,7 +1017,7 @@ has no payloads or no `bazel_target_metadata.json`.
    and copies `bazel_target_metadata.json`. Run `<name>`.
 
 3. **`ci_visibility_enabled = False`.** The macro then does not set
-   `DD_CIVISIBILITY_ENABLED=true`. Set it in the test's `env`, or remove the
+   `DD_CIVISIBILITY_ENABLED=parent`. Set it in the test's `env`, or remove the
    attribute.
 
 4. **The result was cached.** A `(cached)` result reuses the outputs of an

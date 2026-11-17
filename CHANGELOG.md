@@ -39,6 +39,11 @@ versioning.
 
 ### Fixed
 
+- Go tests use parent-only CI Visibility so self-executed helpers preserve
+  native Go failure output while Mini's managed process retries still run.
+  The pinned ddtest `pre-release-faa3999` also counts `TestMain` preparation
+  and repeated child startup when deciding whether another EFD sample fits.
+  This retains the existing test order and remains a partial timeout mitigation.
 - Go instrumentation preserves the test's `DD_SERVICE` environment. The uploader
   assigns the CI hierarchy and target telemetry to the selected Test Optimization
   service, validates its repository/runtime identity, and preserves application

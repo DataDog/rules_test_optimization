@@ -351,7 +351,9 @@ def dd_topt_go_test(
         AST-derived metadata. When enabled, the macro defaults `rundir` to `.`
         only if the caller did not already set `rundir`.
       ci_visibility_enabled: Optional boolean. When true, the macro forces
-        `DD_CIVISIBILITY_ENABLED=true` on the generated test environment.
+        `DD_CIVISIBILITY_ENABLED=parent` on the generated test environment.
+        After Mini starts, ordinary subprocesses inherit false; Mini's
+        managed retries still run.
         Set false only when the caller intentionally owns this switch.
       enable_test_binary_linker_optimization: Optional boolean. When true, the
         hidden raw go_test target receives test-only `-s -w` `gc_linkopts` only
@@ -622,7 +624,7 @@ def dd_topt_go_test(
         "DD_TEST_OPTIMIZATION_BAZEL_TARGET_METADATA_BASENAME": metadata_name + ".json",
     }
     if ci_visibility_enabled:
-        required_env["DD_CIVISIBILITY_ENABLED"] = "true"
+        required_env["DD_CIVISIBILITY_ENABLED"] = "parent"
     env = _merge_user_env(
         user_env,
         required_env,
