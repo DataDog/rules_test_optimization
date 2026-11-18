@@ -15,6 +15,12 @@ versioning.
 
 ## [Unreleased]
 
+### Fixed
+
+- Consumers can load the mock Datadog server and release helpers from the core
+  module without adding development language rules. The Java example agent
+  and test-only Skylib dependencies are scoped to development.
+
 ## [2.1.0-rc.1]
 
 This candidate pins ddtest `pre-release-faa3999` for Go instrumentation.

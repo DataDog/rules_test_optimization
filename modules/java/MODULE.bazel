@@ -11,7 +11,8 @@ module(
 
 bazel_dep(name = "datadog-rules-test-optimization", version = "2.1.0-rc.1")
 bazel_dep(name = "rules_java", version = "8.14.0")
-bazel_dep(name = "bazel_skylib", version = "1.8.2")
+
+bazel_dep(name = "bazel_skylib", version = "1.8.2", dev_dependency = True)
 
 # Dev-only stub repository so companion-module tests can resolve
 # @test_optimization_data labels without network access.

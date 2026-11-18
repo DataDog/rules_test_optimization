@@ -13,8 +13,6 @@
 #   tools/tests/integration/run_mock_server_tests.sh(.ps1) because the harness
 #   bootstraps a nested Bazel workspace and validates uploader runtime launchers.
 #   CI runs this harness explicitly in .github/workflows/ci.yml.
-load("@rules_python//python:py_binary.bzl", "py_binary")
-
 exports_files(
     [
         "example_stub_repo.bzl",
@@ -27,10 +25,9 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-py_binary(
+alias(
     name = "mock_dd_server",
-    srcs = ["integration/mock_dd_server.py"],
-    main = "integration/mock_dd_server.py",
+    actual = "//tools/tests/python:mock_dd_server",
     visibility = ["//visibility:public"],
 )
 

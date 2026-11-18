@@ -13,7 +13,7 @@ module(
 bazel_dep(name = "platforms", version = "1.0.0")
 
 # Test utilities for Starlark unit tests
-bazel_dep(name = "bazel_skylib", version = "1.8.2")
+bazel_dep(name = "bazel_skylib", version = "1.8.2", dev_dependency = True)
 
 # Dev-only dependency for shell-based unit tests in this repository.
 bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
@@ -176,6 +176,7 @@ http_file = use_repo_rule("@bazel_tools//tools/build_defs/repo:http.bzl", "http_
 
 http_file(
     name = "dd_java_agent",
+    dev_dependency = True,
     downloaded_file_path = "dd-java-agent.jar",
     urls = ["https://s3.us-east-1.amazonaws.com/dd-trace-java-builds/master/dd-java-agent.jar"],
 )
