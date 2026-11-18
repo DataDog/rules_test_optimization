@@ -247,6 +247,30 @@ class ReleaseBundleTests(unittest.TestCase):
         result = RELEASE.build(self.repo, "v1.3.0", self.root / "dist", "v1.3.0")
         self.assertEqual(result["commit"], self.git("rev-parse", "HEAD"))
 
+    def test_release_candidate_uses_its_own_tag_archive_and_install_pins(self):
+        version = "1.3.0-rc.1"
+        for path in [self.repo / "MODULE.bazel", *self.repo.glob("modules/*/MODULE.bazel")]:
+            self.write(path.relative_to(self.repo), path.read_text().replace("1.3.0", version))
+        changelog = self.repo / "CHANGELOG.md"
+        self.write("CHANGELOG.md", changelog.read_text().replace("[1.3.0]", f"[{version}]"))
+        self.commit()
+
+        with self.assertRaisesRegex(ValueError, "release tag mismatch"):
+            self.build("stable-tag", tag="v1.3.0")
+        self.assertFalse((self.root / "stable-tag").exists())
+
+        metadata = self.build(tag=f"v{version}")
+        archive = f"rules_test_optimization-{version}.tar.gz"
+        self.assertEqual(metadata["version"], version)
+        self.assertEqual(metadata["tag"], f"v{version}")
+        self.assertEqual(metadata["archive"], archive)
+        self.assertTrue(metadata["url"].endswith(f"/releases/download/v{version}/{archive}"))
+        install = (self.root / "dist" / "INSTALL.md").read_text()
+        for module, prefix in metadata["modules"].items():
+            with self.subTest(module=module):
+                self.assertIn(f'bazel_dep(name = "{module}", version = "{version}")', install)
+                self.assertIn(f'strip_prefix = "{prefix}"', install)
+
     def test_existing_output_is_never_overwritten(self):
         self.build()
         with self.assertRaisesRegex(ValueError, "must be empty"):
@@ -294,6 +318,25 @@ class ReleaseWorkflowGuardTests(unittest.TestCase):
         self.assertNotIn("gh release edit", workflow)
         self.assertNotIn("gh release upload", workflow)
         self.assertNotIn("git push", workflow)
+
+
+    @unittest.skipIf(sys.platform == "win32" or not shutil.which("bash"), "requires Bash")
+    def test_candidate_draft_is_created_as_prerelease(self):
+        workflow = _runfile(".github/workflows/release.yml").read_text()
+        draft = workflow.split("          # No --clobber or edit path:", 1)[1].split("\n", 1)[1]
+        for tag, prerelease in (("v1.3.0", False), ("v1.3.0-rc.1", True)):
+            with self.subTest(tag=tag):
+                command = 'set -euo pipefail\ngh() { printf "%s\\n" "$@"; }\n' + draft
+                result = subprocess.run(
+                    ["bash", "-c", command],
+                    env={**os.environ, "GITHUB_REF": f"refs/tags/{tag}"},
+                    capture_output=True, text=True, check=True,
+                )
+                args = result.stdout.splitlines()
+                self.assertEqual(["release", "create", tag], args[:3])
+                self.assertIn("--draft", args)
+                self.assertIn("--verify-tag", args)
+                self.assertEqual(prerelease, "--prerelease" in args)
 
 
 if __name__ == "__main__":

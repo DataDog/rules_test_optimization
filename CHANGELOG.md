@@ -15,7 +15,10 @@ versioning.
 
 ## [Unreleased]
 
-## [2.1.0]
+## [2.1.0-rc.1]
+
+This candidate pins ddtest `pre-release-faa3999` for Go instrumentation.
+Use the candidate's archive and checksum to try it before the stable release.
 
 ### Upgrade notes
 

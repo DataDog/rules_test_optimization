@@ -21,8 +21,8 @@ the Go companion you need to `MODULE.bazel`. Bazel resolves the archive from
 the registry, so remove any override for these modules when switching to BCR.
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "2.1.0")
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
 ```
 
 For Go, continue with [Go companion module](#go-companion-module) to configure
@@ -74,14 +74,14 @@ tuple further below still belongs to `v1.2.0`.
 
 Use this for an unreleased change, an older release without bundle assets, or
 a private repository that requires Git authentication. Pin the same published
-commit for core and companions. The examples use module version `2.1.0`; the
+commit for core and companions. The examples use module version `2.0.0`; the
 override selects the implementation. For another revision, match the module
 versions to its `MODULE.bazel` files.
 
 In your `MODULE.bazel`:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -89,7 +89,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_go_test)
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-go",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -102,7 +102,7 @@ git_override(
 bazel_dep(name = "rules_go", version = "0.60.0")
 
 # Optional companion module (only needed if you use dd_topt_py_test)
-bazel_dep(name = "datadog-rules-test-optimization-python", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization-python", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-python",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -111,7 +111,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_java_test)
-bazel_dep(name = "datadog-rules-test-optimization-java", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization-java", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-java",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -120,7 +120,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_nodejs_test)
-bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization-nodejs", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-nodejs",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -129,7 +129,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_dotnet_test)
-bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization-dotnet", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-dotnet",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -138,7 +138,7 @@ git_override(
 )
 
 # Optional companion module (only needed if you use dd_topt_ruby_test)
-bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization-ruby", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization-ruby",
     remote = "https://github.com/DataDog/rules_test_optimization.git",
@@ -690,7 +690,7 @@ If your repository needs sync + uploader only (including non-Go languages),
 depend on core only:
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 git_override(
     module_name = "datadog-rules-test-optimization",
     remote = "https://github.com/DataDog/rules_test_optimization.git",

@@ -172,13 +172,13 @@ def _extract_starlark_string_constant(path: Path, constant_name: str) -> str:
     return m.group(1)
 
 def _is_semver_like(version: str) -> bool:
-    """Internal helper for is semver like behavior."""
-    return bool(re.match(r"^\d+\.\d+\.\d+$", version or ""))
+    """Accept stable versions and numbered release candidates."""
+    return re.fullmatch(r"\d+\.\d+\.\d+(?:-rc\.[1-9][0-9]*)?", version or "") is not None
 
 def _check_semver(label: str, version: str, errors: List[str]) -> None:
     """Internal helper for check semver behavior."""
     if not _is_semver_like(version):
-        errors.append(f'{label} "{version}" must be semantic version format X.Y.Z')
+        errors.append(f'{label} "{version}" must use X.Y.Z or X.Y.Z-rc.N')
 
 
 def main() -> int:

@@ -19,7 +19,7 @@ versions to the release. For development commits, use the Git alternative in
 the [installation reference](../../../../docs/Installation_Reference.md#option-b-install-from-a-git-commit).
 
 ```bzl
-bazel_dep(name = "datadog-rules-test-optimization", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization",
     urls = ["<release-archive-url>"],
@@ -27,7 +27,7 @@ archive_override(
     strip_prefix = "<archive-prefix>",
 )
 
-bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.1.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
 archive_override(
     module_name = "datadog-rules-test-optimization-go",
     urls = ["<release-archive-url>"],

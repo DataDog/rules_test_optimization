@@ -447,7 +447,11 @@ jobs:
           PY
           test "$(gh api "repos/$GH_REPO/commits/${GITHUB_REF#refs/tags/}" --jq .sha)" = "$GITHUB_SHA"
           # No --clobber or edit path: an existing release is left untouched.
-          gh release create "${GITHUB_REF#refs/tags/}" \
-            --draft --verify-tag --title "${GITHUB_REF#refs/tags/}" \
+          tag="${GITHUB_REF#refs/tags/}"
+          release_flags=(--draft --verify-tag)
+          if [[ "$tag" == *-rc.* ]]; then
+            release_flags+=(--prerelease)
+          fi
+          gh release create "$tag" "${release_flags[@]}" --title "$tag" \
             --notes-file RELEASE_NOTES.md \
             ./*.tar.gz SHA256SUMS release.json INSTALL.md RELEASE_NOTES.md
