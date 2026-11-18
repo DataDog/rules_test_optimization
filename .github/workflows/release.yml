@@ -375,7 +375,7 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
 
       - name: Test release packaging
-        run: python3 -m unittest tools.tests.python.test_release_tools
+        run: python3 -m unittest discover -s tools/tests/python -p test_release_tools.py
 
       - name: Build the release archive and installation notes
         shell: bash

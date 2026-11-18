@@ -15,7 +15,25 @@ versioning.
 
 ## [Unreleased]
 
+## [2.1.0]
+
+### Upgrade notes
+
+- The Go wrapper preserves the test's environment. If a test depended on the
+  previous injected `DD_SERVICE`, set it explicitly in the target's `env`.
+  The uploader still assigns the Test Optimization service from target metadata.
+- If you use `use_python_uploader = False` on Unix, install `jq` on the machine
+  that runs the uploader. The legacy Bash uploader now fails when it cannot
+  enrich a payload.
+
 ### Added
+
+- The Python uploader can opt in to batching with `batch_test_payloads = True`
+  or `DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS=1`. It groups compatible test
+  payloads and keeps each process's runtime ID on its events.
+- The Python uploader reports per-phase timings and bounded upload progress.
+  Doctor and the uploader can read expected targets from a file, avoiding
+  command-line size limits for large test selections.
 
 - The Python uploader can opt in to persistent HTTP connections with
   `http_keep_alive = True` or `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE=1`.
@@ -29,11 +47,10 @@ versioning.
   adapter records original SDK/nogo settings for consumers whose rules_go already
   restores them on non-Go edges; upstream consumers keep the existing path.
 
-- Opt-in test batching stores identical common enrichment tags once in the
-  request metadata. Per-event process IDs and varying target metadata are
-  preserved, and the emitted body is validated before upload. Batching remains
-  disabled by default; real intake and representative performance validation
-  remain prerequisites for rollout.
+- Batching stores shared enrichment once in the request metadata and preserves
+  tags that vary by event or target. The uploader validates each emitted request.
+- The Python uploader indexes test output paths before matching them to
+  expected targets.
 - Payload schema validation avoids repeated unsupported-keyword scans when a
   schema node contains none. Validation rules and diagnostics are unchanged.
 
@@ -43,15 +60,13 @@ versioning.
   native Go failure output while Mini's managed process retries still run.
   The pinned ddtest `pre-release-faa3999` also counts `TestMain` preparation
   and repeated child startup when deciding whether another EFD sample fits.
-  This retains the existing test order and remains a partial timeout mitigation.
-- Go instrumentation preserves the test's `DD_SERVICE` environment. The uploader
-  assigns the CI hierarchy and target telemetry to the selected Test Optimization
-  service, validates its repository/runtime identity, and preserves application
-  span services. Tests relying on the former injected default must declare their
-  application environment explicitly.
-- The legacy Bash uploader now requires `jq` and rejects payloads when enrichment
-  fails. It no longer silently sends unenriched data. PowerShell preserves empty
-  and single-item JSON arrays when preparing outbound telemetry.
+  A long retry sequence can still reach the Bazel action timeout.
+- The uploader assigns the CI hierarchy and target telemetry to the selected
+  Test Optimization service and preserves application span services.
+- PowerShell preserves empty and single-item JSON arrays when preparing
+  outbound telemetry.
+- The CI wrapper keeps rejected payloads and their reports for diagnosis and
+  replay after the temporary staging directory is removed.
 - New Go packages can use their selected service's full metadata bundle when
   their importpath is inside the configured Go module. Invalid explicit
   overrides and unproven module misses remain errors.
