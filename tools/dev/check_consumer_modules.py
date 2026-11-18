@@ -35,6 +35,7 @@ BUILTIN_REPOS = {"", "bazel_tools", "local_config_platform"}
 
 
 def write_consumer(workspace: Path, source: Path, release_dir: Path | None) -> None:
+    (workspace / ".bazelversion").write_bytes((source / ".bazelversion").read_bytes())
     module_paths = {CORE: source, **{f"{CORE}-{lang}": source / "modules" / lang for lang in LANGUAGES}}
     version = module_version((source / "MODULE.bazel").read_text(encoding="utf-8"))
     archive = None
