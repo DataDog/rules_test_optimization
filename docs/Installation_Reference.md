@@ -14,6 +14,20 @@ and multi-service onboarding, use [`docs/Language_Onboarding.md`](Language_Onboa
 
 ## Bzlmod installation
 
+### Install core and Go from the Bazel Central Registry
+
+For versions listed in the Bazel Central Registry, add the core module and
+the Go companion you need to `MODULE.bazel`. Bazel resolves the archive from
+the registry, so remove any override for these modules when switching to BCR.
+
+```bzl
+bazel_dep(name = "datadog-rules-test-optimization", version = "2.0.0")
+bazel_dep(name = "datadog-rules-test-optimization-go", version = "2.0.0")
+```
+
+For Go, continue with [Go companion module](#go-companion-module) to configure
+the SDK. For other companions or WORKSPACE, use the release archive.
+
 ### Option A: install from a release archive (recommended)
 
 Releases before `v2.0.0` use Orchestrion for Go; for that setup, follow the

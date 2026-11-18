@@ -34,9 +34,9 @@ def git(repo: Path, *args: str) -> str:
 
 
 def module_version(text: str) -> str:
-    match = re.search(r"\bmodule\s*\([^)]*\bversion\s*=\s*\"(\d+\.\d+\.\d+)\"", text)
+    match = re.search(r"\bmodule\s*\([^)]*\bversion\s*=\s*\"(\d+\.\d+\.\d+(?:-rc\.[1-9][0-9]*)?)\"", text)
     if not match:
-        raise ValueError("expected module(version = \"X.Y.Z\", ...)")
+        raise ValueError("expected module(version = \"X.Y.Z\" or \"X.Y.Z-rc.N\", ...)")
     return match[1]
 
 

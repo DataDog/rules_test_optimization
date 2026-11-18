@@ -158,8 +158,8 @@
   "moduleExtensions": {
     "//:topt_go_ddtest_extension.bzl%topt_go_ddtest": {
       "general": {
-        "bzlTransitiveDigest": "MUCAQ/BJEp4WdR7flf/pRC8W0c61GqCSJJoB8Ix6MC0=",
-        "usagesDigest": "37UHIfEv9dsxzlRkupsIHixyGMM/t763tmPy5HMUTlA=",
+        "bzlTransitiveDigest": "YFQ+VTpaOFDcgqR+y323nO0/7VcK0+dmplHxmvLbLDk=",
+        "usagesDigest": "K/EqJDZ6RsTtTAYW++bzgQEizOOQfllQNurb6PlRLac=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:,io_bazel_rules_go rules_go+",
@@ -1101,7 +1101,7 @@
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "qE9S3HNMfKVJtD4XMT5WNvc3sgOOqqdVoBns0egnuPE=",
-        "usagesDigest": "Il4asUe3wQl24zB9abmQLk2u8ZWG0N+LzEiHohhvCZI=",
+        "usagesDigest": "GAh7qQ2BvBzhJbYcuIqYSv4wCloDZnDh5EHNLDqL+Mo=",
         "recordedInputs": [
           "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+"
         ],
@@ -1181,7 +1181,7 @@
     "//tests:private_metadata_repo.bzl%private_metadata": {
       "general": {
         "bzlTransitiveDigest": "SARas6i5J6G20kL9EYBLEzpFAErSG7206KFEcS5I2M8=",
-        "usagesDigest": "YHHD4VguQay87YpIc2K31YJHTr6eh3Xd1755CxHi6pE=",
+        "usagesDigest": "EXlqd6pCh/ZSSdPFWxesoZJgeVHnBNYTrXvtlzyLf5I=",
         "recordedInputs": [
           "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+"
         ],

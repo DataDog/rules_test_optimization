@@ -1328,7 +1328,7 @@ For a generic wrapper pattern, see [Other languages (without companion macro)](#
 | rules_go (Go users) | `0.60.0` | Upstream `rules_go`, `0.59.0` or newer; CI covers `0.59.0`, `0.60.0`, `0.61.1`, `0.62.0`, `0.63.0`, `0.64.2`, and `0.65.0` (which requires Go `1.26`) |
 | Go SDK (example) | `1.25.0` | The version that `ddtest instrument` instruments; consumer repositories may use another version |
 | `ddtest instrument` | pinned | The Go companion pins one ddtest release in [`modules/go/topt_go_ddtest_repository.bzl`](modules/go/topt_go_ddtest_repository.bzl) |
-| Module versions | `2.0.0` | Use release archives when available, or the Git alternative |
+| Module versions | `2.0.0` | Use BCR for core and Go, or a release archive for any companion |
 
 - **Bazel 8.8.2 (repo baseline)** - Matches `.bazelversion` and primary CI lanes
 - **WORKSPACE compatibility lane** - CI intentionally validates `--noenable_bzlmod --enable_workspace` on Bazel `8.8.2` during migration away from WORKSPACE mode in Bazel 9+

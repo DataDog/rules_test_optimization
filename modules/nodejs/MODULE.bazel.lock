@@ -141,7 +141,7 @@
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "GIqAr+5EfQkTO5/vjYtwMMpSGyCYWjAwm2EqAQafjsM=",
-        "usagesDigest": "M0r4eqG7Np/mn7bL3Zh3jZ/euLGwAO3eo2CNjIBz1F4=",
+        "usagesDigest": "T2EQNKS1ZU2crKrr7xDuPE1VZQaF/VyS9lsJTjH1UCw=",
         "recordedInputs": [
           "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+"
         ],

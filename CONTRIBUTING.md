@@ -259,9 +259,10 @@ This product includes software developed at Datadog
     with real Go consumers in Bzlmod and WORKSPACE. A branch dispatch saves the
     bundle as a workflow artifact but never creates a tag or release.
   - A version-tag push prepares a **draft** GitHub release only after every
-    release job passes. It does not publish the draft or submit BCR changes.
-    Review the generated notes/assets, then publish explicitly.
-  - The draft contains `rules_test_optimization-X.Y.Z.tar.gz`, `SHA256SUMS`,
+    release job passes. A tag such as `v2.1.0-rc.1` marks the draft as a GitHub
+    prerelease. Review the notes and assets before publishing. Submit any
+    BCR entries after the release is published.
+  - The draft contains the versioned source archive, `SHA256SUMS`,
     `release.json`, `INSTALL.md`, and `RELEASE_NOTES.md`. Notes come from the
     matching `CHANGELOG.md` section. Installation blocks cover core and all six
     companions, with one archive and checksum.
@@ -280,17 +281,18 @@ This product includes software developed at Datadog
   ```
 
   The expected tag must match `MODULE.bazel` and have a nonempty changelog
-  section. Omit `--tag` for a branch validation preview. Uncommitted edits are
-  not included. Do not relabel an older release archive or regenerate a
-  published asset in place.
+  section. For a release candidate, include the `-rc.N` suffix in the module
+  versions, changelog section, and tag. Omit `--tag` to preview a branch. The
+  bundle contains only committed files. Do not relabel an older archive or
+  replace a published asset.
 
 - Version alignment:
   - Keep root `MODULE.bazel` and all companion `modules/*/MODULE.bazel` versions aligned.
   - Keep each companion dependency on core aligned with the same version.
   - Keep `tools/core/common_utils.bzl` `RULES_VERSION` aligned with root
     `MODULE.bazel` version.
-  - Keep `UPLOADER_VERSION` in semantic-version format (`X.Y.Z`) and update it
-    intentionally when uploader runtime behavior changes.
+  - Set `UPLOADER_VERSION` to `X.Y.Z` or `X.Y.Z-rc.N`. Update it when
+    uploader runtime behavior changes.
   - Run `python3 tools/dev/check_module_versions.py` before every release cut.
     In tag workflows, it also requires `GITHUB_REF` to equal
     `refs/tags/v<root-module-version>`. Branch and pull-request workflows keep

@@ -490,7 +490,7 @@ run_bep_freshness_scenario() {
 
 create_fixture_archive() {
   if [[ -n "${RTO_RELEASE_ARCHIVE:-}" ]]; then
-    if [[ ! -f "$RTO_RELEASE_ARCHIVE" || ! "${RTO_RELEASE_PREFIX:-}" =~ ^rules_test_optimization-[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ ! -f "$RTO_RELEASE_ARCHIVE" || ! "${RTO_RELEASE_PREFIX:-}" =~ ^rules_test_optimization-[0-9]+\.[0-9]+\.[0-9]+(-rc\.[1-9][0-9]*)?$ ]]; then
       echo "error: release archive mode requires an existing RTO_RELEASE_ARCHIVE and versioned RTO_RELEASE_PREFIX" >&2
       exit 1
     fi
