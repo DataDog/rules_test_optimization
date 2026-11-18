@@ -390,6 +390,10 @@ jobs:
           python3 tools/dev/build_release.py --ref "$GITHUB_SHA" --output "$RUNNER_TEMP/release" "${args[@]}"
           (cd "$RUNNER_TEMP/release" && sha256sum --check SHA256SUMS)
 
+      - name: Check the packaged core and companion modules
+        timeout-minutes: 5
+        run: python3 tools/dev/check_consumer_modules.py --release-dir "$RUNNER_TEMP/release"
+
       - name: Test the packaged Go consumer in Bzlmod and WORKSPACE
         timeout-minutes: 35
         shell: bash

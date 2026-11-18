@@ -251,6 +251,23 @@ This product includes software developed at Datadog
 - [ ] Reviewed timeout metadata when adding new slow tests (`--test_verbose_timeout_warnings`).
 - [ ] Included rationale and risk notes in PR description.
 
+## Checks for consumer module dependencies
+
+Run `python3 tools/dev/check_consumer_modules.py` when changing a module or
+a public Bazel entry point. It loads core and all six companions in a clean
+Bzlmod workspace and checks the repositories visible to each module. Pass
+`--release-dir` with a built release bundle to test the packaged archive.
+
+Mark test and example dependencies and repository declarations with
+`dev_dependency = True`. Keep the BUILD packages that export consumer files
+loadable without those dependencies. If a test-only executable needs a
+language rule, define it in a test package and expose the consumer file
+from a package that can load on its own.
+
+Consumer fixtures can use
+`@datadog-rules-test-optimization//tools/tests:integration/mock_dd_server.py`
+with their own Python launcher.
+
 ## Release Runbook (Core + Companion Modules)
 
 - CI release gate:

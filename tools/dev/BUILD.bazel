@@ -4,8 +4,6 @@
 # This product includes software developed at Datadog
 # (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
 
-load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
-
 exports_files(
     [
         "build_release.py",
@@ -22,22 +20,21 @@ exports_files(
     visibility = ["//visibility:public"],
 )
 
-go_library(
-    name = "print_go_onboarding_pins_lib",
-    srcs = ["print_go_onboarding_pins.go"],
-    importpath = "github.com/DataDog/rules_test_optimization/tools/dev/print_go_onboarding_pins",
-    visibility = ["//visibility:private"],
-    deps = ["//modules/go/tools/onboardingpins"],
+exports_files(
+    [
+        "print_go_onboarding_pins.go",
+        "print_go_onboarding_pins_test.go",
+    ],
+    visibility = ["//tools/dev/go:__pkg__"],
 )
 
-go_binary(
+alias(
     name = "print_go_onboarding_pins",
-    embed = [":print_go_onboarding_pins_lib"],
+    actual = "//tools/dev/go:print_go_onboarding_pins",
     visibility = ["//visibility:public"],
 )
 
-go_test(
+test_suite(
     name = "print_go_onboarding_pins_test",
-    srcs = ["print_go_onboarding_pins_test.go"],
-    embed = [":print_go_onboarding_pins_lib"],
+    tests = ["//tools/dev/go:print_go_onboarding_pins_test"],
 )

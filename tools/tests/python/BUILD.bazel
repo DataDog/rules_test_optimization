@@ -7,6 +7,7 @@
 # Run repository Python tooling under one runfiles-complete Bazel test target.
 # Keeping the suite together makes host-side portability checks consistent.
 
+load("@rules_python//python:py_binary.bzl", "py_binary")
 load("@rules_shell//shell:sh_test.bzl", "sh_test")
 
 sh_test(
@@ -107,4 +108,11 @@ test_suite(
         ":bazelw_wrapper_test",
         ":python_tools_test",
     ],
+)
+
+py_binary(
+    name = "mock_dd_server",
+    srcs = ["//tools/tests:integration/mock_dd_server.py"],
+    main = "//tools/tests:integration/mock_dd_server.py",
+    visibility = ["//visibility:public"],
 )

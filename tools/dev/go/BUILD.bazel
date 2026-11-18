@@ -1,0 +1,28 @@
+# Unless explicitly stated otherwise all files in this repository are licensed under
+# the Apache 2.0 License.
+#
+# This product includes software developed at Datadog
+# (https://www.datadoghq.com/) Copyright 2025-Present Datadog, Inc.
+
+load("@io_bazel_rules_go//go:def.bzl", "go_binary", "go_library", "go_test")
+
+go_library(
+    name = "print_go_onboarding_pins_lib",
+    srcs = ["//tools/dev:print_go_onboarding_pins.go"],
+    importpath = "github.com/DataDog/rules_test_optimization/tools/dev/print_go_onboarding_pins",
+    visibility = ["//visibility:private"],
+    deps = ["//modules/go/tools/onboardingpins"],
+)
+
+go_binary(
+    name = "print_go_onboarding_pins",
+    embed = [":print_go_onboarding_pins_lib"],
+    visibility = ["//tools/dev:__pkg__"],
+)
+
+go_test(
+    name = "print_go_onboarding_pins_test",
+    srcs = ["//tools/dev:print_go_onboarding_pins_test.go"],
+    embed = [":print_go_onboarding_pins_lib"],
+    visibility = ["//tools/dev:__pkg__"],
+)
