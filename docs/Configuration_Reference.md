@@ -559,7 +559,9 @@ Rule: `dd_payload_uploader(...)`
 | `gzip_payloads` | bool | `False` | Gzip test payloads before upload |
 | `batch_test_payloads` | bool | `False` | Opt in to bounded test batches with event-local runtime IDs; Python uploader only |
 | `http_keep_alive` | bool | `False` | Reuse at most one HTTP connection per worker; Python uploader only. Runtime override: `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE` |
-| `workers` | int | `8` | Maximum independent payload-file workers in Python mode; `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
+| `workers` | int | `0` | Maximum independent payload-file workers; `0` leaves the count to the backend, one per CPU for ddtest and 8 for the Python workers. `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
+| `uploader_backend` | string | `"ddtest"` | `"ddtest"` sends the selected test and coverage payloads with ddtest's native uploader from `@topt_ddtest`; `"python"` sends every payload with the Python workers. Telemetry always uses the Python workers. Runtime override: `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND` |
+| `ddtest` | label | `@topt_ddtest//:executable` | ddtest's executable for `uploader_backend = "ddtest"`; `dd_payload_uploader` sets it |
 | `use_python_uploader` | bool | `True` | Use the default cross-platform Python uploader; set to `False` only for temporary rollback to the legacy platform runtime |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
 | `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; missing results are reported while other fresh outputs continue to upload |
@@ -972,7 +974,8 @@ The doctor and/or uploader runtimes read these variables at `bazel run` time:
 | `DD_TEST_OPTIMIZATION_GZIP` | Gzip test payloads before upload |
 | `DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS` | Override `batch_test_payloads`; accepts `1`/`0`, `true`/`false`, or `yes`/`no`. Enabled values require the Python uploader |
 | `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE` | Override `http_keep_alive`; accepts `1`/`0`, `true`/`false`, or `yes`/`no`. Enabled values require the Python uploader |
-| `DD_TEST_OPTIMIZATION_WORKERS` | Override the maximum independent payload-file workers in Python mode; must be a positive integer |
+| `DD_TEST_OPTIMIZATION_WORKERS` | Override the maximum independent payload-file workers; must be a positive integer |
+| `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND` | Override `uploader_backend`: `ddtest` or `python` |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | Override uploader max wait |
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | Override uploader quiescence wait |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | Limit payload discovery depth in large trees |
@@ -1047,7 +1050,7 @@ for the default temporary-root behavior and private CI artifact collection.
 |------|---------|
 | `--dry-run` | Enrich and validate discovered payloads without uploading or deleting files |
 | `--validate-enrichment` | Require key Git and Bazel tags to exist after enrichment, before either validation-only completion or upload |
-| `--workers=<positive-integer>` | Override the maximum independent payload-file workers in Python mode; takes precedence over `DD_TEST_OPTIMIZATION_WORKERS` and the rule attribute |
+| `--workers=<positive-integer>` | Override the maximum independent payload-file workers; takes precedence over `DD_TEST_OPTIMIZATION_WORKERS` and the rule attribute |
 | `--retained-outputs-dir=<path>` | Default Python uploader: copy unresolved sources for private inspection; CLI overrides the environment, and relative paths use the workspace root |
 | `--expected-enriched-tag=<tag>` | Add a required enriched tag; repeatable. Defaults cover `git.repository_url`, `git.commit.sha`, `bazel.target`, and `bazel.package`. Add `bazel.go.payload_selection` explicitly when a Go rollout must prove per-module selection |
 | `--bep-json=<path>` | BEP JSON file from the matching Bazel test invocation; repeat for multiple invocations |

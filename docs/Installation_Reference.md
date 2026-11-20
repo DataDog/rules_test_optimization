@@ -1016,6 +1016,19 @@ dd_test_optimization_targets(
 )
 ```
 
+The uploader runs the module's ddtest executable. The Python, Java, and Go
+helpers in steps 6 to 8 declare its repository; without them, declare it once
+in `WORKSPACE`, after the core repository:
+
+```bzl
+load("@datadog-rules-test-optimization//tools/core:ddtest_release.bzl", "datadog_test_optimization_ddtest_repositories")
+
+datadog_test_optimization_ddtest_repositories()
+```
+
+An uploader with `uploader_kwargs = {"uploader_backend": "python"}` sends every
+payload with the Python workers and needs no ddtest repository.
+
 After tests and doctor pass, you can validate the exact enriched outbound test
 payload without uploading or deleting files. If you invoke this manually instead
 of using the CI wrapper, reuse the BEP file created by the matching

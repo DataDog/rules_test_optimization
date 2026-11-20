@@ -19,7 +19,7 @@ import sys
 import time
 from typing import Callable, TextIO
 
-from topt_runtime.runfiles import RunfilesResolver
+from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 from topt_runtime.bep_execution import exclusively_cached_labels
 
 from .config import ConfigError, UploaderConfig, validate_upload_credentials
@@ -241,7 +241,7 @@ def _run_uploader_with_lock(
             logger.debug("credential validation skipped: no upload tasks")
         report = run_discovered_tasks(
             eligible_discovery,
-            settings=CoordinatorSettings.from_config(config),
+            settings=CoordinatorSettings.from_config(config, _ddtest_executable(config, resolver)),
             endpoints=endpoints,
             resources=resources,
             logger=logger,
@@ -704,6 +704,17 @@ def _load_resources(
     return resources
 
 
+def _ddtest_executable(config: UploaderConfig, resolver: RunfilesResolver) -> Path | None:
+    """The ddtest executable in the uploader's runfiles, for the ddtest backend."""
+    candidates = tuple(path for path in (config.rule.ddtest_path, config.rule.ddtest_short_path) if path)
+    if config.uploader_backend != "ddtest" or not candidates:
+        return None
+    try:
+        return resolver.resolve_file(candidates)
+    except RunfileResolutionError:
+        return None
+
+
 def _empty_discovery() -> DiscoveryResult:
     return DiscoveryResult(
         outputs=(),
@@ -744,6 +755,7 @@ def _legacy_context(
     final_reason = report_reason or _ReportReason()
     return LegacyReportContext(
         validate_enrichment=config.validate_enrichment,
+        uploader_backend=config.uploader_backend,
         artifact_source=config.artifact_source,
         remote_artifacts=config.remote_artifacts,
         freshness_source=config.freshness_source,

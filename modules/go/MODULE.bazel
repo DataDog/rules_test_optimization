@@ -17,6 +17,11 @@ bazel_dep(name = "platforms", version = "1.0.0")
 bazel_dep(name = "rules_go", version = "0.59.0", repo_name = "io_bazel_rules_go")
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 
+# The core module's repository of the host's ddtest executable, which writes
+# Mini and the instrumented SDKs; the uploader runs the same download.
+ddtest = use_extension("@datadog-rules-test-optimization//tools/core:ddtest_extension.bzl", "ddtest")
+use_repo(ddtest, "topt_ddtest")
+
 # The ddtest-instrumented Go SDKs and Mini. The root module configures the SDK
 # with topt_go_ddtest.sdk(...); these toolchains only match tests that the
 # instrumentation transition selects, so other builds fetch nothing.

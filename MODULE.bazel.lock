@@ -205,6 +205,19 @@
   },
   "selectedYankedVersions": {},
   "moduleExtensions": {
+    "//tools/core:ddtest_extension.bzl%ddtest": {
+      "general": {
+        "bzlTransitiveDigest": "kDolvskqjjDfmsrTIz2dowM+TUEQ03tfQvgV+YD2oP8=",
+        "usagesDigest": "+1vdkvQxDmgCZT/veiR0Pz4XtHeaZxNXksXo9WLGGPA=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "topt_ddtest": {
+            "repoRuleId": "@@//tools/core:ddtest_release.bzl%ddtest_host_repository",
+            "attributes": {}
+          }
+        }
+      }
+    },
     "//tools/dev:dotnet_bootstrap.bzl%dotnet_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "UPeW5Tc9bGVY170mvXNHX3/Hod9plUSKN+ZWFasuDF8=",

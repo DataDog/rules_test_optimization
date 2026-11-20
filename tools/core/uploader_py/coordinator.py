@@ -22,13 +22,20 @@ import uuid
 from .codeowners import CodeOwnersMatcher, load_codeowners_matcher
 from .config import UploaderConfig
 from .credentials import check_api_key_fingerprint
+from .ddtest_backend import (
+    NativeUploadRun,
+    NativeUploadSettings,
+    NativeUploadUnavailable,
+    is_native_task,
+    run_native_upload,
+)
 from .discovery import DiscoveryResult
 from .endpoints import EndpointSet
 from .file_worker import WorkerRuntime, process_file
 from .metrics import PhaseRecorder
 from .batch_worker import prepare_test_work_items
 from .batching import BatchCompatibilityError, schema_for_event_runtime_ids
-from .models import FileStatus
+from .models import FileResult, FileStatus, FileTask
 from .reporting import AggregateReport
 from .resources import LoadedResources
 from .telemetry import TelemetryPlan, build_telemetry_plan
@@ -62,9 +69,13 @@ class CoordinatorSettings:
     launcher_directory: Path | None = None
     batch_test_payloads: bool = False
     http_keep_alive: bool = False
+    uploader_backend: str = "python"
+    workers_explicit: bool = True
+    # The resolved ddtest executable for uploader_backend = "ddtest".
+    ddtest_executable: Path | None = None
 
     @classmethod
-    def from_config(cls, config: UploaderConfig) -> "CoordinatorSettings":
+    def from_config(cls, config: UploaderConfig, ddtest_executable: Path | None = None) -> "CoordinatorSettings":
         return cls(
             workspace=config.workspace,
             workers=config.workers,
@@ -83,6 +94,9 @@ class CoordinatorSettings:
             launcher_directory=config.launcher_directory,
             batch_test_payloads=config.batch_test_payloads,
             http_keep_alive=config.http_keep_alive,
+            uploader_backend=config.uploader_backend,
+            workers_explicit=config.workers_explicit,
+            ddtest_executable=ddtest_executable,
         )
 
 
@@ -196,17 +210,38 @@ def run_discovered_tasks(
     temporary_cleanup_errors: list[str] = []
     interrupted = False
     cancelled = 0
+    runtime_id = identifier_factory()
+    native = NativeUploadRun(results=(), cancelled=0, interrupted=False)
+    native_warnings: tuple[str, ...] = ()
+    worker_tasks = discovery.tasks
     with invocation_temporary_directory(
         on_cleanup_error=temporary_cleanup_errors.append,
     ) as temporary_root:
         if logger is not None:
             logger.debug("invocation temporary root created: %s", temporary_root)
+        if settings.uploader_backend == "ddtest":
+            native_tasks = tuple(task for task in discovery.tasks if is_native_task(task))
+            try:
+                if native_tasks:
+                    with measurements.phase("native_upload") if measurements is not None else nullcontext():
+                        native = _run_native_upload(
+                            native_tasks, settings, endpoints, resources, worker_inputs,
+                            runtime_id, temporary_root, logger,
+                        )
+                worker_tasks = tuple(task for task in discovery.tasks if not is_native_task(task))
+            except NativeUploadUnavailable as exc:
+                native_warnings = ("ddtest_backend_unavailable",)
+                if logger is not None:
+                    logger.warning("warning_code=ddtest_backend_unavailable using the Python workers: %s", exc)
+            if native.interrupted:
+                cancelled += len(worker_tasks)
+                worker_tasks = ()
         runtime = WorkerRuntime(
             endpoints=endpoints,
             invocation_temp_root=temporary_root,
             context_plan=resources.context_plan,
             codeowners_matcher=worker_inputs.codeowners,
-            runtime_id=identifier_factory(),
+            runtime_id=runtime_id,
             rules_version=settings.rules_version,
             uploader_version=settings.uploader_version,
             api_key=settings.api_key,
@@ -232,7 +267,7 @@ def run_discovered_tasks(
         )
         try:
             worker_run: WorkerPoolRun = run_file_workers(
-                discovery.tasks,
+                worker_tasks,
                 workers=settings.workers,
                 runtime=runtime,
                 transport_factory=create_transport,
@@ -244,9 +279,12 @@ def run_discovered_tasks(
         except WorkerPoolInterrupted as exc:
             worker_run = exc.run
             interrupted = True
-            cancelled = exc.cancelled
+            cancelled += exc.cancelled
+    interrupted = interrupted or native.interrupted
+    cancelled += native.cancelled
+    results = native.results + worker_run.results
 
-    additional_warnings: tuple[str, ...] = ()
+    additional_warnings: tuple[str, ...] = native_warnings
     if settings.batch_test_payloads and batch_schema is None:
         additional_warnings += ("batching_schema_unavailable",)
     if temporary_cleanup_errors:
@@ -263,7 +301,7 @@ def run_discovered_tasks(
         if logger is not None:
             logger.error(
                 "interrupted after completed=%d cancelled=%d",
-                len(worker_run.results),
+                len(results),
                 cancelled,
             )
     initialization_warnings = tuple(
@@ -271,12 +309,12 @@ def run_discovered_tasks(
     )
 
     if logger is not None:
-        _log_worker_results(worker_run, logger)
+        _log_results(results, logger)
 
     exit_code = (
         130
         if interrupted
-        else int(any(result.status is FileStatus.FAILED for result in worker_run.results))
+        else int(any(result.status is FileStatus.FAILED for result in results))
     )
     report = AggregateReport.create(
         dry_run=settings.dry_run,
@@ -286,10 +324,11 @@ def run_discovered_tasks(
         peak_active_workers=worker_run.peak_active_workers,
         elapsed_seconds=max(0.0, clock() - started),
         discovered_by_type=discovery.counts(),
-        results=worker_run.results,
+        results=results,
         cancelled=cancelled,
         initialization_warning_codes=initialization_warnings,
         requests=worker_run.requests,
+        native_workers=native.workers,
     )
     if logger is not None:
         stats = report.statistics()
@@ -305,9 +344,46 @@ def run_discovered_tasks(
     return report
 
 
-def _log_worker_results(worker_run: WorkerPoolRun, logger: logging.Logger) -> None:
+def _run_native_upload(
+    tasks: tuple[FileTask, ...],
+    settings: CoordinatorSettings,
+    endpoints: EndpointSet,
+    resources: LoadedResources,
+    worker_inputs: _WorkerInputs,
+    runtime_id: str,
+    work_directory: Path,
+    logger: logging.Logger | None,
+) -> NativeUploadRun:
+    """Send the test and coverage tasks with ddtest's native uploader."""
+    if settings.ddtest_executable is None:
+        raise NativeUploadUnavailable("the uploader's runfiles do not contain the ddtest executable")
+    return run_native_upload(
+        tasks,
+        settings=NativeUploadSettings(
+            executable=settings.ddtest_executable,
+            rules_version=settings.rules_version,
+            api_key=settings.api_key,
+            dry_run=settings.dry_run,
+            keep_payloads=settings.keep_payloads,
+            gzip_payloads=settings.gzip_payloads,
+            batch_test_payloads=settings.batch_test_payloads,
+            filter_prefix=settings.filter_prefix,
+            validate_enrichment=settings.validate_enrichment,
+            expected_enriched_tags=settings.expected_enriched_tags,
+            workers=settings.workers if settings.workers_explicit else None,
+            codeowners_file=worker_inputs.codeowners.source_path,
+        ),
+        endpoints=endpoints,
+        context_plan=resources.context_plan,
+        runtime_id=runtime_id,
+        work_directory=work_directory,
+        logger=logger,
+    )
+
+
+def _log_results(results: tuple[FileResult, ...], logger: logging.Logger) -> None:
     """Emit task diagnostics after workers stop, keeping logging centralized."""
-    for result in worker_run.results:
+    for result in results:
         logger.debug(
             "task=%s type=%s terminal_status=%s attempts=%d retries=%d",
             result.task_id,

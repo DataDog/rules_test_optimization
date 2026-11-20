@@ -6,7 +6,8 @@
 
 """Repositories that instrument Go tests with `ddtest instrument bazel`.
 
-One ddtest release provides everything. The repository host's executable
+One ddtest release provides everything. The repository host's executable,
+which the core module downloads once in @topt_ddtest for the uploader too,
 writes Mini's repository and, for each exec platform, a copy of a base Go SDK
 whose compiler is that platform's executable. Toolchains gated on
 `@io_bazel_rules_go//go/toolchain:sdk_name == "ddto"` select those SDKs; only
@@ -20,26 +21,21 @@ Any other value selects a toolchain that fails and says what to configure.
 """
 
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load(
+    "@datadog-rules-test-optimization//tools/core:ddtest_release.bzl",
+    "datadog_test_optimization_ddtest_repositories",
+    _DDTEST_RELEASE = "DDTEST_RELEASE",
+    _ddtest_asset = "ddtest_asset",
+    _download_ddtest = "download_ddtest",
+    _host_platform = "host_platform",
+)
 load("@io_bazel_rules_go//go:deps.bzl", "go_download_sdk", "go_wrap_sdk")
 
-# The pinned ddtest release. The tag names the release; what ddtest writes
-# records the runtime's SemVer version, with v0.0.0- before a pre-release's
-# name.
-DDTEST_RELEASE = struct(
-    tag = "pre-release-faa3999",
-    runtime_version = "v0.0.0-pre-release-faa3999",
-    contract = "1",
-    sdk_name = "ddto",
-    url = "https://github.com/DataDog/ddtest/releases/download/{tag}/{asset}",
-    sha256 = {
-        "darwin_amd64": "cf3b7d783d0c39f660e31054bfe123b4b26d1276f785f01093083739a7a92ca8",
-        "darwin_arm64": "4055923b4aa32817a014573d747419ca5f0b2f543bf9f15f28ddf32e126f689c",
-        "linux_amd64": "9a37b161d32d62e6b2e40d23512f85af44c8cfbffe2cfb24717af2906a9d1a15",
-        "linux_arm64": "f46c473b7d54e1ab16161ee15c0a392a99f0e2630cd165bfffa8a885a4b659c0",
-        "windows_amd64": "635f7e1498ea789a418201df0e0cedd438b9076706da52c5e6b56499bedb3a58",
-        "windows_arm64": "c1bbe9aa967bf02bd24dc67a8f1f001bc616cb956bf5008777974b5f85a419e6",
-    },
-)
+# The pinned ddtest release and its executables belong to the core module,
+# whose repository of the host's executable the uploader shares.
+DDTEST_RELEASE = _DDTEST_RELEASE
+ddtest_asset = _ddtest_asset
+host_platform = _host_platform
 
 # ddtest's release platforms, which are both the exec platforms that get an
 # instrumented SDK and the target platforms its toolchains build for, with
@@ -62,7 +58,10 @@ _REPOSITORY_FILES = ["BUILD", "BUILD.bazel", "MODULE.bazel", "REPO.bazel", "ROOT
 # workspace using Mini's Go API passes to override_repo.
 MINI_REPO = _PREFIX + "_mini"
 TOOLCHAINS_REPO = _PREFIX + "_toolchains"
-_HOST_REPO = _PREFIX + "_host"
+
+# The core module's repository of the host's executable; its PLATFORM file
+# names the host's platform.
+_HOST = "@topt_ddtest//:PLATFORM"
 
 def _repo(kind, sdk_id, platform):
     return "%s_%s_%s%s" % (_PREFIX, kind, sdk_id + "_" if sdk_id else "", platform)
@@ -130,27 +129,6 @@ def sdk_variants_error(go_version, sdk_variants):
             return "topt_go_ddtest: SDK variants %r and %r need distinct repository names" % (ids[variant_id], sdk_version)
         ids[variant_id] = sdk_version
     return None
-
-def ddtest_asset(platform):
-    """Release asset name of ddtest's executable for a platform."""
-    goos, goarch = platform.split("_")
-    return "ddtest-%s-%s%s" % (goos, goarch, ".exe" if goos == "windows" else "")
-
-def host_platform(os_name, os_arch):
-    """Map repository_ctx.os values to a ddtest platform, or None."""
-    os_name = os_name.lower()
-    if os_name.startswith("mac os"):
-        goos = "darwin"
-    elif os_name.startswith("linux"):
-        goos = "linux"
-    elif os_name.startswith("windows"):
-        goos = "windows"
-    else:
-        return None
-    goarch = {"amd64": "amd64", "x86_64": "amd64", "aarch64": "arm64", "arm64": "arm64"}.get(os_arch)
-    if not goarch:
-        return None
-    return goos + "_" + goarch
 
 def go_version_from_go_mod(content):
     """The Go SDK version that rules_go's go_sdk.from_file selects.
@@ -336,15 +314,6 @@ def toolchains_build_content(sdks):
     ])
     return "\n".join(lines) + "\n"
 
-def _download_ddtest(rctx, platform, output):
-    rctx.download(
-        url = DDTEST_RELEASE.url.format(tag = DDTEST_RELEASE.tag, asset = ddtest_asset(platform)),
-        output = output,
-        sha256 = DDTEST_RELEASE.sha256[platform],
-        executable = True,
-    )
-    return rctx.path(output)
-
 def _instrument_bazel(rctx, ddtest, args):
     command = [ddtest, "instrument", "bazel"] + args
     result = rctx.execute(command)
@@ -355,19 +324,6 @@ def _check_contract(rctx, path, what):
     error = contract_error(parse_contract(rctx.read(path)), what)
     if error:
         fail(error)
-
-def _host_impl(rctx):
-    platform = host_platform(rctx.os.name, rctx.os.arch)
-    if not platform:
-        fail("ddtest instrument has no executable for this host: %s/%s" % (rctx.os.name, rctx.os.arch))
-    _download_ddtest(rctx, platform, "ddtest" + (".exe" if platform.startswith("windows") else ""))
-    rctx.file("PLATFORM", platform)
-    rctx.file("BUILD.bazel", "exports_files([\"PLATFORM\"])\n")
-
-_host = repository_rule(
-    implementation = _host_impl,
-    doc = "The repository host's ddtest executable, from the pinned release.",
-)
 
 def _host_ddtest(rctx):
     """The host's executable and platform, from the host repository's PLATFORM file."""
@@ -449,10 +405,8 @@ _toolchains = repository_rule(
 )
 
 def _host_and_mini():
-    _host(name = _HOST_REPO)
-    host = "@%s//:PLATFORM" % _HOST_REPO
-    _mini(name = MINI_REPO, host = host)
-    return host
+    _mini(name = MINI_REPO, host = _HOST)
+    return _HOST
 
 def topt_go_ddtest_unconfigured_repositories():
     """Declare Mini's repository, and toolchains that say what to configure."""
@@ -560,5 +514,6 @@ def topt_go_ddtest_workspace_repositories(**kwargs):
         base_sdk_roots is required, and sdk_variants adds SDKs that other
         sdk_version values select.
     """
+    datadog_test_optimization_ddtest_repositories()
     topt_go_ddtest_repositories(**kwargs)
     native.register_toolchains("@%s//:all" % TOOLCHAINS_REPO)

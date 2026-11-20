@@ -36,6 +36,7 @@ VALID_FRESHNESS_MODES = frozenset({"auto", "required", "optional", "disabled"})
 VALID_FRESHNESS_SOURCES = frozenset({"auto", "bep", "execution_log"})
 VALID_ARTIFACT_SOURCES = frozenset({"auto", "bep", "local"})
 VALID_REMOTE_ARTIFACT_MODES = frozenset({"disabled", "download", "required"})
+VALID_UPLOADER_BACKENDS = frozenset({"ddtest", "python"})
 PROXY_ENVIRONMENT_NAMES = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -80,6 +81,10 @@ class RuleConfig:
     runtime_selection: bool = False
     batch_test_payloads: bool = False
     http_keep_alive: bool = False
+    # The rule writes "ddtest"; a configuration without the key predates it.
+    uploader_backend: str = "python"
+    ddtest_path: str = ""
+    ddtest_short_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -132,6 +137,10 @@ class UploaderConfig:
     retention_status_file: Path | None = None
     batch_test_payloads: bool = False
     http_keep_alive: bool = False
+    uploader_backend: str = "python"
+    # Whether the workers come from the command line, the environment or the
+    # rule, rather than the Python default that workers holds otherwise.
+    workers_explicit: bool = True
 
     @property
     def agentless(self) -> bool:
@@ -213,11 +222,21 @@ def parse_uploader_config(
         "DD_TEST_OPTIMIZATION_MAX_DEPTH",
         env.get("DD_TEST_OPTIMIZATION_MAX_DEPTH") or 0,
     )
-    workers = _positive_integer(
-        "--workers/DD_TEST_OPTIMIZATION_WORKERS",
+    requested_workers = (
         args.workers
         if args.workers is not None
-        else env.get("DD_TEST_OPTIMIZATION_WORKERS") or rule.workers,
+        else env.get("DD_TEST_OPTIMIZATION_WORKERS") or rule.workers or None
+    )
+    workers_explicit = requested_workers is not None
+    workers = (
+        _positive_integer("--workers/DD_TEST_OPTIMIZATION_WORKERS", requested_workers)
+        if workers_explicit
+        else DEFAULT_WORKERS
+    )
+    uploader_backend = _choice(
+        "DD_TEST_OPTIMIZATION_UPLOADER_BACKEND",
+        env.get("DD_TEST_OPTIMIZATION_UPLOADER_BACKEND", "").strip().lower() or rule.uploader_backend,
+        VALID_UPLOADER_BACKENDS,
     )
 
     debug = (
@@ -385,6 +404,8 @@ def parse_uploader_config(
         retained_outputs_dir=retained_outputs_dir,
         batch_test_payloads=batch_test_payloads,
         http_keep_alive=http_keep_alive,
+        uploader_backend=uploader_backend,
+        workers_explicit=workers_explicit,
         wrapper_temp_root=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT"]
             if env.get("DD_TEST_OPTIMIZATION_INTERNAL_WRAPPER_TEMP_ROOT") else None),
         retention_status_file=(working_directory / env["DD_TEST_OPTIMIZATION_INTERNAL_RETENTION_STATUS_FILE"]
@@ -419,7 +440,8 @@ def load_rule_config(path: Path) -> RuleConfig:
         )
     # Launchers emit this key for schema compatibility; Python does not use it.
     _json_string(raw, "workspace_name", "")
-    workers = _json_integer(raw, "workers", DEFAULT_WORKERS, minimum=1)
+    # 0 leaves the worker count to the backend.
+    workers = _json_integer(raw, "workers", DEFAULT_WORKERS, minimum=0)
     return RuleConfig(
         quiescent_sec=_json_integer(raw, "quiescent_sec", 10, minimum=0),
         max_wait_sec=_json_integer(raw, "max_wait_sec", 300, minimum=0),
@@ -453,6 +475,13 @@ def load_rule_config(path: Path) -> RuleConfig:
         runtime_selection=_json_boolean(raw, "runtime_selection", False),
         batch_test_payloads=_json_boolean(raw, "batch_test_payloads", False),
         http_keep_alive=_json_boolean(raw, "http_keep_alive", False),
+        uploader_backend=_choice(
+            "uploader_backend",
+            _json_string(raw, "uploader_backend", "python"),
+            VALID_UPLOADER_BACKENDS,
+        ),
+        ddtest_path=_json_string(raw, "ddtest_path", ""),
+        ddtest_short_path=_json_string(raw, "ddtest_short_path", ""),
     )
 
 
