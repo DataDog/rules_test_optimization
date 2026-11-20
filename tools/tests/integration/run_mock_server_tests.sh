@@ -293,7 +293,7 @@ jq '
 
 cat > CODEOWNERS <<'CODEOWNERS_EOF'
 * @org/default
-/tracer/test/test-applications/integrations/Samples.XUnitTests/[Tt]estSuite.cs @DataDog/ci-app-libraries-dotnet
+/tracer/test/test-applications/integrations/Samples.XUnitTests/TestSuite.cs @DataDog/ci-app-libraries-dotnet
 CODEOWNERS_EOF
 CODEOWNERS_FOR_UPLOADER="$WORKSPACE/CODEOWNERS"
 CODEOWNERS_FOR_UPLOADER="$(to_mixed_path "$CODEOWNERS_FOR_UPLOADER")"

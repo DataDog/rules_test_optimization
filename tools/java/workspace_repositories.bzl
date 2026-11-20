@@ -17,6 +17,7 @@ load(
     "//tools/core:common_utils.bzl",
     "fail_with_prefix",
 )
+load("//tools/core:ddtest_release.bzl", "datadog_test_optimization_ddtest_repositories")
 
 _OWNER = "datadog_java_test_optimization_workspace_repositories"
 _JAVA_COMPANION_REPO = "datadog-rules-test-optimization-java"
@@ -231,6 +232,9 @@ def datadog_java_test_optimization_workspace_repositories(
     )
     for spec in specs:
         _materialize_repository_spec(spec)
+
+    # The core uploader runs the module's ddtest executable.
+    datadog_test_optimization_ddtest_repositories()
 
 # Public alias for Starlark unit tests.
 build_java_workspace_repository_specs_for_tests = _build_java_workspace_repository_specs

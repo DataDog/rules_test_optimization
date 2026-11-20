@@ -28,6 +28,7 @@ class LegacyReportContext:
     """Pre-worker values needed to preserve every schema-v1 report section."""
 
     validate_enrichment: bool = False
+    uploader_backend: str = "python"
     artifact_source: str = "local"
     remote_artifacts: str = "disabled"
     freshness_source: str = "auto"
@@ -73,6 +74,8 @@ class AggregateReport:
     execution_environment: tuple[tuple[str, object], ...] = field(default=(), compare=False)
     retention: tuple[tuple[str, object], ...] = ()
     requests: tuple[RequestOutcome, ...] = ()
+    # Workers that ddtest's native uploader ran, or 0 without it.
+    native_workers: int = 0
 
     @classmethod
     def create(
@@ -89,6 +92,7 @@ class AggregateReport:
         cancelled: int = 0,
         initialization_warning_codes: Iterable[str] = (),
         requests: Iterable[RequestOutcome] = (),
+        native_workers: int = 0,
     ) -> "AggregateReport":
         if configured_workers <= 0:
             raise ValueError("configured_workers must be positive")
@@ -97,6 +101,7 @@ class AggregateReport:
             "worker_threads": worker_threads,
             "peak_active_workers": peak_active_workers,
             "cancelled": cancelled,
+            "native_workers": native_workers,
         }
         if any(value < 0 for value in integer_values.values()):
             raise ValueError("aggregate integer counters must be non-negative")
@@ -136,6 +141,7 @@ class AggregateReport:
             cancelled=cancelled,
             initialization_warning_codes=tuple(initialization_warning_codes),
             requests=logical_requests,
+            native_workers=native_workers,
         )
 
     @property
@@ -227,6 +233,7 @@ class AggregateReport:
                 "workers": self.configured_workers,
                 "worker_threads": self.worker_threads,
                 "peak_active_workers": self.peak_active_workers,
+                "native_workers": self.native_workers,
             },
             "splitting": {
                 "threshold_bytes": MAX_TEST_PAYLOAD_BYTES,
@@ -272,11 +279,13 @@ class AggregateReport:
             counts = payload_types[name]
             return f"{counts['succeeded']}/{counts['failed']}/{counts['skipped']}"
 
+        # workers and peak describe the Python workers; ddtest reports its own count.
+        native = f"native_workers={self.native_workers} " if self.native_workers else ""
         lines = (
             (
                 f"[dd-uploader] summary: mode={self.mode} result={self.result_name} "
                 f"exit_code={self.exit_code} workers={self.configured_workers} "
-                f"peak={concurrency['peak_active_workers']} "
+                f"peak={concurrency['peak_active_workers']} {native}"
                 f"elapsed={self.elapsed_seconds:.2f}s"
             ),
             (
@@ -357,6 +366,7 @@ class AggregateReport:
             "config": {
                 "dry_run": self.dry_run,
                 "validate_enrichment": context.validate_enrichment,
+                "uploader_backend": context.uploader_backend,
                 "artifact_source": context.artifact_source,
                 "remote_artifacts": context.remote_artifacts,
                 "freshness_source": context.freshness_source,

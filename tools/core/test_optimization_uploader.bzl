@@ -671,8 +671,8 @@ def _uploader_impl(ctx):
     filter_prefix_enabled = ctx.attr.filter_prefix
     gzip_payloads = ctx.attr.gzip_payloads
     workers = ctx.attr.workers
-    if workers <= 0:
-        fail_with_prefix("test_optimization_uploader", "workers must be a positive integer")
+    if workers < 0:
+        fail_with_prefix("test_optimization_uploader", "workers must be 0, for the backend's default, or a positive integer")
     if ctx.attr.batch_test_payloads and not ctx.attr.use_python_uploader:
         fail_with_prefix("test_optimization_uploader", "batch_test_payloads requires use_python_uploader = True")
     if ctx.attr.http_keep_alive and not ctx.attr.use_python_uploader:
@@ -741,6 +741,9 @@ def _uploader_impl(ctx):
             "batch_test_payloads": ctx.attr.batch_test_payloads,
             "http_keep_alive": ctx.attr.http_keep_alive,
             "workers": workers,
+            "uploader_backend": ctx.attr.uploader_backend,
+            "ddtest_path": ctx.file._ddtest.path,
+            "ddtest_short_path": ctx.file._ddtest.short_path,
             "rules_version": RULES_VERSION,
             "uploader_version": UPLOADER_VERSION,
             "workspace_name": ctx.workspace_name,
@@ -896,6 +899,8 @@ def _uploader_impl(ctx):
         extra_files.append(ctx.file._schema)
     if ctx.file._schema_validator:
         extra_files.append(ctx.file._schema_validator)
+    if ctx.attr.use_python_uploader:
+        extra_files.append(ctx.file._ddtest)
     runfiles = ctx.runfiles(
         files = [
                     ps_file,
@@ -949,7 +954,8 @@ _dd_payload_uploader_rule = rule(
         "gzip_payloads": attr.bool(default = False, doc = "Gzip test payloads before upload (env: DD_TEST_OPTIMIZATION_GZIP)"),
         "batch_test_payloads": attr.bool(default = False, doc = "Opt in to bounded whole-source test batches with event-local runtime IDs; requires the Python uploader (env: DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS)."),
         "http_keep_alive": attr.bool(default = False, doc = "Opt in to one persistent HTTP connection per worker; requires the Python uploader (env: DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE)."),
-        "workers": attr.int(default = 8, doc = "Maximum number of independent payload-file workers (env: DD_TEST_OPTIMIZATION_WORKERS, CLI: --workers)"),
+        "workers": attr.int(default = 0, doc = "Maximum number of independent payload-file workers; 0 uses the backend's default: one per CPU for ddtest, 8 for the Python workers (env: DD_TEST_OPTIMIZATION_WORKERS, CLI: --workers)"),
+        "uploader_backend": attr.string(default = "ddtest", values = ["ddtest", "python"], doc = "What prepares and sends the test and coverage payloads that the uploader selects: ddtest's native uploader, or the Python workers. Telemetry always uses the Python workers (env: DD_TEST_OPTIMIZATION_UPLOADER_BACKEND)."),
         "use_python_uploader": attr.bool(default = True, doc = "Use the default cross-platform Python uploader; set False only for temporary rollback to the legacy platform runtime."),
         # Optional files to place in runfiles (e.g., a generated context.json)
         "data": attr.label_list(allow_files = True, doc = "Data files to include in runfiles (e.g., context.json for enrichment)"),
@@ -957,6 +963,7 @@ _dd_payload_uploader_rule = rule(
         "expected_targets_file": attr.label(allow_single_file = True, doc = "Optional generated schema-v1 JSON file containing invocation-scoped expected targets."),
         "runtime_selection": attr.bool(default = False, doc = "Require expected targets and keyed context files to be supplied at runtime."),
         # Schema + validator bundled for best-effort payload validation
+        "_ddtest": attr.label(default = "@topt_ddtest//:executable", allow_single_file = True),
         "_schema": attr.label(default = "//tools/core:schemas/agentless-schema.json", allow_single_file = True),
         "_schema_validator": attr.label(default = "//tools/core:validate_payload_schema.py", allow_single_file = True),
         "_bep_artifact_stage_helper": attr.label(default = "//tools/core:bep_artifact_stage_helper.py", allow_single_file = True),

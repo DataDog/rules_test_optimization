@@ -40,6 +40,7 @@ sh_test(
         "test_uploader_batching_tools.py",
         "test_uploader_codeowners_tools.py",
         "test_uploader_coordinator_tools.py",
+        "test_uploader_ddtest_backend_tools.py",
         "test_uploader_discovery_tools.py",
         "test_uploader_enrichment_tools.py",
         "test_uploader_expected_targets_tools.py",
@@ -84,7 +85,10 @@ sh_test(
         "//tools/tests:integration/run_mock_server_tests.sh",
         "//tools/tests:integration/run_workspace_go_integration.sh",
         "//tools/tests/python/fixtures/generated_uploader",
+        "@topt_ddtest//:executable",
     ],
+    # The ddtest backend's tests run the pinned executable.
+    env = {"DDTEST_EXECUTABLE": "$(rlocationpath @topt_ddtest//:executable)"},
 )
 
 sh_test(

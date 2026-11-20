@@ -1352,8 +1352,11 @@ Optional tooling:
   configuration error before sending payloads. Install `jq` or use the default
   Python uploader; Python and PowerShell uploaders do not require `jq`.
 
-See the [parallel Python uploader](docs/Uploader_Reference.md#parallel-python-uploader-default)
-for its shared cross-platform behavior. Set `use_python_uploader = False` only
+By default, the uploader selects payloads in Python and sends test and coverage
+payloads with [ddtest's native uploader](docs/Uploader_Reference.md#native-ddtest-upload-default),
+from the ddtest release that the module downloads once for uploads and Go
+instrumentation. See the [parallel Python workers](docs/Uploader_Reference.md#parallel-python-workers)
+for their shared cross-platform behavior. Set `use_python_uploader = False` only
 for temporary rollback to the legacy Bash or PowerShell implementation.
 The Python uploader also supports [opt-in persistent HTTP connections](docs/Uploader_Reference.md#opt-in-persistent-http-connections).
 Set `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE=1` to compare it with the default

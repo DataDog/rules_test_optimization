@@ -15,6 +15,26 @@ versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The uploader sends the selected test and coverage payloads with ddtest's
+  native uploader, `ddtest instrument bazel upload`, which prepares and sends
+  them in parallel. Discovery, freshness, artifact staging and telemetry stay
+  in Python. Set `uploader_backend = "python"`, or
+  `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND=python`, to keep the Python workers.
+- The core module downloads ddtest `pre-release-adf721e` once for both the
+  uploader and Go instrumentation, which pinned `pre-release-faa3999` before.
+- The uploader's `workers` defaults to `0`: one worker per CPU for ddtest, and
+  8 for the Python workers as before.
+
+### Upgrade notes
+
+- WORKSPACE consumers that declare the module without the Go, Python, or Java
+  helpers call `datadog_test_optimization_ddtest_repositories()` from
+  `//tools/core:ddtest_release.bzl` once; Bzlmod needs no change.
+- ddtest matches CODEOWNERS as GitHub does: in a GitHub file, rules with `!`
+  negation or `[ ]` character classes assign no owners.
+
 ### Fixed
 
 - Consumers can load the mock Datadog server and release helpers from the core
