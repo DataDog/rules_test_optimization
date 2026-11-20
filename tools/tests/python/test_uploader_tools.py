@@ -133,7 +133,6 @@ RULE_ATTRIBUTES = {
     "gzip_payloads",
     "workers",
     "uploader_backend",
-    "ddtest",
     "use_python_uploader",
     "data",
     "expected_targets",
@@ -1214,6 +1213,8 @@ class UploaderContractCharacterizationTests(unittest.TestCase):
         self.assertIn('"workers": attr.int(default = 0,', text)
         self.assertIn('"uploader_backend": attr.string(default = "ddtest", values = ["ddtest", "python"],', text)
         self.assertIn('"use_python_uploader": attr.bool(default = True,', text)
+        self.assertNotIn('"ddtest": attr.', text)
+        self.assertIn('"_ddtest": attr.label(default = "@topt_ddtest//:executable",', text)
 
     def test_python_parser_contains_legacy_and_new_options(self) -> None:
         from uploader_py import config as config_module

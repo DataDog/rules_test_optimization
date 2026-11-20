@@ -560,8 +560,7 @@ Rule: `dd_payload_uploader(...)`
 | `batch_test_payloads` | bool | `False` | Opt in to bounded test batches with event-local runtime IDs; Python uploader only |
 | `http_keep_alive` | bool | `False` | Reuse at most one HTTP connection per worker; Python uploader only. Runtime override: `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE` |
 | `workers` | int | `0` | Maximum independent payload-file workers; `0` leaves the count to the backend, one per CPU for ddtest and 8 for the Python workers. `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
-| `uploader_backend` | string | `"ddtest"` | `"ddtest"` sends the selected test and coverage payloads with ddtest's native uploader from `@topt_ddtest`; `"python"` sends every payload with the Python workers. Telemetry always uses the Python workers. Runtime override: `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND` |
-| `ddtest` | label | `@topt_ddtest//:executable` | ddtest's executable for `uploader_backend = "ddtest"`; `dd_payload_uploader` sets it |
+| `uploader_backend` | string | `"ddtest"` | `"ddtest"` sends the selected test and coverage payloads with ddtest's native uploader; `"python"` sends every payload with the Python workers. Telemetry always uses the Python workers. Runtime override: `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND` |
 | `use_python_uploader` | bool | `True` | Use the default cross-platform Python uploader; set to `False` only for temporary rollback to the legacy platform runtime |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
 | `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; missing results are reported while other fresh outputs continue to upload |

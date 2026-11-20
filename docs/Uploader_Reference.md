@@ -205,11 +205,11 @@ batches and sends them in parallel, and deletes or retains each source as the
 Python workers do. Telemetry payloads still go through the Python workers.
 
 The executable is the one that the Go companion runs to instrument Go tests:
-the core module downloads the pinned ddtest release once, for the host, in
-`@topt_ddtest`. Bzlmod needs no setup. In WORKSPACE, the Go, Python, and Java
-helpers declare the repository; a workspace that declares the module without
-them calls `datadog_test_optimization_ddtest_repositories()` from
-`@datadog-rules-test-optimization//tools/core:ddtest_release.bzl` once.
+the core module downloads the pinned ddtest release once, for the host, and the
+uploader runs it as an internal tool. Bzlmod needs no setup. In WORKSPACE, the
+Go, Python, and Java helpers declare its repository; a workspace that declares
+the module without them calls `datadog_test_optimization_ddtest_repositories()`
+from `@datadog-rules-test-optimization//tools/core:ddtest_release.bzl` once.
 
 The `workers` attribute defaults to `0`, which leaves the count to the backend:
 ddtest prepares sources on every CPU and keeps at least 32 requests in flight,
@@ -221,9 +221,9 @@ reuses its connections unless `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE` is false.
 
 Set `uploader_backend = "python"` on the uploader, or
 `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND=python` at runtime, to send every
-payload with the Python workers. When the executable is missing from the
-uploader's runfiles, or the payloads share no root directory, as Windows paths
-on different drives do, the uploader uses the Python workers and reports the
+payload with the Python workers. When the uploader cannot find the executable
+in its runfiles, or the payloads share no root directory, as Windows paths on
+different drives do, the uploader uses the Python workers and reports the
 `ddtest_backend_unavailable` warning. A ddtest run that ends without its report
 fails its sources with `ddtest_upload_failed` and keeps them for the next run.
 The JSON report keeps its format; ddtest counts a batch's shared request on the
