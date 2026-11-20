@@ -621,7 +621,9 @@ common no-upload cases such as `bep_output_remote_only_without_downloader`,
 `no_payload_json_found`, `payload_enrichment_failed`, and
 `upload_skipped_dry_run`. `config.uploader_backend` records the configured
 backend, and `concurrency.native_workers` the workers that ddtest's native
-uploader ran, or `0` when the Python workers sent every payload.
+uploader ran, or `0` when the Python workers sent every payload. The log's
+`summary:` line shows that count as `native_workers=` when ddtest ran; its
+`workers=` and `peak=` describe the Python workers.
 
 The CI wrapper writes exactly one uploader report when `--report-dir` is used:
 `uploader-dry-run-report.json` without upload, or `uploader-upload-report.json`

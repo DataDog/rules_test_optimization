@@ -279,11 +279,13 @@ class AggregateReport:
             counts = payload_types[name]
             return f"{counts['succeeded']}/{counts['failed']}/{counts['skipped']}"
 
+        # workers and peak describe the Python workers; ddtest reports its own count.
+        native = f"native_workers={self.native_workers} " if self.native_workers else ""
         lines = (
             (
                 f"[dd-uploader] summary: mode={self.mode} result={self.result_name} "
                 f"exit_code={self.exit_code} workers={self.configured_workers} "
-                f"peak={concurrency['peak_active_workers']} "
+                f"peak={concurrency['peak_active_workers']} {native}"
                 f"elapsed={self.elapsed_seconds:.2f}s"
             ),
             (

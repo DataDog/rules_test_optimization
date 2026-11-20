@@ -212,7 +212,9 @@ class DdtestBackendTests(unittest.TestCase):
 
             self.assertEqual(0, report.exit_code, report.results)
             self.assertNotIn("ddtest_backend_unavailable", report.initialization_warning_codes)
-            self.assertGreaterEqual(report.statistics()["concurrency"]["native_workers"], 1)
+            native_workers = report.statistics()["concurrency"]["native_workers"]
+            self.assertGreaterEqual(native_workers, 1)
+            self.assertIn(f" native_workers={native_workers} ", report.human_lines()[0])
             by_type = {result.payload_type: result for result in report.results}
             self.assertEqual({PayloadType.TEST, PayloadType.COVERAGE, PayloadType.TELEMETRY}, set(by_type))
             for result in report.results:
