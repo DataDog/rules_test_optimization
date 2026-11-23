@@ -141,7 +141,7 @@
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "GIqAr+5EfQkTO5/vjYtwMMpSGyCYWjAwm2EqAQafjsM=",
-        "usagesDigest": "ktGxGbpoFh22P06dVG0KfNNjg0V1N0tbTppWFFGLqQ8=",
+        "usagesDigest": "LqTF6awJ9OJOEELT4F9EfQtkOMbO9DmDScjVxPITeu0=",
         "recordedInputs": [
           "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+"
         ],
@@ -163,6 +163,19 @@
                 "nodejs_service"
               ]
             }
+          }
+        }
+      }
+    },
+    "@@datadog-rules-test-optimization+//tools/core:ddtest_extension.bzl%ddtest": {
+      "general": {
+        "bzlTransitiveDigest": "A3JHNAvpv26vvDI8sqWXDAnTaSjb+LIa5hZwVps4br4=",
+        "usagesDigest": "I542AZszmyWVyKzvNRCHm80i7Tc4Vip2cWAPYKk242I=",
+        "recordedInputs": [],
+        "generatedRepoSpecs": {
+          "topt_ddtest": {
+            "repoRuleId": "@@datadog-rules-test-optimization+//tools/core:ddtest_release.bzl%ddtest_host_repository",
+            "attributes": {}
           }
         }
       }
