@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import subprocess
 import time
 from typing import Callable, Iterable
 
@@ -167,35 +168,45 @@ def discover_file_tasks(
     discovered_sources: list[tuple[Path, str, PayloadType, DiscoveredOutput]] = []
     seen_sources: set[str] = set()
     for output in outputs:
+        resolved_output: Path | None = None
         for payload_type, relative_directory in _PAYLOAD_SUBDIRECTORIES:
             payload_directory = output.path / relative_directory
             if not payload_directory.is_dir():
                 if payload_directory.is_symlink():
                     warnings.append("payload_symlink_skipped")
                 continue
-            if not _safe_payload_directory(payload_directory, output.path):
+            try:
+                if resolved_output is None:
+                    resolved_output = output.path.resolve()
+            except OSError:
+                warnings.append("payload_symlink_skipped")
+                continue
+            resolved_directory = _safe_payload_directory(payload_directory, output.path, resolved_output)
+            if resolved_directory is None:
                 warnings.append("payload_symlink_skipped")
                 continue
             try:
-                sources = sorted(
-                    payload_directory.iterdir(),
-                    key=lambda item: item.name,
-                )
+                with os.scandir(payload_directory) as entries:
+                    sources = sorted(entries, key=lambda item: item.name)
             except OSError:
                 warnings.append("payload_directory_unreadable")
                 continue
-            for source_path in sources:
-                if source_path.is_symlink():
-                    if source_path.suffix.lower() in _PAYLOAD_SUFFIXES:
+            for entry in sources:
+                suffix = Path(entry.name).suffix.lower()
+                if _entry_is(entry.is_symlink):
+                    if suffix in _PAYLOAD_SUFFIXES:
                         warnings.append("payload_symlink_skipped")
                     continue
-                if not source_path.is_file() or source_path.suffix.lower() not in _PAYLOAD_SUFFIXES:
+                if suffix not in _PAYLOAD_SUFFIXES or not _entry_is(entry.is_file):
                     continue
-                source_key = str(source_path.resolve(strict=False))
+                # The source is not a symlink, so it resolves in its
+                # directory's resolved path.
+                relative_source = f"{relative_directory.as_posix()}/{entry.name}"
+                source_key = str(resolved_directory / entry.name)
                 if source_key in seen_sources:
                     continue
                 seen_sources.add(source_key)
-                relative_source = source_path.relative_to(output.path).as_posix()
+                source_path = payload_directory / entry.name
                 display_path = f"{output.output_key}/{relative_source}"
                 discovered_sources.append(
                     (source_path, display_path, payload_type, output)
@@ -223,6 +234,60 @@ def discover_file_tasks(
         discovered_by_type=count_tasks_by_payload_type(tasks),
         warning_codes=tuple(dict.fromkeys(warnings)),
     )
+
+
+class NativeDiscoveryUnavailable(RuntimeError):
+    """ddtest could not discover the payloads; Python discovery applies."""
+
+
+def discover_file_tasks_with_ddtest(
+    ddtest: Path,
+    scan_roots: Iterable[ScanRoot],
+    *,
+    max_depth: int = 0,
+    staged_output_keys: Iterable[str] = (),
+) -> DiscoveryResult:
+    """discover_file_tasks, with ddtest walking and listing in parallel.
+
+    ddtest instrument bazel discover applies the same rules, so the result is
+    the one that discover_file_tasks returns; the roots are normalized here, as
+    there, and a ddtest failure raises NativeDiscoveryUnavailable.
+    """
+    if max_depth < 0:
+        raise DiscoveryError("max_depth must be non-negative")
+    normalized_roots = _normalize_scan_roots(scan_roots)
+    request = json.dumps({
+        "schema_version": 1,
+        "scan_roots": [{"path": str(root.path), "staged": root.staged} for root in normalized_roots],
+        "max_depth": max_depth,
+        "staged_output_keys": [key for key in staged_output_keys if key],
+    })
+    try:
+        completed = subprocess.run([str(ddtest), "instrument", "bazel", "discover"], input=request,
+                                   capture_output=True, text=True, encoding="utf-8", check=False)
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        report = json.loads(completed.stdout)
+        if report.get("schema_version") != 1:
+            raise ValueError("unexpected discovery report")
+        outputs = tuple(DiscoveredOutput(path=Path(entry["path"]), output_key=entry["output_key"],
+                                         scan_root=Path(entry["scan_root"]), staged=bool(entry["staged"]))
+                        for entry in report["outputs"])
+        tasks = tuple(
+            FileTask(
+                task_id=f"file-{index:06d}",
+                source_path=outputs[source["output"]].path / "payloads" / source["directory"] / source["name"],
+                display_path=f"{outputs[source['output']].output_key}/payloads/{source['directory']}/{source['name']}",
+                payload_type=PayloadType(source["payload_type"]),
+                test_outputs_dir=outputs[source["output"]].path,
+                output_key=outputs[source["output"]].output_key,
+            )
+            for index, source in enumerate(report["sources"], start=1))
+        warnings = tuple(str(code) for code in report["warnings"])
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        raise NativeDiscoveryUnavailable(str(exc)) from exc
+    return DiscoveryResult(outputs=outputs, tasks=tasks, discovered_by_type=count_tasks_by_payload_type(tasks),
+                           warning_codes=warnings)
 
 
 def payload_latest_mtime(discovery: DiscoveryResult) -> float:
@@ -302,15 +367,29 @@ def _find_test_outputs(root: Path, *, max_depth: int) -> tuple[Path, ...]:
     return find_test_output_directories(root, max_depth=max_depth)
 
 
-def _safe_payload_directory(path: Path, output: Path) -> bool:
-    """Accept only real payload directories contained by their test output."""
+def _entry_is(check: Callable[[], bool]) -> bool:
+    """A DirEntry type check that is false on errors, as Path's checks are."""
+    try:
+        return check()
+    except OSError:
+        return False
+
+
+def _safe_payload_directory(path: Path, output: Path, resolved_output: Path) -> Path | None:
+    """Return the resolved payload directory if it is real and inside its output.
+
+    Rejecting symlinks is not enough: a Windows junction is not a symlink to
+    is_symlink() and can lead outside the output, so the resolved directory
+    must also lie below the output's resolved path.
+    """
     current = output
     for part in path.relative_to(output).parts:
         current /= part
         if current.is_symlink():
-            return False
+            return None
     try:
-        path.resolve().relative_to(output.resolve())
+        resolved = path.resolve()
+        resolved.relative_to(resolved_output)
     except (OSError, ValueError):
-        return False
-    return True
+        return None
+    return resolved

@@ -195,10 +195,73 @@ and runtime identity must agree. Missing, duplicate, mismatched, or incomplete
 runtime selections fail before payload discovery, cleanup, enrichment, or
 network access.
 
-### Parallel Python uploader (default)
+### Native ddtest upload (default)
 
-The cross-platform Python uploader is the default. Use `uploader_kwargs` only
-when choosing a non-default number of independent payload-file workers:
+The uploader selects payloads as before: it waits for outputs, applies
+freshness, stages remote artifacts, and loads contexts and CODEOWNERS. It then
+hands the selected test and coverage payloads to `ddtest instrument bazel
+upload`, ddtest's native uploader, in one plan. ddtest reads each target's
+metadata sidecar, selects its context, and enriches, validates,
+batches and sends them in parallel, and deletes or retains each source as the
+Python workers do. Telemetry payloads still go through the Python workers.
+
+The executable is the one that the Go companion runs to instrument Go tests:
+the core module downloads the pinned ddtest release once, for the host, and the
+uploader runs it as an internal tool. Bzlmod needs no setup. In WORKSPACE, the
+Go, Python, and Java helpers declare its repository; a workspace that declares
+the module without them calls `datadog_test_optimization_ddtest_repositories()`
+from `@datadog-rules-test-optimization//tools/core:ddtest_release.bzl` once.
+
+The doctor uses the same executable to list each test output's payloads and
+sidecars and to decode them, one output per CPU, with `ddtest instrument bazel
+inspect`. It keeps its checks, messages, and report, and reads a file itself
+when ddtest cannot decode it, so a broken payload fails with the same error.
+If ddtest is missing or fails, the doctor warns and validates the outputs
+without it. With expected targets, the doctor also finds every target's outputs
+with one `ddtest instrument bazel discover` call, and under strict BEP freshness
+inspects only the outputs of fresh targets.
+
+Both the doctor and the uploader evaluate BEP freshness with `ddtest instrument
+bazel freshness`, which parses the BEP files in parallel and computes the same
+fresh and cached outputs, executions and completeness errors as the Python
+parser. When a file holds input that the Python parser reads in its own way,
+such as an invalid JSON line, ddtest leaves the files to it, so warnings and
+failures stay the same. If ddtest fails, the doctor warns with `ddtest could not
+evaluate the BEP` and parses the files in Python.
+
+With the ddtest backend, the uploader also finds the payloads with `ddtest
+instrument bazel discover`, which walks and lists the testlogs in parallel and
+applies the same rules as the Python discovery. One difference applies on
+Windows: a junction below a test output is refused even when it points inside
+the output. If ddtest fails, the uploader reports the
+`ddtest_discovery_unavailable` warning and discovers the payloads in Python.
+
+The `workers` attribute defaults to `0`, which leaves the count to the backend:
+ddtest prepares sources on every CPU and keeps at least 32 requests in flight,
+and the Python workers use 8. A positive `workers`,
+`DD_TEST_OPTIMIZATION_WORKERS`, or `--workers` sets the count for both. ddtest
+reuses its connections unless `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE` is false.
+`gzip_payloads`, `keep_payloads`, `batch_test_payloads`, `filter_prefix`,
+`--dry-run`, and `--validate-enrichment` apply as with the Python workers.
+
+Set `uploader_backend = "python"` on the uploader, or
+`DD_TEST_OPTIMIZATION_UPLOADER_BACKEND=python` at runtime, to send every
+payload with the Python workers. When the uploader cannot find the executable
+in its runfiles, or the payloads share no root directory, as Windows paths on
+different drives do, the uploader uses the Python workers and reports the
+`ddtest_backend_unavailable` warning. A ddtest run that ends without its report
+fails its sources with `ddtest_upload_failed` and keeps them for the next run.
+The JSON report keeps its format. With batching, each of ddtest's test
+requests counts on every source that it carried and appears once in
+`batching.request_sources`, with a `ddtest:` prefix, as the Python workers'
+batches do. ddtest matches CODEOWNERS as GitHub and GitLab do: in
+a GitHub file, it ignores rules with `!` negation or `[ ]` character classes,
+which GitHub does not apply, while the Python workers apply character classes.
+
+### Parallel Python workers
+
+Use `uploader_kwargs` only when choosing a non-default number of independent
+payload-file workers:
 
 ```bzl
 dd_test_optimization_targets(
@@ -219,9 +282,9 @@ worker can process test, coverage, or telemetry payloads; chunks and other
 derived requests belonging to one source remain sequential. Test and telemetry
 JSON reject non-standard numbers (`NaN` and positive/negative `Infinity`) before
 HTTP; coverage bodies remain opaque JSON/msgpack multipart parts. The
-rule-level `workers` value defaults to `8`; `DD_TEST_OPTIMIZATION_WORKERS`
-overrides it at runtime and `--workers=<positive-integer>` has highest
-precedence. Leave
+rule-level `workers` value defaults to `0`, which gives the Python workers
+8; `DD_TEST_OPTIMIZATION_WORKERS` overrides it at runtime and
+`--workers=<positive-integer>` has highest precedence. Leave
 `use_python_uploader` unset for the Python implementation. Set it to `False`
 only for temporary rollback to the legacy Bash or PowerShell implementation.
 
@@ -426,7 +489,8 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_LOG_LEVEL` | `INFO` | Choose `ERROR`, `WARN`, `INFO`, or `DEBUG`. Individual cached-output paths require `DEBUG`; `INFO` reports their count. JSON reports and exit codes are unaffected. See [log levels](Configuration_Reference.md#log-levels). |
 | `DD_TEST_OPTIMIZATION_DEBUG` | `0` | Legacy verbose switch, used when `DD_TEST_OPTIMIZATION_LOG_LEVEL` is unset. Terminal test-upload failures always report the HTTP status, a bounded response body, and payload sizes. |
 | `DD_TEST_OPTIMIZATION_GZIP` | `0` | Set to `1` to gzip test payloads before upload (adds `Content-Encoding: gzip`) |
-| `DD_TEST_OPTIMIZATION_WORKERS` | rule `workers` (`8`) | Override the maximum independent payload-file workers in Python mode; `--workers` has higher precedence |
+| `DD_TEST_OPTIMIZATION_WORKERS` | rule `workers` (`0`: one per CPU for ddtest, 8 for the Python workers) | Override the maximum independent payload-file workers; `--workers` has higher precedence |
+| `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND` | rule `uploader_backend` (`ddtest`) | `ddtest` sends test and coverage payloads with ddtest's native uploader; `python` sends every payload with the Python workers |
 | `DD_TEST_OPTIMIZATION_MAX_WAIT_SEC` | `300` | Override max wait time for slow filesystems (NFS, network drives); set to `0` to skip waiting when no payloads are present |
 | `DD_TEST_OPTIMIZATION_QUIESCENT_SEC` | `10` | Override quiescence wait time |
 | `DD_TEST_OPTIMIZATION_MAX_DEPTH` | `0` (unlimited) | Limit `find` depth for large `bazel-testlogs` trees |
@@ -581,7 +645,11 @@ processed, failed, and skipped counts, aggregate upload failures, upload
 attempt status, final status, and exit code. The `result.reason_code` explains
 common no-upload cases such as `bep_output_remote_only_without_downloader`,
 `no_payload_json_found`, `payload_enrichment_failed`, and
-`upload_skipped_dry_run`.
+`upload_skipped_dry_run`. `config.uploader_backend` records the configured
+backend, and `concurrency.native_workers` the workers that ddtest's native
+uploader ran, or `0` when the Python workers sent every payload. The log's
+`summary:` line shows that count as `native_workers=` when ddtest ran; its
+`workers=` and `peak=` describe the Python workers.
 
 The CI wrapper writes exactly one uploader report when `--report-dir` is used:
 `uploader-dry-run-report.json` without upload, or `uploader-upload-report.json`

@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fnmatch
 import http.client
 import importlib.util
 import hashlib
@@ -24,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -133,12 +135,19 @@ class BepFreshness:
         ambiguous_outputs: set[str] | None = None,
         ambiguous_labels: set[str] | None = None,
         completeness_errors: list[tuple[str, str]] | None = None,
+        artifact_reference_count: int | None = None,
+        artifact_reference_labels: set[str] | None = None,
     ) -> None:
         self.eligible_outputs = eligible_outputs
         self.cached_outputs = cached_outputs
         self.remote_only_outputs = remote_only_outputs
         self.missing_output_mappings = missing_output_mappings
         self.artifact_references = artifact_references or []
+        # ddtest counts the references without listing them when nothing stages them.
+        self.artifact_reference_count = (len(self.artifact_references) if artifact_reference_count is None
+                                         else artifact_reference_count)
+        self.artifact_reference_labels = ({ref.label for ref in self.artifact_references}
+                                          if artifact_reference_labels is None else artifact_reference_labels)
         self.skipped_targets = skipped_targets or set()
         self.executions = executions or []
         self.ambiguous_outputs = ambiguous_execution_outputs(self.executions).union(
@@ -705,6 +714,46 @@ def _expected_target_outputs(testlogs_dir: Path | None, label: str, *, allow_mis
             return []
         _fail(_missing_expected_target_message(label, target_root, "test.outputs directory"))
     return output_dirs
+
+
+def _expected_targets_outputs(
+    testlogs_dir: Path | None, labels: list[str], *, allow_missing: bool = False,
+) -> list[tuple[str, list[Path]]]:
+    """Each expected target's outputs, as _expected_target_outputs finds them.
+
+    With ddtest, one discovery walks every target root in parallel; if it
+    fails, the doctor warns and walks them itself.
+    """
+    if testlogs_dir is None or _run_cache is None or _run_cache.inspector is None:
+        return [(label, _expected_target_outputs(testlogs_dir, label, allow_missing=allow_missing)) for label in labels]
+    roots = [_expected_target_root(testlogs_dir, label) for label in labels]
+    request = json.dumps({"schema_version": 1, "scan_roots": [], "max_depth": 0, "staged_output_keys": [],
+                          "target_roots": [str(root) for root in roots]})
+    try:
+        completed = subprocess.run(
+            [str(_run_cache.inspector), "instrument", "bazel", "discover"],
+            input=request, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        report = json.loads(completed.stdout)
+        targets = report["targets"]
+        if report.get("schema_version") != 1 or len(targets) != len(roots) or any(
+                target["root"] != str(root) for target, root in zip(targets, roots)):
+            raise ValueError("unexpected discovery report")
+        found = [(bool(target["exists"]), [Path(path) for path in target["outputs"]]) for target in targets]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _warn(f"ddtest could not find the expected targets' outputs ({exc}); finding them without it")
+        return [(label, _expected_target_outputs(testlogs_dir, label, allow_missing=allow_missing)) for label in labels]
+    results = []
+    for label, root, (exists, outputs) in zip(labels, roots, found):
+        if not exists or not outputs:
+            if not allow_missing:
+                _fail(_missing_expected_target_message(
+                    label, root, "test.outputs directory" if exists else "output root"))
+            outputs = []
+        results.append((label, outputs))
+    return results
 
 
 def _missing_expected_target_message(label: str, target_root: Path, missing_part: str) -> str:
@@ -1603,23 +1652,23 @@ def _merge_staged_output_dirs(
     merged_target_by_output_dir = dict(target_by_output_dir)
     for output_dir in output_dirs:
         if _local_test_output_key(output_dir, testlogs_dir=testlogs_dir) in selected_keys:
-            merged_target_by_output_dir.pop(output_dir.resolve(), None)
+            merged_target_by_output_dir.pop(_resolved(output_dir), None)
             continue
         if _output_dir_target_label(output_dir, merged_target_by_output_dir) in blocked_bep_artifact_labels:
-            merged_target_by_output_dir.pop(output_dir.resolve(), None)
+            merged_target_by_output_dir.pop(_resolved(output_dir), None)
             continue
         merged_output_dirs.append(output_dir)
     for item in staged:
         merged_output_dirs.append(item.output_dir)
-        merged_target_by_output_dir[item.output_dir.resolve()] = item.label
+        merged_target_by_output_dir[_resolved(item.output_dir)] = item.label
     return merged_output_dirs, merged_target_by_output_dir
 
 
 def _output_dir_target_label(output_dir: Path, target_by_output_dir: dict[Path, str]) -> str | None:
     """Return the Bazel target label associated with a test.outputs directory."""
-    fallback = target_by_output_dir.get(output_dir.resolve())
+    fallback = target_by_output_dir.get(_resolved(output_dir))
     for metadata_file in _metadata_files(output_dir):
-        metadata = _load_json(metadata_file)
+        metadata = _load_metadata(metadata_file)
         if isinstance(metadata, dict):
             return _metadata_target_label(metadata, fallback)
     return fallback
@@ -1677,13 +1726,118 @@ def _bep_execution_identity(invocation: str, result_id: dict[str, Any]) -> tuple
     return (invocation, result_id["label"], configuration_id, *indexes)
 
 
+class _Carrier:
+    """The fields of a BEP artifact reference that _bep_carrier_identity reads."""
+
+    def __init__(self, fetch_value: str, remote_only: bool) -> None:
+        self.fetch_value = fetch_value
+        self.remote_only = remote_only
+
+
+def _bep_freshness_with_ddtest(
+    bep_files: list[Path], *, workspace: Path, ddtest: Path, references: bool,
+) -> BepFreshness | None:
+    """Evaluate BEP freshness with ddtest, or return None to evaluate it here.
+
+    ddtest parses the events in parallel and computes what the loop of
+    _parse_bep_freshness computes. For a missing file, or input that the
+    Python reads in its own way, it leaves the files to the Python loop, so
+    that its warnings and failures stay the same.
+    """
+    files: list[Path] = []
+    for bep_file in bep_files:
+        canonical_file = bep_file.resolve()
+        if canonical_file in files:
+            continue
+        if not bep_file.is_file():
+            return None
+        files.append(canonical_file)
+    request = json.dumps({"schema_version": 1, "files": [str(path) for path in files], "references": references})
+    try:
+        completed = subprocess.run(
+            [str(ddtest), "instrument", "bazel", "freshness"],
+            input=request, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        report = json.loads(completed.stdout)
+        if report.get("schema_version") != 1:
+            raise ValueError("unexpected freshness report")
+        if report["status"] != "ok":
+            return None
+        if len(report["documents"]) != len(files):
+            raise ValueError("unexpected freshness report")
+        invocations = [
+            None if document["skip"] else ("uuid:" + document["uuid"] if document["uuid"] else "file:" + str(path))
+            for path, document in zip(files, report["documents"])
+        ]
+        executions = [
+            BepTestExecution(
+                (invocations[document], label, configuration, run, shard, attempt),
+                cached=cached,
+                status=status,
+                output_keys=frozenset(keys),
+                carriers=tuple(sorted((key, _bep_carrier_identity(_Carrier(fetch, remote), workspace))
+                                      for key, fetch, remote in carriers)),
+            )
+            for document, label, configuration, run, shard, attempt, cached, status, keys, carriers in report["executions"]
+        ]
+        labels = report["labels"]
+        artifact_references = []
+        for label_index, kind, first, second, third, fourth, output_key, flags in report["references"]:
+            if kind == 0:
+                candidates = [value for value in (first, second, third, fourth) if value]
+                fetch_value = first or third or fourth or (candidates[0] if candidates else "")
+                uri, name, path = first, second, third
+            else:
+                candidates = [first] if kind == 1 else []
+                fetch_value = first
+                uri = name = path = ""
+            artifact_references.append(BepArtifactReference(
+                label=labels[label_index], uri=uri, name=name, path=path, candidates=candidates,
+                fetch_value=fetch_value, output_key=output_key, cached=bool(flags & 1), remote_only=bool(flags & 2),
+                is_test_outputs_hint=bool(flags & 4), fetch_is_stageable_carrier=bool(flags & 8),
+            ))
+        freshness = BepFreshness(
+            eligible_outputs={tuple(pair) for pair in report["eligible_outputs"]},
+            cached_outputs={tuple(pair) for pair in report["cached_outputs"]},
+            remote_only_outputs=[BepRemoteOnlyOutput(label, key, artifact, "remote_only")
+                                 for label, key, artifact in report["remote_only_outputs"]],
+            missing_output_mappings=set(report["missing_output_mappings"]),
+            artifact_references=artifact_references,
+            skipped_targets=set(report["skipped_targets"]),
+            executions=executions,
+            ambiguous_outputs=set(report["ambiguous_outputs"]),
+            ambiguous_labels=set(report["ambiguous_labels"]),
+            completeness_errors=[tuple(error) for error in report["completeness_errors"]],
+            artifact_reference_count=None if references else int(report["reference_count"]),
+            artifact_reference_labels=None if references else set(report["reference_labels"]),
+        )
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+        _warn(f"ddtest could not evaluate the BEP ({exc}); evaluating it without ddtest")
+        return None
+    return freshness
+
+
 def _parse_bep_freshness(
     bep_files: list[Path],
     *,
     unavailable_is_error: bool = True,
     workspace: Path | None = None,
+    ddtest: Path | None = None,
+    references: bool = True,
 ) -> BepFreshness | None:
-    """Parse BEP JSON files and return concrete fresh/cached output mappings."""
+    """Parse BEP JSON files and return concrete fresh/cached output mappings.
+
+    With ddtest, the files are parsed in parallel; references=False then
+    counts the artifact references without listing them, for callers that
+    do not stage artifacts.
+    """
+    if ddtest is not None:
+        freshness = _bep_freshness_with_ddtest(bep_files, workspace=workspace or Path.cwd(), ddtest=ddtest,
+                                               references=references)
+        if freshness is not None:
+            return freshness
     eligible_outputs: set[tuple[str, str]] = set()
     cached_outputs: set[tuple[str, str]] = set()
     remote_only_outputs: list[BepRemoteOnlyOutput] = []
@@ -1916,9 +2070,19 @@ def _parse_bep_freshness(
 
 def _local_test_output_key(output_dir: Path, *, testlogs_dir: Path | None = None) -> str:
     """Return a stable bazel-testlogs-relative key for a local test.outputs directory."""
+    if _run_cache is None:
+        return _compute_local_test_output_key(output_dir, testlogs_dir)
+    cache_key = (output_dir, testlogs_dir)
+    key = _run_cache.output_keys.get(cache_key)
+    if key is None:
+        key = _run_cache.output_keys[cache_key] = _compute_local_test_output_key(output_dir, testlogs_dir)
+    return key
+
+
+def _compute_local_test_output_key(output_dir: Path, testlogs_dir: Path | None) -> str:
     if testlogs_dir is not None:
         try:
-            relative = output_dir.resolve().relative_to(testlogs_dir.resolve())
+            relative = _resolved(output_dir).relative_to(_resolved(testlogs_dir))
         except ValueError:
             pass
         else:
@@ -1973,13 +2137,16 @@ def _validate_expected_target_bep_freshness(
     bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
     cached_only_labels = exclusively_cached_labels(freshness.executions) if freshness.executions else bep_cached_labels.difference(bep_fresh_labels)
     output_index = _BepOutputIndex(freshness.eligible_outputs)
+    candidates = []
+    for output_dir in output_dirs:
+        explicit_output_key = output_key_by_output_dir.get(_resolved(output_dir))
+        candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
+        if candidate_labels:
+            candidates.append((output_dir, candidate_labels))
+    _inspect_outputs([output_dir for output_dir, _labels in candidates])
     fresh_output_dirs = []
     fresh_labels = set()
-    for output_dir in output_dirs:
-        explicit_output_key = output_key_by_output_dir.get(output_dir.resolve())
-        candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
-        if not candidate_labels:
-            continue
+    for output_dir, candidate_labels in candidates:
         if not _payload_files(output_dir) and not _msgpack_payload_files(output_dir):
             continue
         metadata_files = _metadata_files(output_dir)
@@ -1989,13 +2156,13 @@ def _validate_expected_target_bep_freshness(
                 f"BEP required freshness cannot authorize {output_dir} because "
                 "bazel_target_metadata.json is missing."
             )
-        metadata = _load_json(metadata_files[0]) if metadata_files else {}
+        metadata = _load_metadata(metadata_files[0]) if metadata_files else {}
         if isinstance(metadata, dict):
             label = _metadata_target_label(metadata, None) or ""
-        label = label_by_output_dir.get(output_dir.resolve(), label)
+        label = label_by_output_dir.get(_resolved(output_dir), label)
         if not label and not require_bazel_metadata and len(candidate_labels) == 1:
             label = next(iter(candidate_labels))
-            label_by_output_dir[output_dir.resolve()] = label
+            label_by_output_dir[_resolved(output_dir)] = label
         if not label:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
@@ -2044,12 +2211,12 @@ def _validate_discovered_bep_freshness(
 
     local_labels: set[str] = set()
     for output_dir in output_dirs:
-        explicit_label = label_by_output_dir.get(output_dir.resolve())
+        explicit_label = label_by_output_dir.get(_resolved(output_dir))
         if explicit_label:
             local_labels.add(explicit_label)
             continue
         for metadata_file in _metadata_files(output_dir):
-            metadata = _load_json(metadata_file)
+            metadata = _load_metadata(metadata_file)
             if isinstance(metadata, dict):
                 label = _metadata_target_label(metadata, None)
                 if label:
@@ -2058,14 +2225,14 @@ def _validate_discovered_bep_freshness(
     output_index = _BepOutputIndex(freshness.eligible_outputs)
     fresh_output_dirs = []
     for output_dir in output_dirs:
-        explicit_output_key = output_key_by_output_dir.get(output_dir.resolve())
+        explicit_output_key = output_key_by_output_dir.get(_resolved(output_dir))
         candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
         if not candidate_labels:
             continue
         metadata_files = _metadata_files(output_dir)
         if not _payload_files(output_dir) and not _msgpack_payload_files(output_dir):
             for metadata_file in metadata_files:
-                metadata = _load_json(metadata_file)
+                metadata = _load_metadata(metadata_file)
                 label = _metadata_target_label(metadata, None) if isinstance(metadata, dict) else None
                 if label in candidate_labels:
                     freshness.identified_labels.add(label)
@@ -2075,12 +2242,12 @@ def _validate_discovered_bep_freshness(
                 f"BEP required freshness cannot authorize {output_dir} because "
                 "bazel_target_metadata.json is missing."
             )
-        metadata = _load_json(metadata_files[0]) if metadata_files else {}
+        metadata = _load_metadata(metadata_files[0]) if metadata_files else {}
         label = _metadata_target_label(metadata, None) if isinstance(metadata, dict) else None
-        label = label_by_output_dir.get(output_dir.resolve(), label)
+        label = label_by_output_dir.get(_resolved(output_dir), label)
         if not label and not require_bazel_metadata and len(candidate_labels) == 1:
             label = next(iter(candidate_labels))
-            label_by_output_dir[output_dir.resolve()] = label
+            label_by_output_dir[_resolved(output_dir)] = label
         if not label:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
@@ -2146,26 +2313,212 @@ def _discover_candidate_output_dirs(testlogs_dir: Path) -> list[Path]:
     ]
 
 
-def _payload_files(output_dir: Path) -> list[Path]:
+class _OutputFiles:
+    """The payload and Bazel metadata files of one test.outputs directory."""
+
+    def __init__(self, json_payloads: list[Path], msgpack_payloads: list[Path], metadata: list[Path]) -> None:
+        self.json_payloads = tuple(json_payloads)
+        self.msgpack_payloads = tuple(msgpack_payloads)
+        self.metadata = tuple(metadata)
+
+
+class _RunCache:
+    """Filesystem answers that stay fixed while one doctor run validates outputs.
+
+    The doctor reads test outputs and never changes them, and staging writes
+    new directories, so each output is listed, each path resolved and each
+    sidecar parsed once. Cleanup still resolves paths when it runs.
+    """
+
+    def __init__(self) -> None:
+        self.output_files: dict[Path, _OutputFiles] = {}
+        self.resolved: dict[Path, Path] = {}
+        self.output_keys: dict[tuple[Path, Path | None], str] = {}
+        # Parsed sidecars; callers only read them.
+        self.metadata: dict[Path, Any] = {}
+        # Test-event counts and empty-session markers of decoded payloads.
+        self.payload_facts: dict[Path, tuple[int, bool]] = {}
+        # ddtest, until an inspection fails; see _inspect_outputs.
+        self.inspector: Path | None = None
+        # Outputs that ddtest inspected, which a Python listing may precede.
+        self.inspected: set[Path] = set()
+
+
+_run_cache: _RunCache | None = None
+
+
+@contextmanager
+def _cached_filesystem() -> Iterator[None]:
+    """Reuse output listings, resolved paths and sidecars for one run."""
+    global _run_cache
+    previous, _run_cache = _run_cache, _RunCache()
+    try:
+        yield
+    finally:
+        _run_cache = previous
+
+
+def _resolved(path: Path) -> Path:
+    """Return path.resolve(), once per path during a run."""
+    if _run_cache is None:
+        return path.resolve()
+    resolved = _run_cache.resolved.get(path)
+    if resolved is None:
+        resolved = _run_cache.resolved[path] = path.resolve()
+    return resolved
+
+
+def _matching_files(root: Path, patterns: tuple[str, ...]) -> list[Path]:
+    """Files below root whose names match a pattern, as Path.rglob finds them.
+
+    Like rglob, it descends into real directories only, keeps symlinks to
+    files, and matches names case-insensitively only on Windows.
+    """
+    matches: list[Path] = []
+    pending = [str(root)]
+    while pending:
+        try:
+            with os.scandir(pending.pop()) as scan:
+                entries = list(scan)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(entry.path)
+                elif any(fnmatch.fnmatch(entry.name, pattern) for pattern in patterns) and entry.is_file():
+                    matches.append(Path(entry.path))
+            except OSError:
+                continue
+    return matches
+
+
+def _output_files(output_dir: Path) -> _OutputFiles:
+    """List an output's payloads and metadata, reusing the listing during a run."""
+    if _run_cache is not None and output_dir in _run_cache.output_files:
+        return _run_cache.output_files[output_dir]
     payload_root = output_dir / "payloads"
-    if not payload_root.exists():
-        return []
-    return sorted(path for path in payload_root.rglob("*.json") if path.is_file())
+    payloads = _matching_files(payload_root, ("*.json", "*.msgpack", "*.msgpack.gz")) if payload_root.exists() else []
+    files = _OutputFiles(
+        json_payloads=sorted(path for path in payloads if fnmatch.fnmatch(path.name, "*.json")),
+        msgpack_payloads=sorted(path for path in payloads if not fnmatch.fnmatch(path.name, "*.json")),
+        metadata=sorted(_matching_files(output_dir, ("bazel_target_metadata.json",))),
+    )
+    if _run_cache is not None:
+        _run_cache.output_files[output_dir] = files
+    return files
+
+
+def _inspect_outputs(output_dirs: list[Path]) -> None:
+    """List and decode outputs that this run has not seen, with ddtest.
+
+    ddtest lists each output as _output_files does and decodes its payloads
+    and sidecars in parallel; files that it cannot decode are left for the
+    doctor to read, so that its errors stay the same. If ddtest fails, the
+    doctor warns once and reads the outputs itself.
+    """
+    if _run_cache is None or _run_cache.inspector is None:
+        return
+    pending = list(dict.fromkeys(path for path in output_dirs if path not in _run_cache.inspected))
+    if not pending:
+        return
+    request = json.dumps({"schema_version": 1, "outputs": [str(path) for path in pending]})
+    try:
+        completed = subprocess.run(
+            [str(_run_cache.inspector), "instrument", "bazel", "inspect"],
+            input=request, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        report = json.loads(completed.stdout)
+        entries = report["outputs"]
+        if report.get("schema_version") != 1 or len(entries) != len(pending):
+            raise ValueError("unexpected inspection report")
+        inspected = [_inspected_output(output_dir, entry) for output_dir, entry in zip(pending, entries)]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _warn(f"ddtest could not inspect the outputs ({exc}); validating them without it")
+        _run_cache.inspector = None
+        return
+    for output_dir, (files, facts, documents) in zip(pending, inspected):
+        _run_cache.output_files[output_dir] = files
+        _run_cache.payload_facts.update(facts)
+        _run_cache.metadata.update(documents)
+        _run_cache.inspected.add(output_dir)
+
+
+def _inspected_output(
+    output_dir: Path, entry: dict[str, Any],
+) -> tuple[_OutputFiles, dict[Path, tuple[int, bool]], dict[Path, Any]]:
+    """Read one output of a ddtest inspection report."""
+    if entry["path"] != str(output_dir):
+        raise ValueError(f"inspection report lists {entry['path']} for {output_dir}")
+    facts: dict[Path, tuple[int, bool]] = {}
+    documents: dict[Path, Any] = {}
+    payloads = []
+    for payload in entry["json_payloads"]:
+        path = output_dir / payload["path"]
+        payloads.append(path)
+        if payload["decoded"]:
+            facts[path] = (int(payload["test_events"]), bool(payload["empty_session"]))
+    metadata = []
+    for sidecar in entry["metadata"]:
+        path = output_dir / sidecar["path"]
+        metadata.append(path)
+        if "document" in sidecar:
+            documents[path] = sidecar["document"]
+    files = _OutputFiles(
+        json_payloads=sorted(payloads),
+        msgpack_payloads=sorted(output_dir / name for name in entry["msgpack_payloads"]),
+        metadata=sorted(metadata),
+    )
+    return files, facts, documents
+
+
+def _payload_test_facts(path: Path) -> tuple[int, bool]:
+    """The test-event count and empty-session marker of a JSON payload.
+
+    Reading the payload as _load_json does also validates it; a payload that
+    ddtest decoded is valid JSON, and its facts come from the inspection.
+    """
+    if _run_cache is not None and path in _run_cache.payload_facts:
+        return _run_cache.payload_facts[path]
+    doc = _load_json(path)
+    if not isinstance(doc, dict):
+        return 0, False
+    return test_result_event_count(doc), completed_empty_test_session(doc)
+
+
+def _load_metadata(path: Path) -> Any:
+    """Load a bazel_target_metadata.json file as _load_json does, once per run."""
+    if _run_cache is None:
+        return _load_json(path)
+    if path not in _run_cache.metadata:
+        _run_cache.metadata[path] = _load_json(path)
+    return _run_cache.metadata[path]
+
+
+def _report_metadata(path: Path) -> Any:
+    """Load a sidecar for the diagnostic report, as _read_json_for_report does."""
+    if _run_cache is not None and path in _run_cache.metadata:
+        return _run_cache.metadata[path]
+    doc = _read_json_for_report(path)
+    # Only a successful read is shared, so validation still reports a broken file.
+    if _run_cache is not None and doc is not None:
+        _run_cache.metadata[path] = doc
+    return doc
+
+
+def _payload_files(output_dir: Path) -> list[Path]:
+    return list(_output_files(output_dir).json_payloads)
 
 
 def _msgpack_payload_files(output_dir: Path) -> list[Path]:
     """Return raw msgpack payload files emitted under a Bazel test output tree."""
-    payload_root = output_dir / "payloads"
-    if not payload_root.exists():
-        return []
-    files = []
-    for pattern in ("*.msgpack", "*.msgpack.gz"):
-        files.extend(path for path in payload_root.rglob(pattern) if path.is_file())
-    return sorted(files)
+    return list(_output_files(output_dir).msgpack_payloads)
 
 
 def _metadata_files(output_dir: Path) -> list[Path]:
-    return sorted(path for path in output_dir.rglob("bazel_target_metadata.json") if path.is_file())
+    return list(_output_files(output_dir).metadata)
 
 
 def _load_contexts(context_manifest: Path) -> list[tuple[str, Path]]:
@@ -2276,7 +2629,7 @@ def _validate_outputs(
     for output_dir in output_dirs:
         has_test_events = False
         has_empty_session = False
-        output_label = target_lookup.get(output_dir.resolve())
+        output_label = target_lookup.get(_resolved(output_dir))
         payloads = _payload_files(output_dir)
         msgpack_payloads = _msgpack_payload_files(output_dir)
         metadata = _metadata_files(output_dir)
@@ -2293,15 +2646,15 @@ def _validate_outputs(
         if require_json_payloads and not payloads:
             _fail(f"missing JSON payloads under {output_dir}")
         for payload in payloads:
-            doc = _load_json(payload)
-            if output_dir / "payloads" / "tests" in payload.parents and isinstance(doc, dict):
-                has_test_events = has_test_events or test_result_event_count(doc) > 0
-                has_empty_session = has_empty_session or completed_empty_test_session(doc)
+            test_events, empty_session = _payload_test_facts(payload)
+            if output_dir / "payloads" / "tests" in payload.parents:
+                has_test_events = has_test_events or test_events > 0
+                has_empty_session = has_empty_session or empty_session
 
         if require_bazel_metadata and not metadata:
             _fail(f"missing bazel_target_metadata.json under {output_dir}")
         for metadata_file in metadata:
-            doc = _load_json(metadata_file)
+            doc = _load_metadata(metadata_file)
             selection = doc.get("bazel.go.payload_selection")
             if selection == "full_bundle_importpath_miss":
                 ip, root = doc.get("bazel.go.importpath"), doc.get("bazel.go.runtime_module_path")
@@ -2320,7 +2673,7 @@ def _validate_outputs(
             if selection is not None:
                 selection_summary[selection] = selection_summary.get(selection, 0) + 1
 
-            target_label = _metadata_target_label(doc, target_lookup.get(output_dir.resolve()))
+            target_label = _metadata_target_label(doc, target_lookup.get(_resolved(output_dir)))
             output_label = output_label or target_label
             if target_label and target_label in expected_selections:
                 expected = expected_selections[target_label]
@@ -2331,9 +2684,9 @@ def _validate_outputs(
                     )
 
         if empty_session_outputs is not None and has_empty_session and output_label:
-            empty_session_outputs[output_dir.resolve()] = output_label
+            empty_session_outputs[_resolved(output_dir)] = output_label
         if test_result_outputs is not None and has_test_events and output_label:
-            test_result_outputs[output_dir.resolve()] = output_label
+            test_result_outputs[_resolved(output_dir)] = output_label
 
     if require_json_payloads and payload_count == 0:
         _fail("no JSON payload files were found under selected test.outputs directories")
@@ -2531,7 +2884,7 @@ def _diagnostic_metadata(output_dir: Path, fallback_label: str | None) -> dict[s
         "payload_selection": "",
     }
     for metadata_file in metadata_files:
-        doc = _read_json_for_report(metadata_file)
+        doc = _report_metadata(metadata_file)
         if not isinstance(doc, dict):
             continue
         target = _metadata_target_label(doc, fallback_label)
@@ -2552,10 +2905,10 @@ def _diagnostic_output_entries(
     testlogs_dir: Path | None,
 ) -> list[dict[str, Any]]:
     """Build report entries for local and staged test output directories."""
-    staged_by_dir = {item.output_dir.resolve(): item for item in staged}
+    staged_by_dir = {_resolved(item.output_dir): item for item in staged}
     entries = []
     for output_dir in output_dirs:
-        resolved = output_dir.resolve()
+        resolved = _resolved(output_dir)
         staged_item = staged_by_dir.get(resolved)
         fallback_label = target_by_output_dir.get(resolved)
         metadata = _diagnostic_metadata(output_dir, fallback_label)
@@ -2647,7 +3000,7 @@ def _update_diagnostic_bep(
         for label, _ in freshness.eligible_outputs.union(freshness.cached_outputs)
     }
     seen_targets.update(item.label for item in freshness.remote_only_outputs)
-    seen_targets.update(ref.label for ref in freshness.artifact_references)
+    seen_targets.update(freshness.artifact_reference_labels)
     seen_targets.update(freshness.skipped_targets)
     expected = set(report.get("targets", {}).get("expected", []))
     cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
@@ -2673,7 +3026,7 @@ def _update_diagnostic_bep(
             "strict_completeness": resolve_freshness_policy(report["config"]["freshness_mode"], "bep").strict_bep,
             "missing_output_mappings": sorted(freshness.missing_output_mappings),
             "skipped_targets": sorted(freshness.skipped_targets),
-            "artifact_references": len(freshness.artifact_references),
+            "artifact_references": freshness.artifact_reference_count,
             "selected_artifact_outputs": _sorted_pairs(selected_bep_artifact_outputs or set()),
             "blocked_artifact_labels": sorted(blocked_bep_artifact_labels or set()),
         }
@@ -3014,7 +3367,8 @@ def main(argv: list[str]) -> int:
     args = _parse_args(argv)
     report = _new_diagnostic_report(args)
     try:
-        rc = _run_doctor(args, report)
+        with _cached_filesystem():
+            rc = _run_doctor(args, report)
     except SystemExit as exc:
         _record_diagnostic_failure(report, exc)
         _write_requested_diagnostics(args, report)
@@ -3060,6 +3414,12 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
     execroot = _infer_bazel_execroot(config_path)
     if execroot is not None and not os.environ.get(DOCTOR_EXECROOT_ENV):
         os.environ[DOCTOR_EXECROOT_ENV] = str(execroot)
+    # ddtest's path may be relative to the execroot inferred above.
+    ddtest = _resolve_configured_optional_runfile(config, config_path, "ddtest_path", "ddtest_short_path")
+    if ddtest is not None and not ddtest.is_file():
+        _warn(f"ddtest is missing from the doctor's runfiles ({ddtest}); validating the outputs without it")
+    elif _run_cache is not None:
+        _run_cache.inspector = ddtest
 
     runtime_selection = bool(config.get("runtime_selection", False))
     expected_targets, expected_targets_source = _resolve_expected_targets(
@@ -3109,15 +3469,14 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
         if expected_targets:
             output_dirs = []
             target_by_output_dir = {}
-            for label in expected_targets:
-                target_output_dirs = _expected_target_outputs(
-                    testlogs_dir,
-                    label,
-                    allow_missing=staging_requested or bool(bep_files),
-                )
+            for label, target_output_dirs in _expected_targets_outputs(
+                testlogs_dir,
+                expected_targets,
+                allow_missing=staging_requested or bool(bep_files),
+            ):
                 output_dirs.extend(target_output_dirs)
                 for output_dir in target_output_dirs:
-                    target_by_output_dir[output_dir.resolve()] = label
+                    target_by_output_dir[_resolved(output_dir)] = label
         else:
             output_dirs = _discover_candidate_output_dirs(testlogs_dir) if testlogs_dir is not None else []
             target_by_output_dir = {}
@@ -3126,12 +3485,20 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
 
         local_output_keys = {_local_test_output_key(output_dir, testlogs_dir=testlogs_dir) for output_dir in output_dirs}
         staging_enabled = _artifact_staging_enabled(args, local_output_keys)
+        # Strict BEP freshness reads only the outputs of fresh expected
+        # targets, and inspects them when it selects them; otherwise the
+        # doctor may read every output.
+        if not (expected_targets and bep_files and args.freshness_mode != "disabled" and policy.strict_bep
+                and not staging_enabled):
+            _inspect_outputs(output_dirs)
         if bep_files:
             if args.freshness_mode != "disabled" or staging_enabled:
                 freshness = _parse_bep_freshness(
                     bep_files,
                     unavailable_is_error=staging_enabled or args.freshness_mode != "optional",
                     workspace=workspace,
+                    ddtest=_run_cache.inspector if _run_cache is not None else None,
+                    references=staging_enabled,
                 )
                 _update_diagnostic_bep(report, freshness)
         elif strict_bep_required:
@@ -3206,8 +3573,8 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
 
         if args.freshness_mode != "disabled" and freshness is not None:
             required = policy.strict_bep
-            output_key_by_output_dir = {item.output_dir.resolve(): item.output_key for item in staged}
-            label_by_output_dir = {item.output_dir.resolve(): item.label for item in staged}
+            output_key_by_output_dir = {_resolved(item.output_dir): item.output_key for item in staged}
+            label_by_output_dir = {_resolved(item.output_dir): item.label for item in staged}
             if expected_targets:
                 output_dirs = _validate_expected_target_bep_freshness(
                     output_dirs,
@@ -3256,6 +3623,8 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             missing_root = testlogs_dir if testlogs_dir is not None else workspace / "bazel-testlogs"
             _fail(f"no Test Optimization output directories found under {missing_root}")
 
+        # Staged outputs appear after the first inspection.
+        _inspect_outputs(output_dirs)
         _update_diagnostic_output_summary(
             report,
             _diagnostic_output_entries(

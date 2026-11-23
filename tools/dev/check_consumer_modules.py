@@ -20,10 +20,10 @@ CORE = "datadog-rules-test-optimization"
 # Apparent repository names that each published module needs as a dependency.
 # A new runtime repository should be reflected here. Test repos belong to the root only.
 CONSUMER_REPOS = {
-    CORE: {"platforms"},
+    CORE: {"platforms", "topt_ddtest"},
     f"{CORE}-go": {
         CORE, "bazel_skylib", "io_bazel_rules_go", "platforms",
-        "topt_go_ddtest_mini", "topt_go_ddtest_toolchains",
+        "topt_ddtest", "topt_go_ddtest_mini", "topt_go_ddtest_toolchains",
     },
     f"{CORE}-python": {CORE, "rules_python"},
     f"{CORE}-java": {CORE, "rules_java"},

@@ -11,6 +11,8 @@ exports_files(
     [
         "bep_artifact_stage_helper.py",
         "common_utils.bzl",
+        "ddtest_extension.bzl",
+        "ddtest_release.bzl",
         "schemas/agentless-schema.json",
         "schemas/agentless-schema.yaml",
         "schemas/check_schema_parser_parity.py",

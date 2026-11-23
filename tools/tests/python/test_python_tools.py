@@ -1724,6 +1724,309 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         )
         return output
 
+    def test_output_listing_finds_what_rglob_finds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "pkg" / "target" / "test.outputs"
+            payloads = output / "payloads"
+            for relative in ("tests/a.json", "tests/nested/b.json", "coverage/c.msgpack", "x/d.msgpack.gz",
+                             "tests/notes.txt", "nested/bazel_target_metadata.json"):
+                (payloads / relative).parent.mkdir(parents=True, exist_ok=True)
+                (payloads / relative).write_text("{}", encoding="utf-8")
+            (payloads / "tests" / "directory.json").mkdir()
+            (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            outside = root / "outside"
+            (outside / "inner").mkdir(parents=True)
+            (outside / "linked.json").write_text("{}", encoding="utf-8")
+            (outside / "inner" / "hidden.json").write_text("{}", encoding="utf-8")
+            (outside / "inner" / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            try:
+                (payloads / "tests" / "link.json").symlink_to(outside / "linked.json")
+                (payloads / "linked_dir").symlink_to(outside / "inner", target_is_directory=True)
+                (payloads / "tests" / "dangling.json").symlink_to(root / "missing.json")
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+
+            self.assertEqual(sorted(p for p in payloads.rglob("*.json") if p.is_file()), self.mod._payload_files(output))
+            self.assertEqual(
+                sorted(p for pattern in ("*.msgpack", "*.msgpack.gz") for p in payloads.rglob(pattern) if p.is_file()),
+                self.mod._msgpack_payload_files(output),
+            )
+            self.assertEqual(sorted(p for p in output.rglob("bazel_target_metadata.json") if p.is_file()),
+                             self.mod._metadata_files(output))
+            self.assertIn(payloads / "tests" / "link.json", self.mod._payload_files(output))
+            self.assertNotIn(payloads / "linked_dir" / "hidden.json", self.mod._payload_files(output))
+
+    def test_a_broken_sidecar_still_fails_after_the_report_reads_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sidecar = Path(tmp) / "bazel_target_metadata.json"
+            sidecar.write_text("{broken", encoding="utf-8")
+            with self.mod._cached_filesystem():
+                self.assertIsNone(self.mod._report_metadata(sidecar))
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.mod._load_metadata(sidecar)
+
+    def _inspection(self, report: dict, returncode: int = 0, stderr: str = ""):
+        """Replace the ddtest inspection with a fixed report."""
+        def run(command, **kwargs):
+            self.assertEqual(["instrument", "bazel", "inspect"], command[1:])
+            return subprocess.CompletedProcess(command, returncode, json.dumps(report), stderr)
+        return mock.patch.object(self.mod.subprocess, "run", run)
+
+    def test_ddtest_inspection_supplies_listings_facts_and_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            tests = output / "payloads" / "tests"
+            tests.mkdir(parents=True)
+            # The files disagree with the report, which the doctor must use.
+            (tests / "a.json").write_text('{"events": []}', encoding="utf-8")
+            (tests / "broken.json").write_text("{", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            report = {"schema_version": 1, "outputs": [{
+                "path": str(output),
+                "json_payloads": [
+                    {"path": "payloads/tests/broken.json", "decoded": False, "test_events": 0, "empty_session": False},
+                    {"path": "payloads/tests/a.json", "decoded": True, "test_events": 3, "empty_session": False},
+                ],
+                "msgpack_payloads": [],
+                "metadata": [{"path": "bazel_target_metadata.json", "document": {"bazel.target": "//pkg:target"}}],
+            }]}
+            with self.mod._cached_filesystem(), self._inspection(report):
+                self.mod._run_cache.inspector = Path("ddtest")
+                self.mod._inspect_outputs([output])
+                self.assertEqual([tests / "a.json", tests / "broken.json"], self.mod._payload_files(output))
+                self.assertEqual((3, False), self.mod._payload_test_facts(tests / "a.json"))
+                self.assertEqual({"bazel.target": "//pkg:target"}, self.mod._load_metadata(output / "bazel_target_metadata.json"))
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                    self.mod._payload_test_facts(tests / "broken.json")
+                self.assertIn("invalid JSON in", stderr.getvalue())
+
+    def test_a_failed_ddtest_inspection_warns_and_reads_the_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "test.outputs"
+            (output / "payloads" / "tests").mkdir(parents=True)
+            (output / "payloads" / "tests" / "a.json").write_text('{"events": [{"type": "test", "content": {}}]}', encoding="utf-8")
+            stderr = io.StringIO()
+            with self.mod._cached_filesystem(), self._inspection({}, returncode=1, stderr="no such command"), \
+                    contextlib.redirect_stderr(stderr):
+                self.mod._run_cache.inspector = Path("ddtest")
+                self.mod._inspect_outputs([output])
+                self.assertIsNone(self.mod._run_cache.inspector)
+                self.assertEqual((1, False), self.mod._payload_test_facts(output / "payloads" / "tests" / "a.json"))
+            self.assertIn("ddtest could not inspect the outputs (no such command)", stderr.getvalue())
+
+    def _recording_inspection(self, calls: list, discoveries: list | None = None):
+        """Answer ddtest inspections from the requested outputs, recording each request.
+
+        Discoveries of target roots are answered as the doctor finds them
+        itself, and recorded in discoveries.
+        """
+        def run(command, **kwargs):
+            request = json.loads(kwargs["input"])
+            if command[1:] == ["instrument", "bazel", "freshness"]:
+                # Leave the BEP to the doctor's own parser.
+                return subprocess.CompletedProcess(command, 0, json.dumps({"schema_version": 1, "status": "fallback"}), "")
+            if command[1:] == ["instrument", "bazel", "discover"]:
+                roots = request["target_roots"]
+                if discoveries is not None:
+                    discoveries.append(roots)
+                targets = [{"root": root, "exists": Path(root).exists(),
+                            "outputs": [str(path) for path in self.mod.find_test_output_directories(
+                                Path(root), root_is_target=True)] if Path(root).exists() else []}
+                           for root in roots]
+                report = {"schema_version": 1, "outputs": [], "sources": [], "warnings": [], "targets": targets}
+                return subprocess.CompletedProcess(command, 0, json.dumps(report), "")
+            self.assertEqual(["instrument", "bazel", "inspect"], command[1:])
+            outputs = request["outputs"]
+            calls.append(outputs)
+            entries = []
+            for raw in outputs:
+                output = Path(raw)
+                entries.append({
+                    "path": raw,
+                    "json_payloads": [{"path": path.relative_to(output).as_posix(), "decoded": True,
+                                       "test_events": 1, "empty_session": False}
+                                      for path in sorted((output / "payloads").rglob("*.json"))],
+                    "msgpack_payloads": [],
+                    "metadata": [{"path": "bazel_target_metadata.json",
+                                  "document": json.loads((output / "bazel_target_metadata.json").read_text(encoding="utf-8"))}],
+                })
+            report = {"schema_version": 1, "outputs": entries}
+            return subprocess.CompletedProcess(command, 0, json.dumps(report), "")
+        return mock.patch.object(self.mod.subprocess, "run", run)
+
+    def test_discovered_outputs_are_inspected_with_ddtest(self) -> None:
+        # Without expected targets, candidate discovery lists outputs before
+        # the inspection; the listing must not stand in for it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            config = self._write_doctor_config(root, [])
+            document = json.loads(config.read_text(encoding="utf-8"))
+            (root / "ddtest").write_text("", encoding="utf-8")
+            document["ddtest_path"] = str(root / "ddtest")
+            config.write_text(json.dumps(document), encoding="utf-8")
+            output = self._write_doctor_output(root, "module")
+            calls: list = []
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}), \
+                    self._recording_inspection(calls), contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, self.mod.main(["--config", str(config), "--freshness-mode=disabled"]))
+            self.assertEqual([[str(output)]], calls)
+            self.assertNotIn("warning", stderr.getvalue())
+
+    def test_strict_freshness_inspects_only_fresh_expected_outputs(self) -> None:
+        # A cached target's outputs are never read, so ddtest must not inspect them.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            labels = ["//pkg:cached", "//pkg:fresh"]
+            config = self._write_doctor_config(root, labels)
+            document = json.loads(config.read_text(encoding="utf-8"))
+            (root / "ddtest").write_text("", encoding="utf-8")
+            document["ddtest_path"] = str(root / "ddtest")
+            config.write_text(json.dumps(document), encoding="utf-8")
+            outputs = {}
+            for label in labels:
+                name = label.split(":")[1]
+                output = root / "pkg" / name / "test.outputs"
+                (output / "payloads" / "tests").mkdir(parents=True)
+                (output / "payloads" / "tests" / "span_events_1.json").write_text(
+                    '{"events":[{"type":"test","content":{}}]}', encoding="utf-8")
+                (output / "bazel_target_metadata.json").write_text(
+                    json.dumps({"bazel.target": label, "bazel.go.payload_selection": "module"}), encoding="utf-8")
+                outputs[name] = output
+            bep = root / "bep.json"
+            self._write_bep(bep, [
+                self._bep_test_result("//pkg:cached", "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/cached/test.outputs",
+                                      cached_remotely=True),
+                self._bep_test_result("//pkg:fresh", "file:///execroot/main/bazel-out/k8-fastbuild/testlogs/pkg/fresh/test.outputs"),
+            ])
+            calls: list = []
+            stderr, stdout = io.StringIO(), io.StringIO()
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}), \
+                    self._recording_inspection(calls), contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(stdout):
+                self.assertEqual(0, self.mod.main(["--config", str(config), f"--bep-json={bep}",
+                                                   "--freshness-source=bep", "--freshness-mode=required"]),
+                                 stderr.getvalue())
+            self.assertEqual([[str(outputs["fresh"])]], calls)
+            self.assertIn("validated 1 test output", stdout.getvalue() + stderr.getvalue())
+            self.assertNotIn("warning", stderr.getvalue())
+
+    def _expected_targets_fixture(self, root: Path, labels: list[str]) -> Path:
+        """A doctor config with ddtest that expects labels, each with one output."""
+        config = self._write_doctor_config(root, labels)
+        document = json.loads(config.read_text(encoding="utf-8"))
+        (root / "ddtest").write_text("", encoding="utf-8")
+        document["ddtest_path"] = str(root / "ddtest")
+        config.write_text(json.dumps(document), encoding="utf-8")
+        for label in labels:
+            if label.endswith(":missing"):
+                continue
+            output = root / "pkg" / label.split(":")[1] / "test.outputs"
+            (output / "payloads" / "tests").mkdir(parents=True)
+            (output / "payloads" / "tests" / "span_events_1.json").write_text(
+                '{"events":[{"type":"test","content":{}}]}', encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text(
+                json.dumps({"bazel.target": label, "bazel.go.payload_selection": "module"}), encoding="utf-8")
+        return config
+
+    def test_expected_target_outputs_come_from_one_ddtest_discovery(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            config = self._expected_targets_fixture(root, ["//pkg:a", "//pkg:b"])
+            calls: list = []
+            discoveries: list = []
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}), \
+                    self._recording_inspection(calls, discoveries), contextlib.redirect_stderr(stderr), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, self.mod.main(["--config", str(config), "--freshness-mode=disabled"]), stderr.getvalue())
+            self.assertEqual([[str(root / "pkg" / "a"), str(root / "pkg" / "b")]], discoveries)
+            self.assertEqual([[str(root / "pkg" / name / "test.outputs") for name in ("a", "b")]], calls)
+            self.assertNotIn("warning", stderr.getvalue())
+
+    def test_a_failed_ddtest_discovery_warns_and_finds_the_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            config = self._expected_targets_fixture(root, ["//pkg:a"])
+            calls: list = []
+            recorded = self._recording_inspection(calls).new
+
+            def run(command, **kwargs):
+                if command[1:] == ["instrument", "bazel", "discover"]:
+                    return subprocess.CompletedProcess(command, 2, "", "unknown field target_roots")
+                return recorded(command, **kwargs)
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}), \
+                    mock.patch.object(self.mod.subprocess, "run", run), contextlib.redirect_stderr(stderr), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, self.mod.main(["--config", str(config), "--freshness-mode=disabled"]), stderr.getvalue())
+            self.assertIn("ddtest could not find the expected targets' outputs (unknown field target_roots)",
+                          stderr.getvalue())
+            self.assertEqual([[str(root / "pkg" / "a" / "test.outputs")]], calls)
+
+    def test_a_missing_expected_target_fails_as_without_ddtest(self) -> None:
+        messages = []
+        for with_ddtest in (True, False):
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp).resolve()
+                config = self._expected_targets_fixture(root, ["//pkg:a", "//pkg:missing"])
+                if not with_ddtest:
+                    document = json.loads(config.read_text(encoding="utf-8"))
+                    del document["ddtest_path"]
+                    config.write_text(json.dumps(document), encoding="utf-8")
+                stderr = io.StringIO()
+                with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}), \
+                        self._recording_inspection([]), contextlib.redirect_stderr(stderr), \
+                        contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
+                    self.mod.main(["--config", str(config), "--freshness-mode=disabled"])
+                messages.append([line.replace(str(root), "<root>") for line in stderr.getvalue().splitlines()
+                                 if "expected target" in line])
+        self.assertIn("expected target output root not found for //pkg:missing", messages[0][0])
+        self.assertEqual(messages[0], messages[1])
+
+    def test_ddtest_is_found_below_an_inferred_execroot(self) -> None:
+        # Windows bazel run can start the doctor without runfiles variables;
+        # ddtest's execroot-relative path needs the inferred execroot.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            execroot = root / "output_base" / "execroot" / "_main"
+            ddtest = execroot / "external" / "+ddtest+topt_ddtest" / "ddtest"
+            ddtest.parent.mkdir(parents=True)
+            ddtest.write_text("", encoding="utf-8")
+            (execroot / "bazel-out" / "bin").mkdir(parents=True)
+            config = self._write_doctor_config(execroot / "bazel-out" / "bin", [])
+            document = json.loads(config.read_text(encoding="utf-8"))
+            document["ddtest_path"] = "external/+ddtest+topt_ddtest/ddtest"
+            config.write_text(json.dumps(document), encoding="utf-8")
+            testlogs = root / "testlogs"
+            self._write_doctor_output(testlogs, "module")
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in {"RUNFILES_DIR", "RUNFILES_MANIFEST_FILE", "DD_TEST_OPTIMIZATION_DOCTOR_EXECROOT"}}
+            environment.update({"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(testlogs)})
+            calls: list = []
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(self.mod, "_runfiles_roots", return_value=[]), \
+                    self._recording_inspection(calls), contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, self.mod.main(["--config", str(config), "--freshness-mode=disabled"]))
+            self.assertEqual(1, len(calls), stderr.getvalue())
+            self.assertNotIn("missing from the doctor's runfiles", stderr.getvalue())
+
+    def test_a_missing_ddtest_warns_and_validates_without_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_doctor_config(root, [])
+            document = json.loads(config.read_text(encoding="utf-8"))
+            document["ddtest_path"] = str(root / "missing-ddtest")
+            config.write_text(json.dumps(document), encoding="utf-8")
+            self._write_doctor_output(root, "module")
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}), \
+                    contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, self.mod.main(["--config", str(config), "--freshness-mode=disabled"]))
+            self.assertIn("ddtest is missing from the doctor's runfiles", stderr.getvalue())
+
     @staticmethod
     def _write_doctor_config(root: Path, expected_targets: list[str]) -> Path:
         """Create a minimal doctor config for runtime main() tests."""
@@ -5179,6 +5482,112 @@ Path(out).mkdir(parents=True)
         self.assertNotIn("selected\t//pkg:target", result.stdout)
         self.assertNotIn("staged\t//pkg:target", result.stdout)
         self.assertIn("no mappable test.outputs key", result.stderr)
+
+    @staticmethod
+    def _freshness_view(freshness) -> dict:
+        """Everything a BepFreshness holds, comparable."""
+        return {
+            "eligible": sorted(freshness.eligible_outputs),
+            "cached": sorted(freshness.cached_outputs),
+            "remote_only": [(r.label, r.output_key, r.artifact, r.reason) for r in freshness.remote_only_outputs],
+            "missing": sorted(freshness.missing_output_mappings),
+            "references": [(r.label, r.uri, r.name, r.path, tuple(r.candidates), r.fetch_value, r.output_key, r.cached,
+                            r.remote_only, r.is_test_outputs_hint, r.fetch_is_stageable_carrier)
+                           for r in freshness.artifact_references],
+            "reference_count": freshness.artifact_reference_count,
+            "reference_labels": sorted(freshness.artifact_reference_labels),
+            "skipped": sorted(freshness.skipped_targets),
+            "executions": [(e.identity, e.cached, e.status, sorted(e.output_keys), e.carriers) for e in freshness.executions],
+            "errors": list(freshness.completeness_errors),
+            "ambiguous_outputs": sorted(freshness.ambiguous_outputs),
+            "ambiguous_labels": sorted(freshness.ambiguous_labels),
+        }
+
+    def test_ddtest_evaluates_bep_freshness_as_the_doctor_does(self) -> None:
+        logical = os.environ.get("DDTEST_EXECUTABLE", "")
+        if not logical:
+            self.skipTest("DDTEST_EXECUTABLE is set only under Bazel")
+        ddtest = _runfile(logical)
+        testlogs = "file:///execroot/main/bazel-out/k8-fastbuild/testlogs"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            carrier = root / "bazel-out" / "k8-fastbuild" / "testlogs" / "pkg" / "carrier" / "test.outputs"
+            carrier.mkdir(parents=True)
+            sharded = [{"id": {"testResult": {"label": "//pkg:sharded", "run": 1, "shard": shard, "attempt": 1,
+                                              "configuration": {"id": "c"}}},
+                        "testResult": {"status": "PASSED", "testActionOutput": [
+                            {"name": "test.outputs/payloads/tests/a.json",
+                             "uri": f"{testlogs}/pkg/sharded/shard_{shard}_of_2/test.outputs/payloads/tests/a.json"}]}}
+                       for shard in (1, 2)]
+            events = [
+                {"id": {"testResult": {"label": "//pkg:fresh", "run": 1, "shard": 1, "attempt": 1}},
+                 "testResult": {"status": 1, "testActionOutput": [
+                     {"name": "test.log", "uri": f"{testlogs}/pkg/fresh/test.log"},
+                     {"name": "test.outputs/bazel_target_metadata.json",
+                      "uri": f"{testlogs}/pkg/fresh/test.outputs/bazel_target_metadata.json",
+                      "pathPrefix": ["bazel-out", "k8-fastbuild", "testlogs", "pkg", "fresh"]}]}},
+                {"id": {"testResult": {"label": "//pkg:cached", "run": 1, "shard": 1, "attempt": 1}},
+                 "testResult": {"status": "PASSED", "cachedLocally": True,
+                                "testActionOutput": [{"name": "test.log", "uri": f"{testlogs}/pkg/cached/test.log"}]}},
+                {"id": {"test_result": {"label": "//pkg:retried", "run": 1, "shard": 1, "attempt": 2}},
+                 "test_result": {"status": "FLAKY", "execution_info": {"cached_remotely": False},
+                                 "test_action_output": [{"name": "test_attempts/attempt_1.log",
+                                                         "uri": f"{testlogs}/pkg/retried/test_attempts/attempt_1.log"}]}},
+                {"id": {"testResult": {"label": "//pkg:carrier", "run": 1, "shard": 1, "attempt": 1}},
+                 "testResult": {"status": "PASSED", "testActionOutput": [
+                     {"name": "test.outputs", "uri": carrier.as_uri()}]}},
+                {"id": {"testResult": {"label": "//pkg:remote", "run": 1, "shard": 1, "attempt": 1}},
+                 "testResult": {"status": "PASSED", "testActionOutput": [
+                     {"name": "test.outputs", "uri": "bytestream://cache.example/blobs/abc/1"}]}},
+                {"id": {"targetCompleted": {"label": "//pkg:skipped"}}, "aborted": {"reason": "SKIPPED"}},
+                {"id": {"testResult": {"label": "//pkg:aborted", "run": 1, "shard": 1, "attempt": 1}}},
+                {"id": {"testSummary": {"label": "//pkg:fresh"}},
+                 "testSummary": {"totalRunCount": 1, "runCount": 1, "shardCount": 1, "attemptCount": 1}},
+                *sharded,
+            ]
+            first, second, unnamed = root / "first.json", root / "second.json", root / "unnamed.json"
+            self._write_bep(first, [{"id": {"started": {}}, "started": {"uuid": "build-1"}}, *events])
+            shutil.copy(first, second)
+            self._write_bep(unnamed, events[:2])
+            files = [first, second, unnamed, first]
+            expected = self.mod._parse_bep_freshness(files, workspace=root)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                native = self.mod._bep_freshness_with_ddtest(files, workspace=root, ddtest=ddtest, references=True)
+                lean = self.mod._parse_bep_freshness(files, workspace=root, ddtest=ddtest, references=False)
+            self.assertEqual("", stderr.getvalue())
+            self.assertIsNotNone(native, "ddtest left the BEP to the doctor")
+            self.assertEqual(self._freshness_view(expected), self._freshness_view(native))
+            self.assertEqual(dict(self._freshness_view(expected), references=[]), self._freshness_view(lean))
+            self.assertTrue(any(execution.carriers for execution in native.executions))
+            self.assertTrue(native.completeness_errors)
+
+    def test_a_fallback_freshness_report_leaves_the_bep_to_the_doctor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "bep.json"
+            self._write_bep(bep, [self._bep_test_result("//pkg:target", "file:///x/testlogs/pkg/target/test.outputs")])
+            expected = self.mod._parse_bep_freshness([bep])
+            fallback = json.dumps({"schema_version": 1, "status": "fallback", "reason": "unsupported BEP input"})
+            stderr = io.StringIO()
+            with mock.patch.object(self.mod.subprocess, "run",
+                                   return_value=subprocess.CompletedProcess([], 0, fallback, "")), \
+                    contextlib.redirect_stderr(stderr):
+                actual = self.mod._parse_bep_freshness([bep], ddtest=Path("ddtest"))
+            self.assertEqual(self._freshness_view(expected), self._freshness_view(actual))
+            self.assertEqual("", stderr.getvalue())
+
+    def test_a_failed_freshness_evaluation_warns_and_parses_the_bep(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            bep = Path(tmp) / "bep.json"
+            self._write_bep(bep, [self._bep_test_result("//pkg:target", "file:///x/testlogs/pkg/target/test.outputs")])
+            expected = self.mod._parse_bep_freshness([bep])
+            stderr = io.StringIO()
+            with mock.patch.object(self.mod.subprocess, "run",
+                                   return_value=subprocess.CompletedProcess([], 2, "", "unknown command freshness")), \
+                    contextlib.redirect_stderr(stderr):
+                actual = self.mod._parse_bep_freshness([bep], ddtest=Path("ddtest"))
+            self.assertEqual(self._freshness_view(expected), self._freshness_view(actual))
+            self.assertIn("ddtest could not evaluate the BEP (unknown command freshness)", stderr.getvalue())
 
     def test_parse_bep_eligible_outputs_skips_cached_results(self) -> None:
         """Validate BEP freshness keeps only non-cached concrete output mappings."""

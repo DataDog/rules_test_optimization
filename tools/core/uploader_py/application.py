@@ -19,7 +19,7 @@ import sys
 import time
 from typing import Callable, TextIO
 
-from topt_runtime.runfiles import RunfilesResolver
+from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 from topt_runtime.bep_execution import exclusively_cached_labels
 
 from .config import ConfigError, UploaderConfig, validate_upload_credentials
@@ -27,9 +27,11 @@ from .coordinator import CoordinatorSettings, run_discovered_tasks
 from .discovery import (
     DiscoveryError,
     DiscoveryResult,
+    NativeDiscoveryUnavailable,
     ScanRoot,
     count_tasks_by_payload_type,
     discover_file_tasks,
+    discover_file_tasks_with_ddtest,
     resolve_local_testlogs_root,
     tests_executed,
     wait_for_quiescence,
@@ -171,6 +173,7 @@ def _run_uploader_with_lock(
                 expected_targets=expected_targets_plan.targets,
                 logger=logger,
                 staging_owner=staging_owner,
+                ddtest=_ddtest_executable(config, resolver),
             )
         freshness_plan = freshness_preparation.plan
         logger.debug(
@@ -204,6 +207,7 @@ def _run_uploader_with_lock(
                 freshness_preparation,
                 no_expected_payloads=no_expected_payloads,
                 logger=logger,
+                ddtest=_ddtest_executable(config, resolver),
             )
 
             expected_discovery = select_expected_outputs(
@@ -241,7 +245,7 @@ def _run_uploader_with_lock(
             logger.debug("credential validation skipped: no upload tasks")
         report = run_discovered_tasks(
             eligible_discovery,
-            settings=CoordinatorSettings.from_config(config),
+            settings=CoordinatorSettings.from_config(config, _ddtest_executable(config, resolver)),
             endpoints=endpoints,
             resources=resources,
             logger=logger,
@@ -622,21 +626,43 @@ def _discover_payloads(
     *,
     no_expected_payloads: bool,
     logger: logging.Logger,
+    ddtest: Path | None = None,
 ) -> DiscoveryResult:
-    """Discover a stable source-file snapshot after freshness has authorized it."""
+    """Discover a stable source-file snapshot after freshness has authorized it.
+
+    With the ddtest backend, ddtest walks and lists the testlogs in parallel;
+    if it fails, the uploader warns once and discovers in Python.
+    """
     selected_output_keys = {
         output_key
         for _label, output_key in preparation.plan.selected_artifact_outputs
     }
     for output_key in sorted(selected_output_keys):
         logger.debug("freshness eligible output_key=%s", output_key)
+    native: list[Path] = [ddtest] if ddtest is not None else []
+    fallback_warnings: list[str] = []
 
     def scan() -> DiscoveryResult:
-        return discover_file_tasks(
+        if native:
+            try:
+                return discover_file_tasks_with_ddtest(
+                    native[0],
+                    preparation.scan_roots,
+                    max_depth=config.max_depth,
+                    staged_output_keys=selected_output_keys,
+                )
+            except NativeDiscoveryUnavailable as exc:
+                logger.warning("ddtest_discovery_unavailable: discovering payloads in Python (%s)", exc)
+                native.clear()
+                fallback_warnings.append("ddtest_discovery_unavailable")
+        discovery = discover_file_tasks(
             preparation.scan_roots,
             max_depth=config.max_depth,
             staged_output_keys=selected_output_keys,
         )
+        if fallback_warnings:
+            discovery = replace(discovery, warning_codes=tuple(dict.fromkeys(fallback_warnings + list(discovery.warning_codes))))
+        return discovery
 
     if no_expected_payloads:
         logger.debug(
@@ -704,6 +730,17 @@ def _load_resources(
     return resources
 
 
+def _ddtest_executable(config: UploaderConfig, resolver: RunfilesResolver) -> Path | None:
+    """The ddtest executable in the uploader's runfiles, for the ddtest backend."""
+    candidates = tuple(path for path in (config.rule.ddtest_path, config.rule.ddtest_short_path) if path)
+    if config.uploader_backend != "ddtest" or not candidates:
+        return None
+    try:
+        return resolver.resolve_file(candidates)
+    except RunfileResolutionError:
+        return None
+
+
 def _empty_discovery() -> DiscoveryResult:
     return DiscoveryResult(
         outputs=(),
@@ -744,6 +781,7 @@ def _legacy_context(
     final_reason = report_reason or _ReportReason()
     return LegacyReportContext(
         validate_enrichment=config.validate_enrichment,
+        uploader_backend=config.uploader_backend,
         artifact_source=config.artifact_source,
         remote_artifacts=config.remote_artifacts,
         freshness_source=config.freshness_source,

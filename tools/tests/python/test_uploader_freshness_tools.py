@@ -13,6 +13,7 @@ This boundary prevents stale outputs from being authorized or staging from leaki
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -236,6 +237,35 @@ class FreshnessTests(unittest.TestCase):
             self.assertEqual(1, len(filtered.discovery.tasks))
             self.assertEqual("//pkg:fresh", filtered.discovery.tasks[0].target_label)
             self.assertEqual(("pkg/cached/test.outputs",), filtered.skipped_outputs)
+
+    def test_bep_freshness_is_evaluated_with_ddtest(self) -> None:
+        # The uploader hands its ddtest to the doctor runtime, without the
+        # artifact references when it stages nothing.
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            testlogs = root / "bazel-testlogs"
+            output = testlogs / "pkg" / "target" / "test.outputs"
+            _payload(output)
+            _metadata(output, "//pkg:target")
+            bep = _runfile("tools/tests/python/fixtures/bep_cached_local.ndjson")
+            config = self._config(root, "--freshness-source=bep", "--freshness-mode=required", f"--bep-json={bep}")
+            resolver = RunfilesResolver.from_environment(cwd=root, environ={})
+            expected = prepare_freshness(config, resolver=resolver, local_testlogs_root=testlogs,
+                                         expected_targets=("//pkg:target",))
+            requests = []
+
+            def run(command, **kwargs):
+                requests.append((command, json.loads(kwargs["input"])))
+                return subprocess.CompletedProcess(command, 0, json.dumps({"schema_version": 1, "status": "fallback"}), "")
+
+            with mock.patch("subprocess.run", run):
+                actual = prepare_freshness(config, resolver=resolver, local_testlogs_root=testlogs,
+                                           expected_targets=("//pkg:target",), ddtest=root / "ddtest")
+
+            self.assertEqual([(str(root / "ddtest"), "instrument", "bazel", "freshness")],
+                             [tuple(command) for command, _request in requests])
+            self.assertEqual({"schema_version": 1, "files": [str(bep.resolve())], "references": False}, requests[0][1])
+            self.assertEqual(expected.plan, actual.plan)
 
     def test_reuses_doctor_bep_parser_and_all_cached_target_is_noop(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

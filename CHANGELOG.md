@@ -15,6 +15,48 @@ versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The uploader sends the selected test and coverage payloads with ddtest's
+  native uploader, `ddtest instrument bazel upload`, which prepares and sends
+  them in parallel, and finds payloads with `ddtest instrument bazel discover`,
+  which walks the testlogs in parallel. ddtest also reads each target's
+  metadata sidecar and selects its context, so the uploader builds the plan from
+  paths alone. Artifact staging and telemetry stay in Python. Set
+  `uploader_backend = "python"`, or
+  `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND=python`, to keep the Python workers.
+- The core module downloads ddtest `pre-release-e82c6a0` once for both the
+  uploader and Go instrumentation, which pinned `pre-release-faa3999` before.
+- The uploader's `workers` defaults to `0`: one worker per CPU for ddtest, and
+  8 for the Python workers as before.
+- The doctor lists each test output and parses each target sidecar once per
+  run, and the uploader finds payloads without resolving every file. On 14,000
+  test outputs, the doctor takes about half as long and the uploader's
+  discovery about 40 percent less; reports are unchanged.
+- The doctor lists and decodes test outputs in parallel with the module's
+  ddtest, `ddtest instrument bazel inspect`, and reads only the files that
+  ddtest cannot decode. On 14,000 test outputs it takes about half as long
+  again; reports and messages are unchanged.
+- With batching, each of ddtest's test requests counts on every source that it
+  carried, as with the Python workers, so a failed batch no longer reports its
+  other sources as failed before delivery or their shards as missing.
+- The doctor and the uploader evaluate BEP freshness with ddtest, `ddtest
+  instrument bazel freshness`, which parses the BEP in parallel. For input that
+  the Python parser reads in its own way, ddtest leaves the files to it, so
+  warnings and failures are unchanged.
+- The doctor finds every expected target's outputs with one ddtest discovery,
+  and under strict BEP freshness inspects only the outputs of fresh targets. On
+  14,000 targets with 47 fresh, in a 4-CPU Linux container, the doctor takes
+  1.3 s instead of about 7 s, and the uploader 1.4 s instead of 3.5 s.
+
+### Upgrade notes
+
+- WORKSPACE consumers that declare the module without the Go, Python, or Java
+  helpers call `datadog_test_optimization_ddtest_repositories()` from
+  `//tools/core:ddtest_release.bzl` once; Bzlmod needs no change.
+- ddtest matches CODEOWNERS as GitHub does: in a GitHub file, rules with `!`
+  negation or `[ ]` character classes assign no owners.
+
 ### Fixed
 
 - Consumers can load the mock Datadog server and release helpers from the core

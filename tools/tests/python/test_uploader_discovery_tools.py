@@ -24,8 +24,10 @@ add_uploader_runtime_to_path()
 
 from uploader_py.discovery import (  # noqa: E402
     DiscoveryError,
+    NativeDiscoveryUnavailable,
     ScanRoot,
     discover_file_tasks,
+    discover_file_tasks_with_ddtest,
     payload_latest_mtime,
     resolve_local_testlogs_root,
     tests_executed,
@@ -137,6 +139,13 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual((), discovery.tasks)
             self.assertIn("payload_symlink_skipped", discovery.warning_codes)
 
+    def test_a_failing_ddtest_discovery_raises_for_the_python_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            _payload(root / "pkg" / "test.outputs", "tests", "events.json")
+            with self.assertRaises(NativeDiscoveryUnavailable):
+                discover_file_tasks_with_ddtest(root / "missing-ddtest", (ScanRoot(root),))
+
     def test_unreadable_payload_directory_does_not_hide_valid_siblings(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -148,14 +157,14 @@ class DiscoveryTests(unittest.TestCase):
                 "tests",
                 "events.json",
             )
-            original_iterdir = Path.iterdir
+            original_scandir = os.scandir
 
-            def iterdir(path: Path):
-                if path == unreadable:
+            def scandir(path):
+                if Path(path).resolve() == unreadable:
                     raise PermissionError("unreadable during discovery")
-                return original_iterdir(path)
+                return original_scandir(path)
 
-            with mock.patch.object(Path, "iterdir", iterdir):
+            with mock.patch.object(os, "scandir", scandir):
                 discovery = discover_file_tasks((ScanRoot(root),))
 
             self.assertEqual(
@@ -178,6 +187,33 @@ class DiscoveryTests(unittest.TestCase):
                 self.skipTest(f"directory symlink creation unavailable: {exc}")
 
             discovery = discover_file_tasks((ScanRoot(root),))
+
+            self.assertEqual((), discovery.tasks)
+            self.assertIn("payload_symlink_skipped", discovery.warning_codes)
+
+    def test_a_junction_like_payload_directory_cannot_escape_test_outputs(self) -> None:
+        # A Windows junction is not a symlink to Path.is_symlink(); model one
+        # with a directory link that is_symlink() does not report.
+        with tempfile.TemporaryDirectory() as raw_root:
+            # Discovery resolves its root; match the paths that it checks.
+            root = Path(raw_root).resolve()
+            output = root / "pkg" / "target" / "test.outputs"
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "events.json").write_text("{}", encoding="utf-8")
+            (output / "payloads").mkdir(parents=True)
+            junction = output / "payloads" / "tests"
+            try:
+                junction.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlink creation unavailable: {exc}")
+            original_is_symlink = Path.is_symlink
+
+            def is_symlink(path: Path) -> bool:
+                return False if path == junction else original_is_symlink(path)
+
+            with mock.patch.object(Path, "is_symlink", is_symlink):
+                discovery = discover_file_tasks((ScanRoot(root),))
 
             self.assertEqual((), discovery.tasks)
             self.assertIn("payload_symlink_skipped", discovery.warning_codes)

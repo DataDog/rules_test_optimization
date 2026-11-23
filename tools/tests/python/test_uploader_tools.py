@@ -132,6 +132,7 @@ RULE_ATTRIBUTES = {
     "filter_prefix",
     "gzip_payloads",
     "workers",
+    "uploader_backend",
     "use_python_uploader",
     "data",
     "expected_targets",
@@ -152,6 +153,26 @@ class UploaderConfigTests(unittest.TestCase):
         self.write_config(http_keep_alive="true")
         with self.assertRaises(ConfigError):
             self.parse()
+
+    def test_uploader_backend_comes_from_the_rule_and_the_environment(self) -> None:
+        # A configuration written before the setting keeps the Python workers.
+        self.assertEqual("python", self.parse().uploader_backend)
+        self.write_config(uploader_backend="ddtest")
+        self.assertEqual("ddtest", self.parse().uploader_backend)
+        self.assertEqual("python", self.parse(environ={"DD_TEST_OPTIMIZATION_UPLOADER_BACKEND": " Python "}).uploader_backend)
+        with self.assertRaisesRegex(ConfigError, "DD_TEST_OPTIMIZATION_UPLOADER_BACKEND must be one of"):
+            self.parse(environ={"DD_TEST_OPTIMIZATION_UPLOADER_BACKEND": "node"})
+
+    def test_zero_workers_leave_the_count_to_the_backend(self) -> None:
+        self.write_config(workers=0)
+        config = self.parse()
+        self.assertEqual((DEFAULT_WORKERS, False), (config.workers, config.workers_explicit))
+        config = self.parse(environ={"DD_TEST_OPTIMIZATION_WORKERS": "3"})
+        self.assertEqual((3, True), (config.workers, config.workers_explicit))
+        config = self.parse("--workers", "5")
+        self.assertEqual((5, True), (config.workers, config.workers_explicit))
+        self.write_config(workers=4)
+        self.assertEqual((4, True), (self.parse().workers, self.parse().workers_explicit))
 
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -198,7 +219,8 @@ class UploaderConfigTests(unittest.TestCase):
             "quiescent_sec": -1,
             "max_wait_sec": "300",
             "fail_on_error": 1,
-            "workers": 0,
+            "workers": -1,
+            "uploader_backend": "node",
             "workspace_name": 1,
             "expected_targets": "//pkg:test",
         }
@@ -1188,8 +1210,11 @@ class UploaderContractCharacterizationTests(unittest.TestCase):
         text = _runfile("tools/core/test_optimization_uploader.bzl").read_text(encoding="utf-8")
         for name in RULE_ATTRIBUTES:
             self.assertIn(f'"{name}": attr.', text)
-        self.assertIn('"workers": attr.int(default = 8,', text)
+        self.assertIn('"workers": attr.int(default = 0,', text)
+        self.assertIn('"uploader_backend": attr.string(default = "ddtest", values = ["ddtest", "python"],', text)
         self.assertIn('"use_python_uploader": attr.bool(default = True,', text)
+        self.assertNotIn('"ddtest": attr.', text)
+        self.assertIn('"_ddtest": attr.label(default = "@topt_ddtest//:executable",', text)
 
     def test_python_parser_contains_legacy_and_new_options(self) -> None:
         from uploader_py import config as config_module
