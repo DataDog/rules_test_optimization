@@ -182,6 +182,33 @@ class DiscoveryTests(unittest.TestCase):
             self.assertEqual((), discovery.tasks)
             self.assertIn("payload_symlink_skipped", discovery.warning_codes)
 
+    def test_a_junction_like_payload_directory_cannot_escape_test_outputs(self) -> None:
+        # A Windows junction is not a symlink to Path.is_symlink(); model one
+        # with a directory link that is_symlink() does not report.
+        with tempfile.TemporaryDirectory() as raw_root:
+            # Discovery resolves its root; match the paths that it checks.
+            root = Path(raw_root).resolve()
+            output = root / "pkg" / "target" / "test.outputs"
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "events.json").write_text("{}", encoding="utf-8")
+            (output / "payloads").mkdir(parents=True)
+            junction = output / "payloads" / "tests"
+            try:
+                junction.symlink_to(outside, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"directory symlink creation unavailable: {exc}")
+            original_is_symlink = Path.is_symlink
+
+            def is_symlink(path: Path) -> bool:
+                return False if path == junction else original_is_symlink(path)
+
+            with mock.patch.object(Path, "is_symlink", is_symlink):
+                discovery = discover_file_tasks((ScanRoot(root),))
+
+            self.assertEqual((), discovery.tasks)
+            self.assertIn("payload_symlink_skipped", discovery.warning_codes)
+
     def test_selected_output_never_falls_back_to_stale_local_when_staging_failed(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)

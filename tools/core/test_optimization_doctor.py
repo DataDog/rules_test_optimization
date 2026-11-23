@@ -2185,6 +2185,8 @@ class _RunCache:
         self.payload_facts: dict[Path, tuple[int, bool]] = {}
         # ddtest, until an inspection fails; see _inspect_outputs.
         self.inspector: Path | None = None
+        # Outputs that ddtest inspected, which a Python listing may precede.
+        self.inspected: set[Path] = set()
 
 
 _run_cache: _RunCache | None = None
@@ -2262,7 +2264,7 @@ def _inspect_outputs(output_dirs: list[Path]) -> None:
     """
     if _run_cache is None or _run_cache.inspector is None:
         return
-    pending = list(dict.fromkeys(path for path in output_dirs if path not in _run_cache.output_files))
+    pending = list(dict.fromkeys(path for path in output_dirs if path not in _run_cache.inspected))
     if not pending:
         return
     request = json.dumps({"schema_version": 1, "outputs": [str(path) for path in pending]})
@@ -2286,6 +2288,7 @@ def _inspect_outputs(output_dirs: list[Path]) -> None:
         _run_cache.output_files[output_dir] = files
         _run_cache.payload_facts.update(facts)
         _run_cache.metadata.update(documents)
+        _run_cache.inspected.add(output_dir)
 
 
 def _inspected_output(
@@ -3253,14 +3256,15 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
 
     config_path = Path(args.config).resolve()
     config = _load_json(config_path)
+    execroot = _infer_bazel_execroot(config_path)
+    if execroot is not None and not os.environ.get(DOCTOR_EXECROOT_ENV):
+        os.environ[DOCTOR_EXECROOT_ENV] = str(execroot)
+    # ddtest's path may be relative to the execroot inferred above.
     ddtest = _resolve_configured_optional_runfile(config, config_path, "ddtest_path", "ddtest_short_path")
     if ddtest is not None and not ddtest.is_file():
         _warn(f"ddtest is missing from the doctor's runfiles ({ddtest}); validating the outputs without it")
     elif _run_cache is not None:
         _run_cache.inspector = ddtest
-    execroot = _infer_bazel_execroot(config_path)
-    if execroot is not None and not os.environ.get(DOCTOR_EXECROOT_ENV):
-        os.environ[DOCTOR_EXECROOT_ENV] = str(execroot)
 
     runtime_selection = bool(config.get("runtime_selection", False))
     expected_targets, expected_targets_source = _resolve_expected_targets(

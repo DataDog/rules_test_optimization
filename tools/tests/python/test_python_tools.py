@@ -1816,6 +1816,74 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 self.assertEqual((1, False), self.mod._payload_test_facts(output / "payloads" / "tests" / "a.json"))
             self.assertIn("ddtest could not inspect the outputs (no such command)", stderr.getvalue())
 
+    def _recording_inspection(self, calls: list):
+        """Answer ddtest inspections from the requested outputs, recording each request."""
+        def run(command, **kwargs):
+            outputs = json.loads(kwargs["input"])["outputs"]
+            calls.append(outputs)
+            entries = []
+            for raw in outputs:
+                output = Path(raw)
+                entries.append({
+                    "path": raw,
+                    "json_payloads": [{"path": path.relative_to(output).as_posix(), "decoded": True,
+                                       "test_events": 1, "empty_session": False}
+                                      for path in sorted((output / "payloads").rglob("*.json"))],
+                    "msgpack_payloads": [],
+                    "metadata": [{"path": "bazel_target_metadata.json",
+                                  "document": json.loads((output / "bazel_target_metadata.json").read_text(encoding="utf-8"))}],
+                })
+            report = {"schema_version": 1, "outputs": entries}
+            return subprocess.CompletedProcess(command, 0, json.dumps(report), "")
+        return mock.patch.object(self.mod.subprocess, "run", run)
+
+    def test_discovered_outputs_are_inspected_with_ddtest(self) -> None:
+        # Without expected targets, candidate discovery lists outputs before
+        # the inspection; the listing must not stand in for it.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            config = self._write_doctor_config(root, [])
+            document = json.loads(config.read_text(encoding="utf-8"))
+            (root / "ddtest").write_text("", encoding="utf-8")
+            document["ddtest_path"] = str(root / "ddtest")
+            config.write_text(json.dumps(document), encoding="utf-8")
+            output = self._write_doctor_output(root, "module")
+            calls: list = []
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}), \
+                    self._recording_inspection(calls), contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, self.mod.main(["--config", str(config), "--freshness-mode=disabled"]))
+            self.assertEqual([[str(output)]], calls)
+            self.assertNotIn("warning", stderr.getvalue())
+
+    def test_ddtest_is_found_below_an_inferred_execroot(self) -> None:
+        # Windows bazel run can start the doctor without runfiles variables;
+        # ddtest's execroot-relative path needs the inferred execroot.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            execroot = root / "output_base" / "execroot" / "_main"
+            ddtest = execroot / "external" / "+ddtest+topt_ddtest" / "ddtest"
+            ddtest.parent.mkdir(parents=True)
+            ddtest.write_text("", encoding="utf-8")
+            (execroot / "bazel-out" / "bin").mkdir(parents=True)
+            config = self._write_doctor_config(execroot / "bazel-out" / "bin", [])
+            document = json.loads(config.read_text(encoding="utf-8"))
+            document["ddtest_path"] = "external/+ddtest+topt_ddtest/ddtest"
+            config.write_text(json.dumps(document), encoding="utf-8")
+            testlogs = root / "testlogs"
+            self._write_doctor_output(testlogs, "module")
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in {"RUNFILES_DIR", "RUNFILES_MANIFEST_FILE", "DD_TEST_OPTIMIZATION_DOCTOR_EXECROOT"}}
+            environment.update({"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(testlogs)})
+            calls: list = []
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, environment, clear=True), \
+                    mock.patch.object(self.mod, "_runfiles_roots", return_value=[]), \
+                    self._recording_inspection(calls), contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, self.mod.main(["--config", str(config), "--freshness-mode=disabled"]))
+            self.assertEqual(1, len(calls), stderr.getvalue())
+            self.assertNotIn("missing from the doctor's runfiles", stderr.getvalue())
+
     def test_a_missing_ddtest_warns_and_validates_without_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

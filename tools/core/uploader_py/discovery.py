@@ -174,7 +174,14 @@ def discover_file_tasks(
                 if payload_directory.is_symlink():
                     warnings.append("payload_symlink_skipped")
                 continue
-            if not _safe_payload_directory(payload_directory, output.path):
+            try:
+                if resolved_output is None:
+                    resolved_output = output.path.resolve()
+            except OSError:
+                warnings.append("payload_symlink_skipped")
+                continue
+            resolved_directory = _safe_payload_directory(payload_directory, output.path, resolved_output)
+            if resolved_directory is None:
                 warnings.append("payload_symlink_skipped")
                 continue
             try:
@@ -191,12 +198,10 @@ def discover_file_tasks(
                     continue
                 if suffix not in _PAYLOAD_SUFFIXES or not _entry_is(entry.is_file):
                     continue
-                # Neither the source nor a directory below its output is a
-                # symlink, so it resolves below the output's resolved path.
-                if resolved_output is None:
-                    resolved_output = output.path.resolve()
+                # The source is not a symlink, so it resolves in its
+                # directory's resolved path.
                 relative_source = f"{relative_directory.as_posix()}/{entry.name}"
-                source_key = str(resolved_output / relative_directory / entry.name)
+                source_key = str(resolved_directory / entry.name)
                 if source_key in seen_sources:
                     continue
                 seen_sources.add(source_key)
@@ -315,15 +320,21 @@ def _entry_is(check: Callable[[], bool]) -> bool:
         return False
 
 
-def _safe_payload_directory(path: Path, output: Path) -> bool:
-    """Accept only real payload directories contained by their test output.
+def _safe_payload_directory(path: Path, output: Path, resolved_output: Path) -> Path | None:
+    """Return the resolved payload directory if it is real and inside its output.
 
-    Without a symlink between the output and the directory, and with fixed
-    relative names, the directory resolves below the output's resolved path.
+    Rejecting symlinks is not enough: a Windows junction is not a symlink to
+    is_symlink() and can lead outside the output, so the resolved directory
+    must also lie below the output's resolved path.
     """
     current = output
     for part in path.relative_to(output).parts:
         current /= part
         if current.is_symlink():
-            return False
-    return True
+            return None
+    try:
+        resolved = path.resolve()
+        resolved.relative_to(resolved_output)
+    except (OSError, ValueError):
+        return None
+    return resolved
