@@ -35,12 +35,13 @@ from uploader_py.ddtest_backend import (  # noqa: E402
     NativeUploadSettings,
     _command,
     _environment,
+    _plan_sources,
 )
 from uploader_py.discovery import ScanRoot, discover_file_tasks  # noqa: E402
 from uploader_py.endpoints import EndpointSet  # noqa: E402
 from uploader_py.enrichment import ContextPlan, ContextRecord  # noqa: E402
 from uploader_py.logging_utils import configure_logging  # noqa: E402
-from uploader_py.models import FileStatus, PayloadType  # noqa: E402
+from uploader_py.models import FileStatus, FileTask, PayloadType  # noqa: E402
 from uploader_py.resources import LoadedResources  # noqa: E402
 
 
@@ -339,6 +340,32 @@ class DdtestInvocationTests(unittest.TestCase):
         self.assertIn("--dry-run", command)
         self.assertIn("--batch-test-payloads=true", command)
         self.assertEqual("git.commit.sha", command[command.index("--expected-enriched-tag") + 1])
+
+    def test_plan_paths_are_real_below_a_linked_testlogs_root(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            real = root / "execroot" / "testlogs"
+            output = real / "pkg" / "fixture.topt" / "test.outputs"
+            (output / "payloads" / "tests").mkdir(parents=True)
+            (output / "payloads" / "coverage").mkdir(parents=True)
+            linked = root / "bazel-testlogs"
+            try:
+                linked.symlink_to(real, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+            linked_output = linked / "pkg" / "fixture.topt" / "test.outputs"
+            tasks = (
+                FileTask("file-1", linked_output / "payloads/tests/a.json", "a", PayloadType.TEST, linked_output),
+                FileTask("file-2", linked_output / "payloads/coverage/b.json", "b", PayloadType.COVERAGE, linked_output),
+                FileTask("file-3", linked_output / "payloads/coverage/c.json", "c", PayloadType.COVERAGE),
+            )
+            context = ContextRecord.create("repo", _CONTEXT)
+            sources, _contexts, _warnings = _plan_sources(tasks, ContextPlan(context, (context,)))
+            self.assertEqual(
+                [str(output / "payloads/tests/a.json"), str(output / "payloads/coverage/b.json"),
+                 str(output / "payloads/coverage/c.json")],
+                [source["path"] for source in sources],
+            )
 
 
 if __name__ == "__main__":
