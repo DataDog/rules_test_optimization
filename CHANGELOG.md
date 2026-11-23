@@ -22,7 +22,7 @@ versioning.
   them in parallel. Discovery, freshness, artifact staging and telemetry stay
   in Python. Set `uploader_backend = "python"`, or
   `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND=python`, to keep the Python workers.
-- The core module downloads ddtest `pre-release-adf721e` once for both the
+- The core module downloads ddtest `pre-release-489b45d` once for both the
   uploader and Go instrumentation, which pinned `pre-release-faa3999` before.
 - The uploader's `workers` defaults to `0`: one worker per CPU for ddtest, and
   8 for the Python workers as before.

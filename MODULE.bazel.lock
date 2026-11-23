@@ -207,7 +207,7 @@
   "moduleExtensions": {
     "//tools/core:ddtest_extension.bzl%ddtest": {
       "general": {
-        "bzlTransitiveDigest": "kDolvskqjjDfmsrTIz2dowM+TUEQ03tfQvgV+YD2oP8=",
+        "bzlTransitiveDigest": "+iqApM0OdptkxH8Y33Ojuk+XlhLoMgut886No7y17YY=",
         "usagesDigest": "+1vdkvQxDmgCZT/veiR0Pz4XtHeaZxNXksXo9WLGGPA=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
