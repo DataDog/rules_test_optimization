@@ -60,6 +60,8 @@ def _doctor_impl(ctx):
             "{",
             '  "context_manifest_path": %s,' % json.encode(context_manifest.path),
             '  "context_manifest_short_path": %s,' % json.encode(context_manifest.short_path),
+            '  "ddtest_path": %s,' % json.encode(ctx.file._ddtest.path),
+            '  "ddtest_short_path": %s,' % json.encode(ctx.file._ddtest.short_path),
             '  "expected_targets": %s,' % _json_string_list(ctx.attr.expected_targets),
             '  "expected_targets_file_path": %s,' % json.encode(expected_targets_file.path if expected_targets_file else ""),
             '  "expected_targets_file_short_path": %s,' % json.encode(expected_targets_file.short_path if expected_targets_file else ""),
@@ -383,6 +385,7 @@ exit /b %%ERRORLEVEL%%
     executable = bat_file if is_windows else bash_file
     runfiles_files = [
         ctx.file._runtime,
+        ctx.file._ddtest,
         ctx.file._support_bundle_collector,
         ctx.file._support_bundle_renderer,
         context_manifest,
@@ -412,6 +415,8 @@ dd_test_optimization_doctor = rule(
         "allowed_payload_selections": attr.string_list(default = [], doc = "Optional explicit allowlist for bazel.go.payload_selection values."),
         "expected_payload_selection_by_target": attr.string_dict(default = {}, doc = "Optional map of local target labels to their expected bazel.go.payload_selection value."),
         "_runtime": attr.label(default = "//tools/core:test_optimization_doctor.py", allow_single_file = True),
+        # Lists and decodes the outputs in parallel; see _inspect_outputs.
+        "_ddtest": attr.label(default = "@topt_ddtest//:executable", allow_single_file = True),
         "_diagnostic_runtime": attr.label(default = "//tools/core:diagnostic_runtime"),
         "_support_bundle_collector": attr.label(default = "//tools/test_optimization:create_support_bundle.py", allow_single_file = True),
         "_support_bundle_renderer": attr.label(default = "//tools/test_optimization:render_report_summary.py", allow_single_file = True),

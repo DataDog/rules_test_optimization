@@ -2181,6 +2181,10 @@ class _RunCache:
         self.output_keys: dict[tuple[Path, Path | None], str] = {}
         # Parsed sidecars; callers only read them.
         self.metadata: dict[Path, Any] = {}
+        # Test-event counts and empty-session markers of decoded payloads.
+        self.payload_facts: dict[Path, tuple[int, bool]] = {}
+        # ddtest, until an inspection fails; see _inspect_outputs.
+        self.inspector: Path | None = None
 
 
 _run_cache: _RunCache | None = None
@@ -2246,6 +2250,84 @@ def _output_files(output_dir: Path) -> _OutputFiles:
     if _run_cache is not None:
         _run_cache.output_files[output_dir] = files
     return files
+
+
+def _inspect_outputs(output_dirs: list[Path]) -> None:
+    """List and decode outputs that this run has not seen, with ddtest.
+
+    ddtest lists each output as _output_files does and decodes its payloads
+    and sidecars in parallel; files that it cannot decode are left for the
+    doctor to read, so that its errors stay the same. If ddtest fails, the
+    doctor warns once and reads the outputs itself.
+    """
+    if _run_cache is None or _run_cache.inspector is None:
+        return
+    pending = list(dict.fromkeys(path for path in output_dirs if path not in _run_cache.output_files))
+    if not pending:
+        return
+    request = json.dumps({"schema_version": 1, "outputs": [str(path) for path in pending]})
+    try:
+        completed = subprocess.run(
+            [str(_run_cache.inspector), "instrument", "bazel", "inspect"],
+            input=request, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        report = json.loads(completed.stdout)
+        entries = report["outputs"]
+        if report.get("schema_version") != 1 or len(entries) != len(pending):
+            raise ValueError("unexpected inspection report")
+        inspected = [_inspected_output(output_dir, entry) for output_dir, entry in zip(pending, entries)]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _warn(f"ddtest could not inspect the outputs ({exc}); validating them without it")
+        _run_cache.inspector = None
+        return
+    for output_dir, (files, facts, documents) in zip(pending, inspected):
+        _run_cache.output_files[output_dir] = files
+        _run_cache.payload_facts.update(facts)
+        _run_cache.metadata.update(documents)
+
+
+def _inspected_output(
+    output_dir: Path, entry: dict[str, Any],
+) -> tuple[_OutputFiles, dict[Path, tuple[int, bool]], dict[Path, Any]]:
+    """Read one output of a ddtest inspection report."""
+    if entry["path"] != str(output_dir):
+        raise ValueError(f"inspection report lists {entry['path']} for {output_dir}")
+    facts: dict[Path, tuple[int, bool]] = {}
+    documents: dict[Path, Any] = {}
+    payloads = []
+    for payload in entry["json_payloads"]:
+        path = output_dir / payload["path"]
+        payloads.append(path)
+        if payload["decoded"]:
+            facts[path] = (int(payload["test_events"]), bool(payload["empty_session"]))
+    metadata = []
+    for sidecar in entry["metadata"]:
+        path = output_dir / sidecar["path"]
+        metadata.append(path)
+        if "document" in sidecar:
+            documents[path] = sidecar["document"]
+    files = _OutputFiles(
+        json_payloads=sorted(payloads),
+        msgpack_payloads=sorted(output_dir / name for name in entry["msgpack_payloads"]),
+        metadata=sorted(metadata),
+    )
+    return files, facts, documents
+
+
+def _payload_test_facts(path: Path) -> tuple[int, bool]:
+    """The test-event count and empty-session marker of a JSON payload.
+
+    Reading the payload as _load_json does also validates it; a payload that
+    ddtest decoded is valid JSON, and its facts come from the inspection.
+    """
+    if _run_cache is not None and path in _run_cache.payload_facts:
+        return _run_cache.payload_facts[path]
+    doc = _load_json(path)
+    if not isinstance(doc, dict):
+        return 0, False
+    return test_result_event_count(doc), completed_empty_test_session(doc)
 
 
 def _load_metadata(path: Path) -> Any:
@@ -2406,10 +2488,10 @@ def _validate_outputs(
         if require_json_payloads and not payloads:
             _fail(f"missing JSON payloads under {output_dir}")
         for payload in payloads:
-            doc = _load_json(payload)
-            if output_dir / "payloads" / "tests" in payload.parents and isinstance(doc, dict):
-                has_test_events = has_test_events or test_result_event_count(doc) > 0
-                has_empty_session = has_empty_session or completed_empty_test_session(doc)
+            test_events, empty_session = _payload_test_facts(payload)
+            if output_dir / "payloads" / "tests" in payload.parents:
+                has_test_events = has_test_events or test_events > 0
+                has_empty_session = has_empty_session or empty_session
 
         if require_bazel_metadata and not metadata:
             _fail(f"missing bazel_target_metadata.json under {output_dir}")
@@ -3171,6 +3253,11 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
 
     config_path = Path(args.config).resolve()
     config = _load_json(config_path)
+    ddtest = _resolve_configured_optional_runfile(config, config_path, "ddtest_path", "ddtest_short_path")
+    if ddtest is not None and not ddtest.is_file():
+        _warn(f"ddtest is missing from the doctor's runfiles ({ddtest}); validating the outputs without it")
+    elif _run_cache is not None:
+        _run_cache.inspector = ddtest
     execroot = _infer_bazel_execroot(config_path)
     if execroot is not None and not os.environ.get(DOCTOR_EXECROOT_ENV):
         os.environ[DOCTOR_EXECROOT_ENV] = str(execroot)
@@ -3238,6 +3325,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             if not output_dirs and not staging_requested:
                 _fail(f"no Test Optimization output directories found under {testlogs_dir}")
 
+        _inspect_outputs(output_dirs)
         local_output_keys = {_local_test_output_key(output_dir, testlogs_dir=testlogs_dir) for output_dir in output_dirs}
         staging_enabled = _artifact_staging_enabled(args, local_output_keys)
         if bep_files:
@@ -3370,6 +3458,8 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             missing_root = testlogs_dir if testlogs_dir is not None else workspace / "bazel-testlogs"
             _fail(f"no Test Optimization output directories found under {missing_root}")
 
+        # Staged outputs appear after the first inspection.
+        _inspect_outputs(output_dirs)
         _update_diagnostic_output_summary(
             report,
             _diagnostic_output_entries(

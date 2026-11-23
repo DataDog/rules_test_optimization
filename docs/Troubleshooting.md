@@ -581,6 +581,11 @@ fails before upload.
    BEP references remote-only artifacts, enable BEP artifact resolution with
    `--artifact-source=bep --remote-artifacts=download`.
 
+7. **`ddtest could not inspect the outputs` warning**: The doctor validated
+   the outputs without ddtest, which is slower but checks the same things. The
+   message includes ddtest's error. Check that the doctor target comes from
+   the same rules release as the module's ddtest repository.
+
 ## BEP artifact resolution failures
 
 **Symptom**: The doctor or uploader is configured with BEP freshness, but

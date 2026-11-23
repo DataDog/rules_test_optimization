@@ -211,6 +211,13 @@ Go, Python, and Java helpers declare its repository; a workspace that declares
 the module without them calls `datadog_test_optimization_ddtest_repositories()`
 from `@datadog-rules-test-optimization//tools/core:ddtest_release.bzl` once.
 
+The doctor uses the same executable to list each test output's payloads and
+sidecars and to decode them, one output per CPU, with `ddtest instrument bazel
+inspect`. It keeps its checks, messages, and report, and reads a file itself
+when ddtest cannot decode it, so a broken payload fails with the same error.
+If ddtest is missing or fails, the doctor warns and validates the outputs
+without it.
+
 The `workers` attribute defaults to `0`, which leaves the count to the backend:
 ddtest prepares sources on every CPU and keeps at least 32 requests in flight,
 and the Python workers use 8. A positive `workers`,

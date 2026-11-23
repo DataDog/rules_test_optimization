@@ -1766,6 +1766,70 @@ class TestOptimizationDoctorTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     self.mod._load_metadata(sidecar)
 
+    def _inspection(self, report: dict, returncode: int = 0, stderr: str = ""):
+        """Replace the ddtest inspection with a fixed report."""
+        def run(command, **kwargs):
+            self.assertEqual(["instrument", "bazel", "inspect"], command[1:])
+            return subprocess.CompletedProcess(command, returncode, json.dumps(report), stderr)
+        return mock.patch.object(self.mod.subprocess, "run", run)
+
+    def test_ddtest_inspection_supplies_listings_facts_and_sidecars(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            tests = output / "payloads" / "tests"
+            tests.mkdir(parents=True)
+            # The files disagree with the report, which the doctor must use.
+            (tests / "a.json").write_text('{"events": []}', encoding="utf-8")
+            (tests / "broken.json").write_text("{", encoding="utf-8")
+            (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            report = {"schema_version": 1, "outputs": [{
+                "path": str(output),
+                "json_payloads": [
+                    {"path": "payloads/tests/broken.json", "decoded": False, "test_events": 0, "empty_session": False},
+                    {"path": "payloads/tests/a.json", "decoded": True, "test_events": 3, "empty_session": False},
+                ],
+                "msgpack_payloads": [],
+                "metadata": [{"path": "bazel_target_metadata.json", "document": {"bazel.target": "//pkg:target"}}],
+            }]}
+            with self.mod._cached_filesystem(), self._inspection(report):
+                self.mod._run_cache.inspector = Path("ddtest")
+                self.mod._inspect_outputs([output])
+                self.assertEqual([tests / "a.json", tests / "broken.json"], self.mod._payload_files(output))
+                self.assertEqual((3, False), self.mod._payload_test_facts(tests / "a.json"))
+                self.assertEqual({"bazel.target": "//pkg:target"}, self.mod._load_metadata(output / "bazel_target_metadata.json"))
+                stderr = io.StringIO()
+                with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit):
+                    self.mod._payload_test_facts(tests / "broken.json")
+                self.assertIn("invalid JSON in", stderr.getvalue())
+
+    def test_a_failed_ddtest_inspection_warns_and_reads_the_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "test.outputs"
+            (output / "payloads" / "tests").mkdir(parents=True)
+            (output / "payloads" / "tests" / "a.json").write_text('{"events": [{"type": "test", "content": {}}]}', encoding="utf-8")
+            stderr = io.StringIO()
+            with self.mod._cached_filesystem(), self._inspection({}, returncode=1, stderr="no such command"), \
+                    contextlib.redirect_stderr(stderr):
+                self.mod._run_cache.inspector = Path("ddtest")
+                self.mod._inspect_outputs([output])
+                self.assertIsNone(self.mod._run_cache.inspector)
+                self.assertEqual((1, False), self.mod._payload_test_facts(output / "payloads" / "tests" / "a.json"))
+            self.assertIn("ddtest could not inspect the outputs (no such command)", stderr.getvalue())
+
+    def test_a_missing_ddtest_warns_and_validates_without_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = self._write_doctor_config(root, [])
+            document = json.loads(config.read_text(encoding="utf-8"))
+            document["ddtest_path"] = str(root / "missing-ddtest")
+            config.write_text(json.dumps(document), encoding="utf-8")
+            self._write_doctor_output(root, "module")
+            stderr = io.StringIO()
+            with mock.patch.dict(os.environ, {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root)}), \
+                    contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, self.mod.main(["--config", str(config), "--freshness-mode=disabled"]))
+            self.assertIn("ddtest is missing from the doctor's runfiles", stderr.getvalue())
+
     @staticmethod
     def _write_doctor_config(root: Path, expected_targets: list[str]) -> Path:
         """Create a minimal doctor config for runtime main() tests."""

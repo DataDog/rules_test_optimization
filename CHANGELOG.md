@@ -30,6 +30,10 @@ versioning.
   run, and the uploader finds payloads without resolving every file. On 14,000
   test outputs, the doctor takes about half as long and the uploader's
   discovery about 40 percent less; reports are unchanged.
+- The doctor lists and decodes test outputs in parallel with the module's
+  ddtest, `ddtest instrument bazel inspect`, and reads only the files that
+  ddtest cannot decode. On 14,000 test outputs it takes about half as long
+  again; reports and messages are unchanged.
 
 ### Upgrade notes
 
