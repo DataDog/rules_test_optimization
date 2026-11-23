@@ -27,7 +27,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .discovery import read_bazel_metadata
 from .endpoints import EndpointSet
 from .enrichment import ContextPlan, payload_repo_key
-from .models import FileResult, FileStatus, FileTask, PayloadType
+from .models import FileResult, FileStatus, FileTask, PayloadType, RequestOutcome
 
 PLAN_SCHEMA_VERSION = 1
 
@@ -75,6 +75,8 @@ class NativeUploadRun:
     cancelled: int
     interrupted: bool
     workers: int = 0
+    # The test requests that ddtest sent with batching, which the results name.
+    requests: tuple[RequestOutcome, ...] = ()
 
 
 def is_native_task(task: FileTask) -> bool:
@@ -167,8 +169,17 @@ def run_native_upload(
             cancelled += 1
         else:
             results.append(_result(task, entry, warnings.get(task_id, ())))
+    requests = tuple(
+        RequestOutcome(_request_id(request["request_id"]), tuple(request["source_ids"]), int(request["attempts"]),
+                       request["succeeded"])
+        for request in report.get("batch_requests") or ())
     return NativeUploadRun(results=tuple(results), cancelled=cancelled, interrupted=interrupted or exit_code == 130,
-                           workers=int(report.get("workers", 0)))
+                           workers=int(report.get("workers", 0)), requests=requests)
+
+
+def _request_id(ddtest_id: str) -> str:
+    """Keep ddtest's request IDs apart from those of the Python workers."""
+    return f"ddtest:{ddtest_id}"
 
 
 def _passes_prefix(task: FileTask) -> bool:
@@ -300,6 +311,7 @@ def _result(task: FileTask, entry: Mapping[str, Any], warnings: tuple[str, ...])
         prepared_body_bytes=int(entry.get("prepared_body_bytes", 0)),
         test_events=int(entry.get("test_events", 0)),
         empty_test_session=bool(entry.get("empty_test_session", False)),
+        request_ids=tuple(_request_id(request_id) for request_id in entry.get("request_ids") or ()),
     )
 
 

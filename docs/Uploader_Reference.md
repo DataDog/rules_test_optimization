@@ -218,6 +218,13 @@ when ddtest cannot decode it, so a broken payload fails with the same error.
 If ddtest is missing or fails, the doctor warns and validates the outputs
 without it.
 
+With the ddtest backend, the uploader also finds the payloads with `ddtest
+instrument bazel discover`, which walks and lists the testlogs in parallel and
+applies the same rules as the Python discovery. One difference applies on
+Windows: a junction below a test output is refused even when it points inside
+the output. If ddtest fails, the uploader reports the
+`ddtest_discovery_unavailable` warning and discovers the payloads in Python.
+
 The `workers` attribute defaults to `0`, which leaves the count to the backend:
 ddtest prepares sources on every CPU and keeps at least 32 requests in flight,
 and the Python workers use 8. A positive `workers`,
@@ -233,9 +240,10 @@ in its runfiles, or the payloads share no root directory, as Windows paths on
 different drives do, the uploader uses the Python workers and reports the
 `ddtest_backend_unavailable` warning. A ddtest run that ends without its report
 fails its sources with `ddtest_upload_failed` and keeps them for the next run.
-The JSON report keeps its format; ddtest counts a batch's shared request on the
-batch's first source, and `batching.request_sources` lists only requests that
-the Python workers sent. ddtest matches CODEOWNERS as GitHub and GitLab do: in
+The JSON report keeps its format. With batching, each of ddtest's test
+requests counts on every source that it carried and appears once in
+`batching.request_sources`, with a `ddtest:` prefix, as the Python workers'
+batches do. ddtest matches CODEOWNERS as GitHub and GitLab do: in
 a GitHub file, it ignores rules with `!` negation or `[ ]` character classes,
 which GitHub does not apply, while the Python workers apply character classes.
 

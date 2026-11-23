@@ -15,6 +15,7 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import subprocess
 import time
 from typing import Callable, Iterable
 
@@ -233,6 +234,60 @@ def discover_file_tasks(
         discovered_by_type=count_tasks_by_payload_type(tasks),
         warning_codes=tuple(dict.fromkeys(warnings)),
     )
+
+
+class NativeDiscoveryUnavailable(RuntimeError):
+    """ddtest could not discover the payloads; Python discovery applies."""
+
+
+def discover_file_tasks_with_ddtest(
+    ddtest: Path,
+    scan_roots: Iterable[ScanRoot],
+    *,
+    max_depth: int = 0,
+    staged_output_keys: Iterable[str] = (),
+) -> DiscoveryResult:
+    """discover_file_tasks, with ddtest walking and listing in parallel.
+
+    ddtest instrument bazel discover applies the same rules, so the result is
+    the one that discover_file_tasks returns; the roots are normalized here, as
+    there, and a ddtest failure raises NativeDiscoveryUnavailable.
+    """
+    if max_depth < 0:
+        raise DiscoveryError("max_depth must be non-negative")
+    normalized_roots = _normalize_scan_roots(scan_roots)
+    request = json.dumps({
+        "schema_version": 1,
+        "scan_roots": [{"path": str(root.path), "staged": root.staged} for root in normalized_roots],
+        "max_depth": max_depth,
+        "staged_output_keys": [key for key in staged_output_keys if key],
+    })
+    try:
+        completed = subprocess.run([str(ddtest), "instrument", "bazel", "discover"], input=request,
+                                   capture_output=True, text=True, encoding="utf-8", check=False)
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        report = json.loads(completed.stdout)
+        if report.get("schema_version") != 1:
+            raise ValueError("unexpected discovery report")
+        outputs = tuple(DiscoveredOutput(path=Path(entry["path"]), output_key=entry["output_key"],
+                                         scan_root=Path(entry["scan_root"]), staged=bool(entry["staged"]))
+                        for entry in report["outputs"])
+        tasks = tuple(
+            FileTask(
+                task_id=f"file-{index:06d}",
+                source_path=outputs[source["output"]].path / "payloads" / source["directory"] / source["name"],
+                display_path=f"{outputs[source['output']].output_key}/payloads/{source['directory']}/{source['name']}",
+                payload_type=PayloadType(source["payload_type"]),
+                test_outputs_dir=outputs[source["output"]].path,
+                output_key=outputs[source["output"]].output_key,
+            )
+            for index, source in enumerate(report["sources"], start=1))
+        warnings = tuple(str(code) for code in report["warnings"])
+    except (OSError, ValueError, KeyError, IndexError, TypeError) as exc:
+        raise NativeDiscoveryUnavailable(str(exc)) from exc
+    return DiscoveryResult(outputs=outputs, tasks=tasks, discovered_by_type=count_tasks_by_payload_type(tasks),
+                           warning_codes=warnings)
 
 
 def payload_latest_mtime(discovery: DiscoveryResult) -> float:

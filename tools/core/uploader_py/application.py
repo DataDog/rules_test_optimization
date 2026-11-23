@@ -27,9 +27,11 @@ from .coordinator import CoordinatorSettings, run_discovered_tasks
 from .discovery import (
     DiscoveryError,
     DiscoveryResult,
+    NativeDiscoveryUnavailable,
     ScanRoot,
     count_tasks_by_payload_type,
     discover_file_tasks,
+    discover_file_tasks_with_ddtest,
     resolve_local_testlogs_root,
     tests_executed,
     wait_for_quiescence,
@@ -204,6 +206,7 @@ def _run_uploader_with_lock(
                 freshness_preparation,
                 no_expected_payloads=no_expected_payloads,
                 logger=logger,
+                ddtest=_ddtest_executable(config, resolver),
             )
 
             expected_discovery = select_expected_outputs(
@@ -622,21 +625,43 @@ def _discover_payloads(
     *,
     no_expected_payloads: bool,
     logger: logging.Logger,
+    ddtest: Path | None = None,
 ) -> DiscoveryResult:
-    """Discover a stable source-file snapshot after freshness has authorized it."""
+    """Discover a stable source-file snapshot after freshness has authorized it.
+
+    With the ddtest backend, ddtest walks and lists the testlogs in parallel;
+    if it fails, the uploader warns once and discovers in Python.
+    """
     selected_output_keys = {
         output_key
         for _label, output_key in preparation.plan.selected_artifact_outputs
     }
     for output_key in sorted(selected_output_keys):
         logger.debug("freshness eligible output_key=%s", output_key)
+    native: list[Path] = [ddtest] if ddtest is not None else []
+    fallback_warnings: list[str] = []
 
     def scan() -> DiscoveryResult:
-        return discover_file_tasks(
+        if native:
+            try:
+                return discover_file_tasks_with_ddtest(
+                    native[0],
+                    preparation.scan_roots,
+                    max_depth=config.max_depth,
+                    staged_output_keys=selected_output_keys,
+                )
+            except NativeDiscoveryUnavailable as exc:
+                logger.warning("ddtest_discovery_unavailable: discovering payloads in Python (%s)", exc)
+                native.clear()
+                fallback_warnings.append("ddtest_discovery_unavailable")
+        discovery = discover_file_tasks(
             preparation.scan_roots,
             max_depth=config.max_depth,
             staged_output_keys=selected_output_keys,
         )
+        if fallback_warnings:
+            discovery = replace(discovery, warning_codes=tuple(dict.fromkeys(fallback_warnings + list(discovery.warning_codes))))
+        return discovery
 
     if no_expected_payloads:
         logger.debug(

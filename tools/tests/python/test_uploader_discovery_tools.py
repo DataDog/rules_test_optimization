@@ -24,8 +24,10 @@ add_uploader_runtime_to_path()
 
 from uploader_py.discovery import (  # noqa: E402
     DiscoveryError,
+    NativeDiscoveryUnavailable,
     ScanRoot,
     discover_file_tasks,
+    discover_file_tasks_with_ddtest,
     payload_latest_mtime,
     resolve_local_testlogs_root,
     tests_executed,
@@ -136,6 +138,13 @@ class DiscoveryTests(unittest.TestCase):
 
             self.assertEqual((), discovery.tasks)
             self.assertIn("payload_symlink_skipped", discovery.warning_codes)
+
+    def test_a_failing_ddtest_discovery_raises_for_the_python_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_root:
+            root = Path(raw_root)
+            _payload(root / "pkg" / "test.outputs", "tests", "events.json")
+            with self.assertRaises(NativeDiscoveryUnavailable):
+                discover_file_tasks_with_ddtest(root / "missing-ddtest", (ScanRoot(root),))
 
     def test_unreadable_payload_directory_does_not_hide_valid_siblings(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:

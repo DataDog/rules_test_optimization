@@ -37,7 +37,7 @@ from uploader_py.ddtest_backend import (  # noqa: E402
     _environment,
     _plan_sources,
 )
-from uploader_py.discovery import ScanRoot, discover_file_tasks  # noqa: E402
+from uploader_py.discovery import ScanRoot, discover_file_tasks, discover_file_tasks_with_ddtest  # noqa: E402
 from uploader_py.endpoints import EndpointSet  # noqa: E402
 from uploader_py.enrichment import ContextPlan, ContextRecord  # noqa: E402
 from uploader_py.logging_utils import configure_logging  # noqa: E402
@@ -115,6 +115,7 @@ class _Intake(ThreadingHTTPServer):
         super().__init__(("127.0.0.1", 0), _Handler)
         self.lock = threading.Lock()
         self.requests: list[tuple[str, dict[str, str], bytes]] = []
+        self.test_status = 202
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -127,7 +128,7 @@ class _Handler(BaseHTTPRequestHandler):
             body = gzip.decompress(body)
         with self.server.lock:
             self.server.requests.append((self.path, dict(self.headers), body))
-        self.send_response(202)
+        self.send_response(self.server.test_status if self.path.endswith("/citestcycle") else 202)
         self.send_header("Content-Length", "0")
         self.end_headers()
 
@@ -231,6 +232,42 @@ class DdtestBackendTests(unittest.TestCase):
             self.assertEqual("//pkg:fixture.topt", meta["bazel.target"])
             self.assertEqual("@team", meta["test.codeowners"].strip('[]"'))
 
+    def test_a_failed_ddtest_batch_records_every_source_as_attempted(self) -> None:
+        # Freshness accepts a failed test payload as delivery evidence only if
+        # a request carried it; every source of a failed batch must show one.
+        executable = _ddtest_executable()
+        with tempfile.TemporaryDirectory() as raw, _intake() as server:
+            root = Path(raw)
+            testlogs = _corpus(root)
+            for name in ("second", "third"):
+                outputs = testlogs / "pkg" / f"{name}.topt" / "test.outputs"
+                _write(outputs / "payloads" / "tests" / "tests-1.json", _TEST_PAYLOAD)
+                _write(outputs / "bazel_target_metadata.json", {"bazel.target": f"//pkg:{name}.topt", "bazel.package": "pkg"})
+            server.test_status = 403
+            report = run_discovered_tasks(
+                discover_file_tasks((ScanRoot(testlogs),)),
+                settings=_settings(root, "ddtest", executable, batch_test_payloads=True),
+                endpoints=_endpoints(server.server_port),
+                resources=_resources(),
+                identifier_factory=lambda: "stable-runtime",
+            )
+            with server.lock:
+                test_posts = sum(path.endswith("/citestcycle") for path, _headers, _body in server.requests)
+
+            tests = [result for result in report.results if result.payload_type is PayloadType.TEST]
+            self.assertEqual(3, len(tests))
+            self.assertEqual(1, test_posts)
+            for result in tests:
+                self.assertEqual(FileStatus.FAILED, result.status, result)
+                self.assertEqual(1, result.requests_attempted, result)
+                self.assertEqual(1, len(result.request_ids), result)
+            batch = report.statistics()["batching"]
+            self.assertEqual(1, batch["shared_requests"])
+            self.assertEqual({result.task_id for result in tests},
+                             set(next(iter(batch["request_sources"].values()))))
+            # The shared request counts once, beside the coverage and telemetry requests.
+            self.assertEqual(3, report.statistics()["requests"]["attempted"])
+
     def test_ddtest_and_python_send_the_same_test_events(self) -> None:
         executable = _ddtest_executable()
         received = {}
@@ -299,6 +336,40 @@ class DdtestBackendTests(unittest.TestCase):
             self.assertTrue(all("prefix_filter" in result.warning_codes for result in report.results
                                 if result.status is FileStatus.SKIPPED))
             self.assertEqual(["/api/v2/apmtelemetry"], [path for path, _h, _b in requests])
+
+
+class DdtestDiscoveryTests(unittest.TestCase):
+    def test_ddtest_discovers_what_python_discovers(self) -> None:
+        executable = _ddtest_executable()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            local, staged, outside = root / "testlogs", root / "staged", root / "outside"
+            outside.mkdir()
+            (outside / "elsewhere.json").write_text("{}", encoding="utf-8")
+            for name in ("a.json", "B.JSON", "c.json.gz", ".json", "x."):
+                _write(local / "pkg" / "t" / "test.outputs" / "payloads" / "tests" / name, {})
+            _write(local / "pkg" / "t" / "test.outputs" / "payloads" / "coverage" / "c.msgpack", {})
+            _write(local / "pkg" / "t" / "test.outputs" / "bazel_target_metadata.json", {})
+            _write(local / "pkg" / "t" / "test_attempts" / "attempt_1.outputs" / "payloads" / "tests" / "r.json", {})
+            _write(local / "pkg" / "inner" / "test.outputs" / "pkg" / "test.outputs" / "payloads" / "tests" / "n.json", {})
+            _write(local / "pkg" / "s" / "test.outputs" / "payloads" / "tests" / "local.json", {})
+            _write(staged / "pkg" / "s" / "test.outputs" / "payloads" / "tests" / "staged.json", {})
+            _write(local / "pkg" / "stale" / "test.outputs" / "payloads" / "tests" / "stale.json", {})
+            (local / "pkg" / "l" / "test.outputs" / "payloads").mkdir(parents=True)
+            try:
+                (local / "pkg" / "l" / "test.outputs" / "payloads" / "tests").symlink_to(outside, target_is_directory=True)
+                (local / "pkg" / "t" / "test.outputs" / "payloads" / "tests" / "link.json").symlink_to(outside / "elsewhere.json")
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+            roots = (ScanRoot(staged, staged=True), ScanRoot(local))
+            keys = ("pkg/s/test.outputs", "pkg/stale/test.outputs")
+
+            expected = discover_file_tasks(roots, staged_output_keys=keys)
+            actual = discover_file_tasks_with_ddtest(executable, roots, staged_output_keys=keys)
+
+            self.assertEqual(expected, actual)
+            self.assertIn("payload_symlink_skipped", actual.warning_codes)
+            self.assertIn("selected_staged_output_missing", actual.warning_codes)
 
 
 class DdtestInvocationTests(unittest.TestCase):

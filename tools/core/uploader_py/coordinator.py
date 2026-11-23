@@ -327,7 +327,7 @@ def run_discovered_tasks(
         results=results,
         cancelled=cancelled,
         initialization_warning_codes=initialization_warnings,
-        requests=worker_run.requests,
+        requests=worker_run.requests + native.requests,
         native_workers=native.workers,
     )
     if logger is not None:
