@@ -167,6 +167,7 @@ def discover_file_tasks(
     discovered_sources: list[tuple[Path, str, PayloadType, DiscoveredOutput]] = []
     seen_sources: set[str] = set()
     for output in outputs:
+        resolved_output: Path | None = None
         for payload_type, relative_directory in _PAYLOAD_SUBDIRECTORIES:
             payload_directory = output.path / relative_directory
             if not payload_directory.is_dir():
@@ -177,25 +178,29 @@ def discover_file_tasks(
                 warnings.append("payload_symlink_skipped")
                 continue
             try:
-                sources = sorted(
-                    payload_directory.iterdir(),
-                    key=lambda item: item.name,
-                )
+                with os.scandir(payload_directory) as entries:
+                    sources = sorted(entries, key=lambda item: item.name)
             except OSError:
                 warnings.append("payload_directory_unreadable")
                 continue
-            for source_path in sources:
-                if source_path.is_symlink():
-                    if source_path.suffix.lower() in _PAYLOAD_SUFFIXES:
+            for entry in sources:
+                suffix = Path(entry.name).suffix.lower()
+                if _entry_is(entry.is_symlink):
+                    if suffix in _PAYLOAD_SUFFIXES:
                         warnings.append("payload_symlink_skipped")
                     continue
-                if not source_path.is_file() or source_path.suffix.lower() not in _PAYLOAD_SUFFIXES:
+                if suffix not in _PAYLOAD_SUFFIXES or not _entry_is(entry.is_file):
                     continue
-                source_key = str(source_path.resolve(strict=False))
+                # Neither the source nor a directory below its output is a
+                # symlink, so it resolves below the output's resolved path.
+                if resolved_output is None:
+                    resolved_output = output.path.resolve()
+                relative_source = f"{relative_directory.as_posix()}/{entry.name}"
+                source_key = str(resolved_output / relative_directory / entry.name)
                 if source_key in seen_sources:
                     continue
                 seen_sources.add(source_key)
-                relative_source = source_path.relative_to(output.path).as_posix()
+                source_path = payload_directory / entry.name
                 display_path = f"{output.output_key}/{relative_source}"
                 discovered_sources.append(
                     (source_path, display_path, payload_type, output)
@@ -302,15 +307,23 @@ def _find_test_outputs(root: Path, *, max_depth: int) -> tuple[Path, ...]:
     return find_test_output_directories(root, max_depth=max_depth)
 
 
+def _entry_is(check: Callable[[], bool]) -> bool:
+    """A DirEntry type check that is false on errors, as Path's checks are."""
+    try:
+        return check()
+    except OSError:
+        return False
+
+
 def _safe_payload_directory(path: Path, output: Path) -> bool:
-    """Accept only real payload directories contained by their test output."""
+    """Accept only real payload directories contained by their test output.
+
+    Without a symlink between the output and the directory, and with fixed
+    relative names, the directory resolves below the output's resolved path.
+    """
     current = output
     for part in path.relative_to(output).parts:
         current /= part
         if current.is_symlink():
             return False
-    try:
-        path.resolve().relative_to(output.resolve())
-    except (OSError, ValueError):
-        return False
     return True

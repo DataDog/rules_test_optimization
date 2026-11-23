@@ -148,14 +148,14 @@ class DiscoveryTests(unittest.TestCase):
                 "tests",
                 "events.json",
             )
-            original_iterdir = Path.iterdir
+            original_scandir = os.scandir
 
-            def iterdir(path: Path):
-                if path == unreadable:
+            def scandir(path):
+                if Path(path).resolve() == unreadable:
                     raise PermissionError("unreadable during discovery")
-                return original_iterdir(path)
+                return original_scandir(path)
 
-            with mock.patch.object(Path, "iterdir", iterdir):
+            with mock.patch.object(os, "scandir", scandir):
                 discovery = discover_file_tasks((ScanRoot(root),))
 
             self.assertEqual(

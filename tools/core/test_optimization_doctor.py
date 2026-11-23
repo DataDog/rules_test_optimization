@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
+import fnmatch
 import http.client
 import importlib.util
 import hashlib
@@ -24,7 +26,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from typing import Any, Iterable
+from typing import Any, Iterable, Iterator
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -1603,23 +1605,23 @@ def _merge_staged_output_dirs(
     merged_target_by_output_dir = dict(target_by_output_dir)
     for output_dir in output_dirs:
         if _local_test_output_key(output_dir, testlogs_dir=testlogs_dir) in selected_keys:
-            merged_target_by_output_dir.pop(output_dir.resolve(), None)
+            merged_target_by_output_dir.pop(_resolved(output_dir), None)
             continue
         if _output_dir_target_label(output_dir, merged_target_by_output_dir) in blocked_bep_artifact_labels:
-            merged_target_by_output_dir.pop(output_dir.resolve(), None)
+            merged_target_by_output_dir.pop(_resolved(output_dir), None)
             continue
         merged_output_dirs.append(output_dir)
     for item in staged:
         merged_output_dirs.append(item.output_dir)
-        merged_target_by_output_dir[item.output_dir.resolve()] = item.label
+        merged_target_by_output_dir[_resolved(item.output_dir)] = item.label
     return merged_output_dirs, merged_target_by_output_dir
 
 
 def _output_dir_target_label(output_dir: Path, target_by_output_dir: dict[Path, str]) -> str | None:
     """Return the Bazel target label associated with a test.outputs directory."""
-    fallback = target_by_output_dir.get(output_dir.resolve())
+    fallback = target_by_output_dir.get(_resolved(output_dir))
     for metadata_file in _metadata_files(output_dir):
-        metadata = _load_json(metadata_file)
+        metadata = _load_metadata(metadata_file)
         if isinstance(metadata, dict):
             return _metadata_target_label(metadata, fallback)
     return fallback
@@ -1916,9 +1918,19 @@ def _parse_bep_freshness(
 
 def _local_test_output_key(output_dir: Path, *, testlogs_dir: Path | None = None) -> str:
     """Return a stable bazel-testlogs-relative key for a local test.outputs directory."""
+    if _run_cache is None:
+        return _compute_local_test_output_key(output_dir, testlogs_dir)
+    cache_key = (output_dir, testlogs_dir)
+    key = _run_cache.output_keys.get(cache_key)
+    if key is None:
+        key = _run_cache.output_keys[cache_key] = _compute_local_test_output_key(output_dir, testlogs_dir)
+    return key
+
+
+def _compute_local_test_output_key(output_dir: Path, testlogs_dir: Path | None) -> str:
     if testlogs_dir is not None:
         try:
-            relative = output_dir.resolve().relative_to(testlogs_dir.resolve())
+            relative = _resolved(output_dir).relative_to(_resolved(testlogs_dir))
         except ValueError:
             pass
         else:
@@ -1976,7 +1988,7 @@ def _validate_expected_target_bep_freshness(
     fresh_output_dirs = []
     fresh_labels = set()
     for output_dir in output_dirs:
-        explicit_output_key = output_key_by_output_dir.get(output_dir.resolve())
+        explicit_output_key = output_key_by_output_dir.get(_resolved(output_dir))
         candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
         if not candidate_labels:
             continue
@@ -1989,13 +2001,13 @@ def _validate_expected_target_bep_freshness(
                 f"BEP required freshness cannot authorize {output_dir} because "
                 "bazel_target_metadata.json is missing."
             )
-        metadata = _load_json(metadata_files[0]) if metadata_files else {}
+        metadata = _load_metadata(metadata_files[0]) if metadata_files else {}
         if isinstance(metadata, dict):
             label = _metadata_target_label(metadata, None) or ""
-        label = label_by_output_dir.get(output_dir.resolve(), label)
+        label = label_by_output_dir.get(_resolved(output_dir), label)
         if not label and not require_bazel_metadata and len(candidate_labels) == 1:
             label = next(iter(candidate_labels))
-            label_by_output_dir[output_dir.resolve()] = label
+            label_by_output_dir[_resolved(output_dir)] = label
         if not label:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
@@ -2044,12 +2056,12 @@ def _validate_discovered_bep_freshness(
 
     local_labels: set[str] = set()
     for output_dir in output_dirs:
-        explicit_label = label_by_output_dir.get(output_dir.resolve())
+        explicit_label = label_by_output_dir.get(_resolved(output_dir))
         if explicit_label:
             local_labels.add(explicit_label)
             continue
         for metadata_file in _metadata_files(output_dir):
-            metadata = _load_json(metadata_file)
+            metadata = _load_metadata(metadata_file)
             if isinstance(metadata, dict):
                 label = _metadata_target_label(metadata, None)
                 if label:
@@ -2058,14 +2070,14 @@ def _validate_discovered_bep_freshness(
     output_index = _BepOutputIndex(freshness.eligible_outputs)
     fresh_output_dirs = []
     for output_dir in output_dirs:
-        explicit_output_key = output_key_by_output_dir.get(output_dir.resolve())
+        explicit_output_key = output_key_by_output_dir.get(_resolved(output_dir))
         candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
         if not candidate_labels:
             continue
         metadata_files = _metadata_files(output_dir)
         if not _payload_files(output_dir) and not _msgpack_payload_files(output_dir):
             for metadata_file in metadata_files:
-                metadata = _load_json(metadata_file)
+                metadata = _load_metadata(metadata_file)
                 label = _metadata_target_label(metadata, None) if isinstance(metadata, dict) else None
                 if label in candidate_labels:
                     freshness.identified_labels.add(label)
@@ -2075,12 +2087,12 @@ def _validate_discovered_bep_freshness(
                 f"BEP required freshness cannot authorize {output_dir} because "
                 "bazel_target_metadata.json is missing."
             )
-        metadata = _load_json(metadata_files[0]) if metadata_files else {}
+        metadata = _load_metadata(metadata_files[0]) if metadata_files else {}
         label = _metadata_target_label(metadata, None) if isinstance(metadata, dict) else None
-        label = label_by_output_dir.get(output_dir.resolve(), label)
+        label = label_by_output_dir.get(_resolved(output_dir), label)
         if not label and not require_bazel_metadata and len(candidate_labels) == 1:
             label = next(iter(candidate_labels))
-            label_by_output_dir[output_dir.resolve()] = label
+            label_by_output_dir[_resolved(output_dir)] = label
         if not label:
             _fail(
                 f"BEP required freshness cannot authorize {output_dir} because "
@@ -2146,26 +2158,127 @@ def _discover_candidate_output_dirs(testlogs_dir: Path) -> list[Path]:
     ]
 
 
-def _payload_files(output_dir: Path) -> list[Path]:
+class _OutputFiles:
+    """The payload and Bazel metadata files of one test.outputs directory."""
+
+    def __init__(self, json_payloads: list[Path], msgpack_payloads: list[Path], metadata: list[Path]) -> None:
+        self.json_payloads = tuple(json_payloads)
+        self.msgpack_payloads = tuple(msgpack_payloads)
+        self.metadata = tuple(metadata)
+
+
+class _RunCache:
+    """Filesystem answers that stay fixed while one doctor run validates outputs.
+
+    The doctor reads test outputs and never changes them, and staging writes
+    new directories, so each output is listed, each path resolved and each
+    sidecar parsed once. Cleanup still resolves paths when it runs.
+    """
+
+    def __init__(self) -> None:
+        self.output_files: dict[Path, _OutputFiles] = {}
+        self.resolved: dict[Path, Path] = {}
+        self.output_keys: dict[tuple[Path, Path | None], str] = {}
+        # Parsed sidecars; callers only read them.
+        self.metadata: dict[Path, Any] = {}
+
+
+_run_cache: _RunCache | None = None
+
+
+@contextmanager
+def _cached_filesystem() -> Iterator[None]:
+    """Reuse output listings, resolved paths and sidecars for one run."""
+    global _run_cache
+    previous, _run_cache = _run_cache, _RunCache()
+    try:
+        yield
+    finally:
+        _run_cache = previous
+
+
+def _resolved(path: Path) -> Path:
+    """Return path.resolve(), once per path during a run."""
+    if _run_cache is None:
+        return path.resolve()
+    resolved = _run_cache.resolved.get(path)
+    if resolved is None:
+        resolved = _run_cache.resolved[path] = path.resolve()
+    return resolved
+
+
+def _matching_files(root: Path, patterns: tuple[str, ...]) -> list[Path]:
+    """Files below root whose names match a pattern, as Path.rglob finds them.
+
+    Like rglob, it descends into real directories only, keeps symlinks to
+    files, and matches names case-insensitively only on Windows.
+    """
+    matches: list[Path] = []
+    pending = [str(root)]
+    while pending:
+        try:
+            with os.scandir(pending.pop()) as scan:
+                entries = list(scan)
+        except OSError:
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(entry.path)
+                elif any(fnmatch.fnmatch(entry.name, pattern) for pattern in patterns) and entry.is_file():
+                    matches.append(Path(entry.path))
+            except OSError:
+                continue
+    return matches
+
+
+def _output_files(output_dir: Path) -> _OutputFiles:
+    """List an output's payloads and metadata, reusing the listing during a run."""
+    if _run_cache is not None and output_dir in _run_cache.output_files:
+        return _run_cache.output_files[output_dir]
     payload_root = output_dir / "payloads"
-    if not payload_root.exists():
-        return []
-    return sorted(path for path in payload_root.rglob("*.json") if path.is_file())
+    payloads = _matching_files(payload_root, ("*.json", "*.msgpack", "*.msgpack.gz")) if payload_root.exists() else []
+    files = _OutputFiles(
+        json_payloads=sorted(path for path in payloads if fnmatch.fnmatch(path.name, "*.json")),
+        msgpack_payloads=sorted(path for path in payloads if not fnmatch.fnmatch(path.name, "*.json")),
+        metadata=sorted(_matching_files(output_dir, ("bazel_target_metadata.json",))),
+    )
+    if _run_cache is not None:
+        _run_cache.output_files[output_dir] = files
+    return files
+
+
+def _load_metadata(path: Path) -> Any:
+    """Load a bazel_target_metadata.json file as _load_json does, once per run."""
+    if _run_cache is None:
+        return _load_json(path)
+    if path not in _run_cache.metadata:
+        _run_cache.metadata[path] = _load_json(path)
+    return _run_cache.metadata[path]
+
+
+def _report_metadata(path: Path) -> Any:
+    """Load a sidecar for the diagnostic report, as _read_json_for_report does."""
+    if _run_cache is not None and path in _run_cache.metadata:
+        return _run_cache.metadata[path]
+    doc = _read_json_for_report(path)
+    # Only a successful read is shared, so validation still reports a broken file.
+    if _run_cache is not None and doc is not None:
+        _run_cache.metadata[path] = doc
+    return doc
+
+
+def _payload_files(output_dir: Path) -> list[Path]:
+    return list(_output_files(output_dir).json_payloads)
 
 
 def _msgpack_payload_files(output_dir: Path) -> list[Path]:
     """Return raw msgpack payload files emitted under a Bazel test output tree."""
-    payload_root = output_dir / "payloads"
-    if not payload_root.exists():
-        return []
-    files = []
-    for pattern in ("*.msgpack", "*.msgpack.gz"):
-        files.extend(path for path in payload_root.rglob(pattern) if path.is_file())
-    return sorted(files)
+    return list(_output_files(output_dir).msgpack_payloads)
 
 
 def _metadata_files(output_dir: Path) -> list[Path]:
-    return sorted(path for path in output_dir.rglob("bazel_target_metadata.json") if path.is_file())
+    return list(_output_files(output_dir).metadata)
 
 
 def _load_contexts(context_manifest: Path) -> list[tuple[str, Path]]:
@@ -2276,7 +2389,7 @@ def _validate_outputs(
     for output_dir in output_dirs:
         has_test_events = False
         has_empty_session = False
-        output_label = target_lookup.get(output_dir.resolve())
+        output_label = target_lookup.get(_resolved(output_dir))
         payloads = _payload_files(output_dir)
         msgpack_payloads = _msgpack_payload_files(output_dir)
         metadata = _metadata_files(output_dir)
@@ -2301,7 +2414,7 @@ def _validate_outputs(
         if require_bazel_metadata and not metadata:
             _fail(f"missing bazel_target_metadata.json under {output_dir}")
         for metadata_file in metadata:
-            doc = _load_json(metadata_file)
+            doc = _load_metadata(metadata_file)
             selection = doc.get("bazel.go.payload_selection")
             if selection == "full_bundle_importpath_miss":
                 ip, root = doc.get("bazel.go.importpath"), doc.get("bazel.go.runtime_module_path")
@@ -2320,7 +2433,7 @@ def _validate_outputs(
             if selection is not None:
                 selection_summary[selection] = selection_summary.get(selection, 0) + 1
 
-            target_label = _metadata_target_label(doc, target_lookup.get(output_dir.resolve()))
+            target_label = _metadata_target_label(doc, target_lookup.get(_resolved(output_dir)))
             output_label = output_label or target_label
             if target_label and target_label in expected_selections:
                 expected = expected_selections[target_label]
@@ -2331,9 +2444,9 @@ def _validate_outputs(
                     )
 
         if empty_session_outputs is not None and has_empty_session and output_label:
-            empty_session_outputs[output_dir.resolve()] = output_label
+            empty_session_outputs[_resolved(output_dir)] = output_label
         if test_result_outputs is not None and has_test_events and output_label:
-            test_result_outputs[output_dir.resolve()] = output_label
+            test_result_outputs[_resolved(output_dir)] = output_label
 
     if require_json_payloads and payload_count == 0:
         _fail("no JSON payload files were found under selected test.outputs directories")
@@ -2531,7 +2644,7 @@ def _diagnostic_metadata(output_dir: Path, fallback_label: str | None) -> dict[s
         "payload_selection": "",
     }
     for metadata_file in metadata_files:
-        doc = _read_json_for_report(metadata_file)
+        doc = _report_metadata(metadata_file)
         if not isinstance(doc, dict):
             continue
         target = _metadata_target_label(doc, fallback_label)
@@ -2552,10 +2665,10 @@ def _diagnostic_output_entries(
     testlogs_dir: Path | None,
 ) -> list[dict[str, Any]]:
     """Build report entries for local and staged test output directories."""
-    staged_by_dir = {item.output_dir.resolve(): item for item in staged}
+    staged_by_dir = {_resolved(item.output_dir): item for item in staged}
     entries = []
     for output_dir in output_dirs:
-        resolved = output_dir.resolve()
+        resolved = _resolved(output_dir)
         staged_item = staged_by_dir.get(resolved)
         fallback_label = target_by_output_dir.get(resolved)
         metadata = _diagnostic_metadata(output_dir, fallback_label)
@@ -3014,7 +3127,8 @@ def main(argv: list[str]) -> int:
     args = _parse_args(argv)
     report = _new_diagnostic_report(args)
     try:
-        rc = _run_doctor(args, report)
+        with _cached_filesystem():
+            rc = _run_doctor(args, report)
     except SystemExit as exc:
         _record_diagnostic_failure(report, exc)
         _write_requested_diagnostics(args, report)
@@ -3117,7 +3231,7 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
                 )
                 output_dirs.extend(target_output_dirs)
                 for output_dir in target_output_dirs:
-                    target_by_output_dir[output_dir.resolve()] = label
+                    target_by_output_dir[_resolved(output_dir)] = label
         else:
             output_dirs = _discover_candidate_output_dirs(testlogs_dir) if testlogs_dir is not None else []
             target_by_output_dir = {}
@@ -3206,8 +3320,8 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
 
         if args.freshness_mode != "disabled" and freshness is not None:
             required = policy.strict_bep
-            output_key_by_output_dir = {item.output_dir.resolve(): item.output_key for item in staged}
-            label_by_output_dir = {item.output_dir.resolve(): item.label for item in staged}
+            output_key_by_output_dir = {_resolved(item.output_dir): item.output_key for item in staged}
+            label_by_output_dir = {_resolved(item.output_dir): item.label for item in staged}
             if expected_targets:
                 output_dirs = _validate_expected_target_bep_freshness(
                     output_dirs,

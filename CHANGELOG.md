@@ -26,6 +26,10 @@ versioning.
   uploader and Go instrumentation, which pinned `pre-release-faa3999` before.
 - The uploader's `workers` defaults to `0`: one worker per CPU for ddtest, and
   8 for the Python workers as before.
+- The doctor lists each test output and parses each target sidecar once per
+  run, and the uploader finds payloads without resolving every file. On 14,000
+  test outputs, the doctor takes about half as long and the uploader's
+  discovery about 40 percent less; reports are unchanged.
 
 ### Upgrade notes
 
