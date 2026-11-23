@@ -200,7 +200,8 @@ network access.
 The uploader selects payloads as before: it waits for outputs, applies
 freshness, stages remote artifacts, and loads contexts and CODEOWNERS. It then
 hands the selected test and coverage payloads to `ddtest instrument bazel
-upload`, ddtest's native uploader, in one plan. ddtest enriches, validates,
+upload`, ddtest's native uploader, in one plan. ddtest reads each target's
+metadata sidecar, selects its context, and enriches, validates,
 batches and sends them in parallel, and deletes or retains each source as the
 Python workers do. Telemetry payloads still go through the Python workers.
 
@@ -216,7 +217,17 @@ sidecars and to decode them, one output per CPU, with `ddtest instrument bazel
 inspect`. It keeps its checks, messages, and report, and reads a file itself
 when ddtest cannot decode it, so a broken payload fails with the same error.
 If ddtest is missing or fails, the doctor warns and validates the outputs
-without it.
+without it. With expected targets, the doctor also finds every target's outputs
+with one `ddtest instrument bazel discover` call, and under strict BEP freshness
+inspects only the outputs of fresh targets.
+
+Both the doctor and the uploader evaluate BEP freshness with `ddtest instrument
+bazel freshness`, which parses the BEP files in parallel and computes the same
+fresh and cached outputs, executions and completeness errors as the Python
+parser. When a file holds input that the Python parser reads in its own way,
+such as an invalid JSON line, ddtest leaves the files to it, so warnings and
+failures stay the same. If ddtest fails, the doctor warns with `ddtest could not
+evaluate the BEP` and parses the files in Python.
 
 With the ddtest backend, the uploader also finds the payloads with `ddtest
 instrument bazel discover`, which walks and lists the testlogs in parallel and

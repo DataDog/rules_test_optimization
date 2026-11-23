@@ -584,7 +584,10 @@ fails before upload.
 7. **`ddtest could not inspect the outputs` warning**: The doctor validated
    the outputs without ddtest, which is slower but checks the same things. The
    message includes ddtest's error. Check that the doctor target comes from
-   the same rules release as the module's ddtest repository.
+   the same rules release as the module's ddtest repository. The `ddtest could
+   not find the expected targets' outputs` and `ddtest could not evaluate the
+   BEP` warnings mean the same for the expected-target lookup and the BEP
+   freshness evaluation.
 
 ## BEP artifact resolution failures
 

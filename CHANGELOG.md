@@ -20,10 +20,12 @@ versioning.
 - The uploader sends the selected test and coverage payloads with ddtest's
   native uploader, `ddtest instrument bazel upload`, which prepares and sends
   them in parallel, and finds payloads with `ddtest instrument bazel discover`,
-  which walks the testlogs in parallel. Freshness, artifact staging and
-  telemetry stay in Python. Set `uploader_backend = "python"`, or
+  which walks the testlogs in parallel. ddtest also reads each target's
+  metadata sidecar and selects its context, so the uploader builds the plan from
+  paths alone. Artifact staging and telemetry stay in Python. Set
+  `uploader_backend = "python"`, or
   `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND=python`, to keep the Python workers.
-- The core module downloads ddtest `pre-release-27b423d` once for both the
+- The core module downloads ddtest `pre-release-e82c6a0` once for both the
   uploader and Go instrumentation, which pinned `pre-release-faa3999` before.
 - The uploader's `workers` defaults to `0`: one worker per CPU for ddtest, and
   8 for the Python workers as before.
@@ -38,6 +40,14 @@ versioning.
 - With batching, each of ddtest's test requests counts on every source that it
   carried, as with the Python workers, so a failed batch no longer reports its
   other sources as failed before delivery or their shards as missing.
+- The doctor and the uploader evaluate BEP freshness with ddtest, `ddtest
+  instrument bazel freshness`, which parses the BEP in parallel. For input that
+  the Python parser reads in its own way, ddtest leaves the files to it, so
+  warnings and failures are unchanged.
+- The doctor finds every expected target's outputs with one ddtest discovery,
+  and under strict BEP freshness inspects only the outputs of fresh targets. On
+  14,000 targets with 47 fresh, in a 4-CPU Linux container, the doctor takes
+  1.3 s instead of about 7 s, and the uploader 1.4 s instead of 3.5 s.
 
 ### Upgrade notes
 

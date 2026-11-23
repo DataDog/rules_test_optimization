@@ -137,8 +137,12 @@ def prepare_freshness(
     expected_targets: Iterable[str] = (),
     logger: logging.Logger | None = None,
     staging_owner: StagingOwnership | None = None,
+    ddtest: Path | None = None,
 ) -> FreshnessPreparation:
-    """Parse freshness and optionally stage BEP artifacts before discovery."""
+    """Parse freshness and optionally stage BEP artifacts before discovery.
+
+    With ddtest, the doctor runtime parses the BEP files with it in parallel.
+    """
     expected_target_set = frozenset(expected_targets)
     warning_codes: list[str] = []
     bep_configured = bool(config.bep_json_files)
@@ -184,6 +188,8 @@ def prepare_freshness(
                 list(bep_files),
                 unavailable_is_error=freshness_unavailable_is_error,
                 workspace=config.workspace,
+                ddtest=ddtest,
+                references=staging_requested,
             )
             if doctor_freshness is not None:
                 if staging_requested:

@@ -8,10 +8,12 @@
 
 The Python uploader still discovers the payloads, applies freshness and stages
 remote artifacts. This module hands the selected test and coverage sources to
-`ddtest instrument bazel upload` in one plan, with the context and Bazel
-metadata that the Python enrichment would use, and turns ddtest's report back
-into file results. ddtest enriches, validates, batches and sends them in
-parallel, and deletes or retains each source as the Python workers do.
+`ddtest instrument bazel upload` in one plan, with each test source's output
+directory and the invocation's context selection, and turns ddtest's report
+back into file results. ddtest reads each target's Bazel metadata, selects its
+context, and enriches, validates, batches and sends the sources in parallel,
+as the Python enrichment would. It deletes or retains each source as the
+Python workers do.
 """
 
 from __future__ import annotations
@@ -24,9 +26,8 @@ from pathlib import Path
 import subprocess
 from typing import Any, Iterable, Mapping, Sequence
 
-from .discovery import read_bazel_metadata
 from .endpoints import EndpointSet
-from .enrichment import ContextPlan, payload_repo_key
+from .enrichment import ContextPlan
 from .models import FileResult, FileStatus, FileTask, PayloadType, RequestOutcome
 
 PLAN_SCHEMA_VERSION = 1
@@ -109,16 +110,21 @@ def run_native_upload(
     if not selected:
         return NativeUploadRun(results=filtered, cancelled=0, interrupted=False)
 
-    sources, contexts, warnings = _plan_sources(selected, context_plan)
+    sources, contexts, selection, warnings = _plan_sources(selected, context_plan)
     codeowners = _real_path(settings.codeowners_file) if settings.codeowners_file else None
-    root = _common_root([Path(source["path"]) for source in sources] + ([codeowners] if codeowners else []))
+    root = _common_root([Path(source["path"]) for source in sources]
+                        + [Path(source["output"]) for source in sources if "output" in source]
+                        + ([codeowners] if codeowners else []))
     for source in sources:
-        source["path"] = os.path.relpath(source["path"], root)
+        for key in ("path", "output"):
+            if key in source:
+                source[key] = os.path.relpath(source[key], root)
     plan: dict[str, Any] = {
         "schema_version": PLAN_SCHEMA_VERSION,
         "rules_version": settings.rules_version,
         "runtime_id": runtime_id,
         "contexts": contexts,
+        "context_selection": selection,
         "sources": sources,
     }
     if codeowners is not None:
@@ -190,38 +196,77 @@ def _passes_prefix(task: FileTask) -> bool:
 def _plan_sources(
     tasks: Iterable[FileTask],
     context_plan: ContextPlan,
-) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, tuple[str, ...]]]:
-    """The plan's sources and contexts, and the warnings that Python's enrichment reports."""
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[str, Any], dict[str, tuple[str, ...]]]:
+    """The plan's sources, contexts and context selection, and the warnings that ddtest does not report.
+
+    A test source names its output directory, and ddtest reads its sidecar and
+    selects its context as the Python enrichment does. A test source without
+    one has no sidecar, so its context is selected here.
+    """
+    contexts = _ContextNames()
+    selection: dict[str, Any] = {
+        "by_repo": [{"repo": record.repo_key, "context": contexts.name(record.values)}
+                    for record in context_plan.by_repo],
+        "override": context_plan.override,
+        "require_repo_match": context_plan.require_repo_match,
+    }
+    if context_plan.primary is not None:
+        selection["primary"] = contexts.name(context_plan.primary.values)
     sources: list[dict[str, Any]] = []
-    contexts: dict[str, Any] = {}
-    # One plan context per distinct context, so that sources sharing it can
-    # share a batch, whatever repository key selected it.
-    context_names: dict[str, str] = {}
     warnings: dict[str, tuple[str, ...]] = {}
+    real_outputs: dict[Path, Path] = {}
     for task in tasks:
-        source: dict[str, Any] = {
-            "id": task.task_id,
-            "path": str(_real_path(task.source_path)),
-            "kind": task.payload_type.value,
-        }
+        path, output = _real_paths(task, real_outputs)
+        source: dict[str, Any] = {"id": task.task_id, "path": str(path), "kind": task.payload_type.value}
         if task.payload_type is PayloadType.TEST:
-            metadata, sidecar_warning = read_bazel_metadata(task.test_outputs_dir)
-            repo_key = payload_repo_key(metadata)
-            selection = context_plan.select(repo_key)
-            codes = tuple(code for code in (sidecar_warning, selection.warning_code) if code)
-            if codes:
-                warnings[task.task_id] = codes
-            if metadata:
-                source["bazel_metadata"] = metadata
-            if selection.values is not None:
-                identity = json.dumps(selection.values, sort_keys=True, default=str)
-                name = context_names.get(identity)
-                if name is None:
-                    name = context_names[identity] = f"context-{len(context_names) + 1}"
-                    contexts[name] = dict(selection.values)
-                source["context"] = name
+            if output is not None:
+                source["output"] = str(output)
+            else:
+                chosen = context_plan.select(None)
+                if chosen.warning_code:
+                    warnings[task.task_id] = (chosen.warning_code,)
+                if chosen.values is not None:
+                    source["context"] = contexts.name(chosen.values)
         sources.append(source)
-    return sources, contexts, warnings
+    return sources, contexts.values, selection, warnings
+
+
+class _ContextNames:
+    """One plan context per distinct context, so that sources sharing it can
+    share a batch, whatever repository key selected it."""
+
+    def __init__(self) -> None:
+        self.values: dict[str, Any] = {}
+        self._names: dict[str, str] = {}
+
+    def name(self, values: Mapping[str, Any]) -> str:
+        identity = json.dumps(values, sort_keys=True, default=str)
+        name = self._names.get(identity)
+        if name is None:
+            name = self._names[identity] = f"context-{len(self._names) + 1}"
+            self.values[name] = dict(values)
+        return name
+
+
+def _real_paths(task: FileTask, real_outputs: dict[Path, Path]) -> tuple[Path, Path | None]:
+    """A source's real path, and that of its output directory when it is below it.
+
+    Discovery refuses links below an output, so a source's real path is its
+    path below the output's real path, and one resolution serves every source
+    of an output.
+    """
+    output = task.test_outputs_dir
+    if output is not None:
+        try:
+            relative = task.source_path.relative_to(output)
+        except ValueError:
+            relative = None
+        if relative is not None and relative.parts and ".." not in relative.parts:
+            real_output = real_outputs.get(output)
+            if real_output is None:
+                real_output = real_outputs[output] = _real_path(output)
+            return real_output / relative, real_output
+    return _real_path(task.source_path), None
 
 
 def _real_path(path: Path) -> Path:

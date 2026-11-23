@@ -173,6 +173,7 @@ def _run_uploader_with_lock(
                 expected_targets=expected_targets_plan.targets,
                 logger=logger,
                 staging_owner=staging_owner,
+                ddtest=_ddtest_executable(config, resolver),
             )
         freshness_plan = freshness_preparation.plan
         logger.debug(

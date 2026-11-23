@@ -279,6 +279,63 @@ class DdtestBackendTests(unittest.TestCase):
         self.assertEqual(1, sum(received["python"].values()))
         self.assertEqual(received["python"], received["ddtest"])
 
+    def test_ddtest_reads_sidecars_and_selects_contexts_as_python_does(self) -> None:
+        # ddtest reads each target's sidecar and selects its context itself;
+        # its warnings, results and events must match Python's enrichment.
+        executable = _ddtest_executable()
+        one = ContextRecord.create("one", _CONTEXT)
+        two = ContextRecord.create("two", _CONTEXT | {"git.commit.sha": "fedcba"})
+        resources = LoadedResources(ContextPlan(one, (one, two)), dict(_CONTEXT), None, (), None)
+        sidecars = {
+            "one": '{"bazel.target": "//pkg:one", "bazel.package": "pkg", '
+                   '"bazel.test_optimization.repo_name": "one", "shard": 1.50, "big": 1e16}',
+            "two": '﻿{"bazel.target": "//pkg:two", "bazel.package": "pkg", '
+                   '"bazel.test_optimization.repo_name": "two"}',
+            "unknown": '{"bazel.target": "//pkg:unknown", "bazel.test_optimization.repo_name": "three"}',
+            "unnamed": '{"bazel.target": "//pkg:unnamed", "bazel.package": "pkg"}',
+            "invalid": '{"bazel.target": ',
+            "array": '[]',
+            "missing": None,
+            "linked": None,
+        }
+        outcomes = {}
+        events = {}
+        for backend in ("python", "ddtest"):
+            with tempfile.TemporaryDirectory() as raw, _intake() as server:
+                root = Path(raw)
+                testlogs = root / "bazel-testlogs"
+                for name, sidecar in sidecars.items():
+                    outputs = testlogs / "pkg" / f"{name}.topt" / "test.outputs"
+                    _write(outputs / "payloads" / "tests" / "tests-1.json", _TEST_PAYLOAD)
+                    if sidecar is not None:
+                        (outputs / "bazel_target_metadata.json").write_text(sidecar, encoding="utf-8")
+                linked = testlogs / "pkg" / "linked.topt" / "test.outputs" / "bazel_target_metadata.json"
+                try:
+                    linked.symlink_to(testlogs / "pkg" / "one.topt" / "test.outputs" / "bazel_target_metadata.json")
+                except OSError as exc:
+                    self.skipTest(f"symlinks unavailable: {exc}")
+                (root / "CODEOWNERS").write_text("*.go @team\n", encoding="utf-8")
+                report = run_discovered_tasks(
+                    discover_file_tasks((ScanRoot(testlogs),)),
+                    settings=_settings(root, backend, executable, expected_enriched_tags=("git.commit.sha",)),
+                    endpoints=_endpoints(server.server_port),
+                    resources=resources,
+                    identifier_factory=lambda: "stable-runtime",
+                )
+                with server.lock:
+                    events[backend] = _test_events(server.requests)
+                outcomes[backend] = {result.source_path: (result.status, result.warning_codes, result.failure_code)
+                                     for result in report.results}
+        warnings = {path.split("/")[1]: outcome[1] for path, outcome in outcomes["python"].items()}
+        self.assertEqual(("context_repo_not_found",), warnings["unknown.topt"][:1])
+        self.assertEqual(("context_repo_metadata_missing",), warnings["unnamed.topt"][:1])
+        self.assertEqual(("bazel_metadata_invalid", "context_repo_metadata_missing"), warnings["invalid.topt"][:2])
+        self.assertEqual(("bazel_metadata_unsafe", "context_repo_metadata_missing"), warnings["linked.topt"][:2])
+        self.assertEqual(outcomes["python"], outcomes["ddtest"])
+        # Only the two targets whose repository has a context are sent.
+        self.assertEqual(2, sum(events["python"].values()))
+        self.assertEqual(events["python"], events["ddtest"])
+
     def test_dry_run_keeps_sources_and_sends_nothing(self) -> None:
         executable = _ddtest_executable()
         with tempfile.TemporaryDirectory() as raw, _intake() as server:
@@ -431,7 +488,7 @@ class DdtestInvocationTests(unittest.TestCase):
                 FileTask("file-3", linked_output / "payloads/coverage/c.json", "c", PayloadType.COVERAGE),
             )
             context = ContextRecord.create("repo", _CONTEXT)
-            sources, _contexts, _warnings = _plan_sources(tasks, ContextPlan(context, (context,)))
+            sources, _contexts, _selection, _warnings = _plan_sources(tasks, ContextPlan(context, (context,)))
             self.assertEqual(
                 [str(output / "payloads/tests/a.json"), str(output / "payloads/coverage/b.json"),
                  str(output / "payloads/coverage/c.json")],

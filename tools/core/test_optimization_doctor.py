@@ -135,12 +135,19 @@ class BepFreshness:
         ambiguous_outputs: set[str] | None = None,
         ambiguous_labels: set[str] | None = None,
         completeness_errors: list[tuple[str, str]] | None = None,
+        artifact_reference_count: int | None = None,
+        artifact_reference_labels: set[str] | None = None,
     ) -> None:
         self.eligible_outputs = eligible_outputs
         self.cached_outputs = cached_outputs
         self.remote_only_outputs = remote_only_outputs
         self.missing_output_mappings = missing_output_mappings
         self.artifact_references = artifact_references or []
+        # ddtest counts the references without listing them when nothing stages them.
+        self.artifact_reference_count = (len(self.artifact_references) if artifact_reference_count is None
+                                         else artifact_reference_count)
+        self.artifact_reference_labels = ({ref.label for ref in self.artifact_references}
+                                          if artifact_reference_labels is None else artifact_reference_labels)
         self.skipped_targets = skipped_targets or set()
         self.executions = executions or []
         self.ambiguous_outputs = ambiguous_execution_outputs(self.executions).union(
@@ -707,6 +714,46 @@ def _expected_target_outputs(testlogs_dir: Path | None, label: str, *, allow_mis
             return []
         _fail(_missing_expected_target_message(label, target_root, "test.outputs directory"))
     return output_dirs
+
+
+def _expected_targets_outputs(
+    testlogs_dir: Path | None, labels: list[str], *, allow_missing: bool = False,
+) -> list[tuple[str, list[Path]]]:
+    """Each expected target's outputs, as _expected_target_outputs finds them.
+
+    With ddtest, one discovery walks every target root in parallel; if it
+    fails, the doctor warns and walks them itself.
+    """
+    if testlogs_dir is None or _run_cache is None or _run_cache.inspector is None:
+        return [(label, _expected_target_outputs(testlogs_dir, label, allow_missing=allow_missing)) for label in labels]
+    roots = [_expected_target_root(testlogs_dir, label) for label in labels]
+    request = json.dumps({"schema_version": 1, "scan_roots": [], "max_depth": 0, "staged_output_keys": [],
+                          "target_roots": [str(root) for root in roots]})
+    try:
+        completed = subprocess.run(
+            [str(_run_cache.inspector), "instrument", "bazel", "discover"],
+            input=request, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        report = json.loads(completed.stdout)
+        targets = report["targets"]
+        if report.get("schema_version") != 1 or len(targets) != len(roots) or any(
+                target["root"] != str(root) for target, root in zip(targets, roots)):
+            raise ValueError("unexpected discovery report")
+        found = [(bool(target["exists"]), [Path(path) for path in target["outputs"]]) for target in targets]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _warn(f"ddtest could not find the expected targets' outputs ({exc}); finding them without it")
+        return [(label, _expected_target_outputs(testlogs_dir, label, allow_missing=allow_missing)) for label in labels]
+    results = []
+    for label, root, (exists, outputs) in zip(labels, roots, found):
+        if not exists or not outputs:
+            if not allow_missing:
+                _fail(_missing_expected_target_message(
+                    label, root, "test.outputs directory" if exists else "output root"))
+            outputs = []
+        results.append((label, outputs))
+    return results
 
 
 def _missing_expected_target_message(label: str, target_root: Path, missing_part: str) -> str:
@@ -1679,13 +1726,118 @@ def _bep_execution_identity(invocation: str, result_id: dict[str, Any]) -> tuple
     return (invocation, result_id["label"], configuration_id, *indexes)
 
 
+class _Carrier:
+    """The fields of a BEP artifact reference that _bep_carrier_identity reads."""
+
+    def __init__(self, fetch_value: str, remote_only: bool) -> None:
+        self.fetch_value = fetch_value
+        self.remote_only = remote_only
+
+
+def _bep_freshness_with_ddtest(
+    bep_files: list[Path], *, workspace: Path, ddtest: Path, references: bool,
+) -> BepFreshness | None:
+    """Evaluate BEP freshness with ddtest, or return None to evaluate it here.
+
+    ddtest parses the events in parallel and computes what the loop of
+    _parse_bep_freshness computes. For a missing file, or input that the
+    Python reads in its own way, it leaves the files to the Python loop, so
+    that its warnings and failures stay the same.
+    """
+    files: list[Path] = []
+    for bep_file in bep_files:
+        canonical_file = bep_file.resolve()
+        if canonical_file in files:
+            continue
+        if not bep_file.is_file():
+            return None
+        files.append(canonical_file)
+    request = json.dumps({"schema_version": 1, "files": [str(path) for path in files], "references": references})
+    try:
+        completed = subprocess.run(
+            [str(ddtest), "instrument", "bazel", "freshness"],
+            input=request, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        report = json.loads(completed.stdout)
+        if report.get("schema_version") != 1:
+            raise ValueError("unexpected freshness report")
+        if report["status"] != "ok":
+            return None
+        if len(report["documents"]) != len(files):
+            raise ValueError("unexpected freshness report")
+        invocations = [
+            None if document["skip"] else ("uuid:" + document["uuid"] if document["uuid"] else "file:" + str(path))
+            for path, document in zip(files, report["documents"])
+        ]
+        executions = [
+            BepTestExecution(
+                (invocations[document], label, configuration, run, shard, attempt),
+                cached=cached,
+                status=status,
+                output_keys=frozenset(keys),
+                carriers=tuple(sorted((key, _bep_carrier_identity(_Carrier(fetch, remote), workspace))
+                                      for key, fetch, remote in carriers)),
+            )
+            for document, label, configuration, run, shard, attempt, cached, status, keys, carriers in report["executions"]
+        ]
+        labels = report["labels"]
+        artifact_references = []
+        for label_index, kind, first, second, third, fourth, output_key, flags in report["references"]:
+            if kind == 0:
+                candidates = [value for value in (first, second, third, fourth) if value]
+                fetch_value = first or third or fourth or (candidates[0] if candidates else "")
+                uri, name, path = first, second, third
+            else:
+                candidates = [first] if kind == 1 else []
+                fetch_value = first
+                uri = name = path = ""
+            artifact_references.append(BepArtifactReference(
+                label=labels[label_index], uri=uri, name=name, path=path, candidates=candidates,
+                fetch_value=fetch_value, output_key=output_key, cached=bool(flags & 1), remote_only=bool(flags & 2),
+                is_test_outputs_hint=bool(flags & 4), fetch_is_stageable_carrier=bool(flags & 8),
+            ))
+        freshness = BepFreshness(
+            eligible_outputs={tuple(pair) for pair in report["eligible_outputs"]},
+            cached_outputs={tuple(pair) for pair in report["cached_outputs"]},
+            remote_only_outputs=[BepRemoteOnlyOutput(label, key, artifact, "remote_only")
+                                 for label, key, artifact in report["remote_only_outputs"]],
+            missing_output_mappings=set(report["missing_output_mappings"]),
+            artifact_references=artifact_references,
+            skipped_targets=set(report["skipped_targets"]),
+            executions=executions,
+            ambiguous_outputs=set(report["ambiguous_outputs"]),
+            ambiguous_labels=set(report["ambiguous_labels"]),
+            completeness_errors=[tuple(error) for error in report["completeness_errors"]],
+            artifact_reference_count=None if references else int(report["reference_count"]),
+            artifact_reference_labels=None if references else set(report["reference_labels"]),
+        )
+    except (OSError, ValueError, KeyError, TypeError, IndexError) as exc:
+        _warn(f"ddtest could not evaluate the BEP ({exc}); evaluating it without ddtest")
+        return None
+    return freshness
+
+
 def _parse_bep_freshness(
     bep_files: list[Path],
     *,
     unavailable_is_error: bool = True,
     workspace: Path | None = None,
+    ddtest: Path | None = None,
+    references: bool = True,
 ) -> BepFreshness | None:
-    """Parse BEP JSON files and return concrete fresh/cached output mappings."""
+    """Parse BEP JSON files and return concrete fresh/cached output mappings.
+
+    With ddtest, the files are parsed in parallel; references=False then
+    counts the artifact references without listing them, for callers that
+    do not stage artifacts.
+    """
+    if ddtest is not None:
+        freshness = _bep_freshness_with_ddtest(bep_files, workspace=workspace or Path.cwd(), ddtest=ddtest,
+                                               references=references)
+        if freshness is not None:
+            return freshness
     eligible_outputs: set[tuple[str, str]] = set()
     cached_outputs: set[tuple[str, str]] = set()
     remote_only_outputs: list[BepRemoteOnlyOutput] = []
@@ -1985,13 +2137,16 @@ def _validate_expected_target_bep_freshness(
     bep_cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
     cached_only_labels = exclusively_cached_labels(freshness.executions) if freshness.executions else bep_cached_labels.difference(bep_fresh_labels)
     output_index = _BepOutputIndex(freshness.eligible_outputs)
-    fresh_output_dirs = []
-    fresh_labels = set()
+    candidates = []
     for output_dir in output_dirs:
         explicit_output_key = output_key_by_output_dir.get(_resolved(output_dir))
         candidate_labels = output_index.labels_for(output_dir, explicit_output_key)
-        if not candidate_labels:
-            continue
+        if candidate_labels:
+            candidates.append((output_dir, candidate_labels))
+    _inspect_outputs([output_dir for output_dir, _labels in candidates])
+    fresh_output_dirs = []
+    fresh_labels = set()
+    for output_dir, candidate_labels in candidates:
         if not _payload_files(output_dir) and not _msgpack_payload_files(output_dir):
             continue
         metadata_files = _metadata_files(output_dir)
@@ -2845,7 +3000,7 @@ def _update_diagnostic_bep(
         for label, _ in freshness.eligible_outputs.union(freshness.cached_outputs)
     }
     seen_targets.update(item.label for item in freshness.remote_only_outputs)
-    seen_targets.update(ref.label for ref in freshness.artifact_references)
+    seen_targets.update(freshness.artifact_reference_labels)
     seen_targets.update(freshness.skipped_targets)
     expected = set(report.get("targets", {}).get("expected", []))
     cached_labels = set(_target_labels_from_pairs(freshness.cached_outputs))
@@ -2871,7 +3026,7 @@ def _update_diagnostic_bep(
             "strict_completeness": resolve_freshness_policy(report["config"]["freshness_mode"], "bep").strict_bep,
             "missing_output_mappings": sorted(freshness.missing_output_mappings),
             "skipped_targets": sorted(freshness.skipped_targets),
-            "artifact_references": len(freshness.artifact_references),
+            "artifact_references": freshness.artifact_reference_count,
             "selected_artifact_outputs": _sorted_pairs(selected_bep_artifact_outputs or set()),
             "blocked_artifact_labels": sorted(blocked_bep_artifact_labels or set()),
         }
@@ -3314,12 +3469,11 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
         if expected_targets:
             output_dirs = []
             target_by_output_dir = {}
-            for label in expected_targets:
-                target_output_dirs = _expected_target_outputs(
-                    testlogs_dir,
-                    label,
-                    allow_missing=staging_requested or bool(bep_files),
-                )
+            for label, target_output_dirs in _expected_targets_outputs(
+                testlogs_dir,
+                expected_targets,
+                allow_missing=staging_requested or bool(bep_files),
+            ):
                 output_dirs.extend(target_output_dirs)
                 for output_dir in target_output_dirs:
                     target_by_output_dir[_resolved(output_dir)] = label
@@ -3329,15 +3483,22 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
             if not output_dirs and not staging_requested:
                 _fail(f"no Test Optimization output directories found under {testlogs_dir}")
 
-        _inspect_outputs(output_dirs)
         local_output_keys = {_local_test_output_key(output_dir, testlogs_dir=testlogs_dir) for output_dir in output_dirs}
         staging_enabled = _artifact_staging_enabled(args, local_output_keys)
+        # Strict BEP freshness reads only the outputs of fresh expected
+        # targets, and inspects them when it selects them; otherwise the
+        # doctor may read every output.
+        if not (expected_targets and bep_files and args.freshness_mode != "disabled" and policy.strict_bep
+                and not staging_enabled):
+            _inspect_outputs(output_dirs)
         if bep_files:
             if args.freshness_mode != "disabled" or staging_enabled:
                 freshness = _parse_bep_freshness(
                     bep_files,
                     unavailable_is_error=staging_enabled or args.freshness_mode != "optional",
                     workspace=workspace,
+                    ddtest=_run_cache.inspector if _run_cache is not None else None,
+                    references=staging_enabled,
                 )
                 _update_diagnostic_bep(report, freshness)
         elif strict_bep_required:

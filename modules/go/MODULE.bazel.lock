@@ -158,7 +158,7 @@
   "moduleExtensions": {
     "//:topt_go_ddtest_extension.bzl%topt_go_ddtest": {
       "general": {
-        "bzlTransitiveDigest": "oSN6dTnE/xHURzDCr96IYOMKQb3fiO1oHISj/s68+3M=",
+        "bzlTransitiveDigest": "DrjFvwp14iHiYFOgW//+7gLYRkoFr50qAxOq2Jh3L3o=",
         "usagesDigest": "K/EqJDZ6RsTtTAYW++bzgQEizOOQfllQNurb6PlRLac=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_skylib bazel_skylib+",
@@ -1201,7 +1201,7 @@
     },
     "@@datadog-rules-test-optimization+//tools/core:ddtest_extension.bzl%ddtest": {
       "general": {
-        "bzlTransitiveDigest": "1BngqfpG+iJO+8x+89qvjc7Tdu2kwy8oCmYJv8rYIQY=",
+        "bzlTransitiveDigest": "A3JHNAvpv26vvDI8sqWXDAnTaSjb+LIa5hZwVps4br4=",
         "usagesDigest": "SVW3NqB4PMeZfTxk1KKqIBsMHn5+JOSiJem43mUFmNs=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
