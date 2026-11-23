@@ -1724,6 +1724,48 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         )
         return output
 
+    def test_output_listing_finds_what_rglob_finds(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output = root / "pkg" / "target" / "test.outputs"
+            payloads = output / "payloads"
+            for relative in ("tests/a.json", "tests/nested/b.json", "coverage/c.msgpack", "x/d.msgpack.gz",
+                             "tests/notes.txt", "nested/bazel_target_metadata.json"):
+                (payloads / relative).parent.mkdir(parents=True, exist_ok=True)
+                (payloads / relative).write_text("{}", encoding="utf-8")
+            (payloads / "tests" / "directory.json").mkdir()
+            (output / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            outside = root / "outside"
+            (outside / "inner").mkdir(parents=True)
+            (outside / "linked.json").write_text("{}", encoding="utf-8")
+            (outside / "inner" / "hidden.json").write_text("{}", encoding="utf-8")
+            (outside / "inner" / "bazel_target_metadata.json").write_text("{}", encoding="utf-8")
+            try:
+                (payloads / "tests" / "link.json").symlink_to(outside / "linked.json")
+                (payloads / "linked_dir").symlink_to(outside / "inner", target_is_directory=True)
+                (payloads / "tests" / "dangling.json").symlink_to(root / "missing.json")
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+
+            self.assertEqual(sorted(p for p in payloads.rglob("*.json") if p.is_file()), self.mod._payload_files(output))
+            self.assertEqual(
+                sorted(p for pattern in ("*.msgpack", "*.msgpack.gz") for p in payloads.rglob(pattern) if p.is_file()),
+                self.mod._msgpack_payload_files(output),
+            )
+            self.assertEqual(sorted(p for p in output.rglob("bazel_target_metadata.json") if p.is_file()),
+                             self.mod._metadata_files(output))
+            self.assertIn(payloads / "tests" / "link.json", self.mod._payload_files(output))
+            self.assertNotIn(payloads / "linked_dir" / "hidden.json", self.mod._payload_files(output))
+
+    def test_a_broken_sidecar_still_fails_after_the_report_reads_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            sidecar = Path(tmp) / "bazel_target_metadata.json"
+            sidecar.write_text("{broken", encoding="utf-8")
+            with self.mod._cached_filesystem():
+                self.assertIsNone(self.mod._report_metadata(sidecar))
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    self.mod._load_metadata(sidecar)
+
     @staticmethod
     def _write_doctor_config(root: Path, expected_targets: list[str]) -> Path:
         """Create a minimal doctor config for runtime main() tests."""

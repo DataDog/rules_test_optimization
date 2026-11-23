@@ -246,38 +246,51 @@ def find_test_output_directories(
     An expected target root is never an output itself. Never follow directory
     symlinks.
     """
-    marked: set[Path] = set()
-    payload_roots: set[Path] = set()
-    unmarked: set[Path] = set()
-    for directory, subdirectories, _filenames in os.walk(root, followlinks=False):
-        current = Path(directory)
-        relative = current.relative_to(root)
-        depth = 0 if relative == Path(".") else len(relative.parts)
+    # Directories are compared as the strings os.walk joins from the same root,
+    # so equal strings are equal paths; only the selected outputs become Paths.
+    top = str(root)
+    marked: set[str] = set()
+    payload_roots: set[str] = set()
+    unmarked: set[str] = set()
+    for directory, subdirectories, filenames in os.walk(top, followlinks=False):
+        relative = directory[len(top):].strip(os.sep)
+        depth = relative.count(os.sep) + 1 if relative else 0
         subdirectories.sort()
-        has_marker = "bazel_target_metadata.json" in _filenames or "outputs.zip" in _filenames
+        name = os.path.basename(directory)
+        has_marker = "bazel_target_metadata.json" in filenames or "outputs.zip" in filenames
         has_payloads = "payloads" in subdirectories
-        retry_root = is_retry_output_directory(current.parent.name, current.name) and (has_marker or has_payloads)
-        if (current != root or not root_is_target) and (current.name == "test.outputs" or retry_root):
+        retry_root = (is_retry_output_directory(os.path.basename(os.path.dirname(directory)), name)
+            and (has_marker or has_payloads))
+        if (directory != top or not root_is_target) and (name == "test.outputs" or retry_root):
             if has_marker:
-                marked.add(current)
+                marked.add(directory)
                 subdirectories.clear()
                 continue
             if has_payloads:
-                payload_roots.add(current)
+                payload_roots.add(directory)
             else:
-                unmarked.add(current)
+                unmarked.add(directory)
         if max_depth > 0 and depth >= max_depth:
             subdirectories.clear()
 
     # Prefer actual output roots to similarly named package/target ancestors.
     # Core-only outputs have no sidecar; their payload root still owns names
     # such as payloads/tests/nested/test.outputs inside its payload tree.
-    parents = {parent for path in marked | payload_roots for parent in path.parents}
+    parents = {parent for path in marked | payload_roots for parent in _ancestors(path)}
     selected = marked | (payload_roots - parents)
     unmarked = {path for path in unmarked
-        if path not in parents and selected.isdisjoint(path.parents)}
-    parents = {parent for path in unmarked for parent in path.parents}
-    return tuple(sorted(selected | (unmarked - parents), key=lambda path: path.as_posix()))
+        if path not in parents and selected.isdisjoint(_ancestors(path))}
+    parents = {parent for path in unmarked for parent in _ancestors(path)}
+    outputs = (Path(path) for path in selected | (unmarked - parents))
+    return tuple(sorted(outputs, key=lambda path: path.as_posix()))
+
+
+def _ancestors(path: str) -> Iterable[str]:
+    """Each parent of a path, as Path.parents lists them, without building Paths."""
+    parent = os.path.dirname(path)
+    while parent != path:
+        yield parent
+        path, parent = parent, os.path.dirname(parent)
 
 
 def test_result_event_count(payload: object) -> int:

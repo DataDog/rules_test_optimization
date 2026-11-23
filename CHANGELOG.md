@@ -15,6 +15,13 @@ versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The doctor lists each test output and parses each target sidecar once per
+  run, and the uploader finds payloads without resolving every file. On 14,000
+  test outputs, the doctor takes about half as long and the uploader's
+  discovery about 40 percent less; reports are unchanged.
+
 ### Fixed
 
 - Consumers can load the mock Datadog server and release helpers from the core
