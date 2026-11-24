@@ -15,6 +15,15 @@ versioning.
 
 ## [Unreleased]
 
+## [2.1.0-rc.2]
+
+This candidate pins ddtest `pre-release-e82c6a0`, which the uploader, the
+doctor, and Go instrumentation share. The uploader sends payloads with ddtest's
+native uploader by default, and the doctor and the uploader use ddtest to list
+outputs and parse the BEP. In dd-source's CI, on about 14,200 tests, the
+uploader took 23 s instead of 1,359 s with the Python workers, and the doctor
+17 s instead of 197 s.
+
 ### Changed
 
 - The uploader sends the selected test and coverage payloads with ddtest's

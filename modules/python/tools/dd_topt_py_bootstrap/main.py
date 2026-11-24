@@ -26,7 +26,7 @@ BEGIN_MARKER = "# BEGIN Datadog Python Test Optimization"
 END_MARKER = "# END Datadog Python Test Optimization"
 DEFAULT_REMOTE = "https://github.com/DataDog/rules_test_optimization.git"
 SSH_REMOTE = "ssh://git@github.com/DataDog/rules_test_optimization.git"
-DEFAULT_RULES_VERSION = "2.1.0-rc.1"
+DEFAULT_RULES_VERSION = "2.1.0-rc.2"
 SYNC_REPO_ENV_KEYS = [
     "DD_API_KEY",
     "DD_SITE",
