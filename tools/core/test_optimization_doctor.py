@@ -2081,8 +2081,13 @@ def _local_test_output_key(output_dir: Path, *, testlogs_dir: Path | None = None
 
 def _compute_local_test_output_key(output_dir: Path, testlogs_dir: Path | None) -> str:
     if testlogs_dir is not None:
+        resolved, root = _resolved(output_dir), _resolved(testlogs_dir)
+        # Most outputs extend the root's string; relative_to decides otherwise.
+        text, prefix = str(resolved), str(root) + os.sep
+        if text.startswith(prefix) and len(text) > len(prefix):
+            return _bep_test_output_key(text[len(prefix):])
         try:
-            relative = _resolved(output_dir).relative_to(_resolved(testlogs_dir))
+            relative = resolved.relative_to(root)
         except ValueError:
             pass
         else:
@@ -2853,15 +2858,22 @@ def _diagnostic_payload_counts(output_dir: Path) -> dict[str, int]:
         "coverage": 0,
         "telemetry": 0,
     }
+    # Payload paths extend payload_root's string; relative_to decides otherwise.
+    prefix = str(payload_root) + os.sep
     for payload in payloads:
-        try:
-            relative = payload.relative_to(payload_root)
-        except ValueError:
-            continue
-        if relative.parts:
+        text = str(payload)
+        if text.startswith(prefix):
+            bucket = text[len(prefix):].split(os.sep, 1)[0]
+        else:
+            try:
+                relative = payload.relative_to(payload_root)
+            except ValueError:
+                continue
+            if not relative.parts:
+                continue
             bucket = relative.parts[0]
-            if bucket in {"tests", "coverage", "telemetry"}:
-                counts[bucket] += 1
+        if bucket in {"tests", "coverage", "telemetry"}:
+            counts[bucket] += 1
     return counts
 
 

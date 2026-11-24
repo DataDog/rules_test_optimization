@@ -15,6 +15,14 @@ versioning.
 
 ## [Unreleased]
 
+### Changed
+
+- The uploader no longer resolves every discovered payload path before it runs
+  ddtest, since discovery already yields real paths, and the doctor computes
+  output keys and payload counts without building intermediate paths. On
+  14,000 test outputs, the uploader's Python work around ddtest drops from
+  about 1 s to 0.3 s of CPU; reports are unchanged.
+
 ## [2.1.0-rc.2]
 
 This candidate pins ddtest `pre-release-e82c6a0`, which the uploader, the

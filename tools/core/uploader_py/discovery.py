@@ -220,6 +220,7 @@ def discover_file_tasks(
             payload_type=payload_type,
             test_outputs_dir=output.path,
             output_key=output.output_key,
+            real_paths=True,
         )
         for index, (source_path, display_path, payload_type, output) in enumerate(
             discovered_sources,
@@ -281,6 +282,7 @@ def discover_file_tasks_with_ddtest(
                 payload_type=PayloadType(source["payload_type"]),
                 test_outputs_dir=outputs[source["output"]].path,
                 output_key=outputs[source["output"]].output_key,
+                real_paths=True,
             )
             for index, source in enumerate(report["sources"], start=1))
         warnings = tuple(str(code) for code in report["warnings"])

@@ -253,9 +253,11 @@ def _real_paths(task: FileTask, real_outputs: dict[Path, Path]) -> tuple[Path, P
 
     Discovery refuses links below an output, so a source's real path is its
     path below the output's real path, and one resolution serves every source
-    of an output.
+    of an output. A discovered task's paths are already real.
     """
     output = task.test_outputs_dir
+    if task.real_paths and output is not None:
+        return task.source_path, output
     if output is not None:
         try:
             relative = task.source_path.relative_to(output)

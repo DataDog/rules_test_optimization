@@ -1724,6 +1724,30 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         )
         return output
 
+    def test_diagnostic_payload_counts_bucket_by_payload_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            for relative in ("tests/a.json", "tests/nested/b.json", "coverage/c.json", "telemetry/t.json",
+                             "other/o.json", "x.json"):
+                (output / "payloads" / relative).parent.mkdir(parents=True, exist_ok=True)
+                (output / "payloads" / relative).write_text("{}", encoding="utf-8")
+            with self.mod._cached_filesystem():
+                counts = self.mod._diagnostic_payload_counts(output)
+            self.assertEqual({"json": 6, "msgpack": 0, "tests": 2, "coverage": 1, "telemetry": 1}, counts)
+
+    def test_local_output_keys_are_relative_to_the_testlogs_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            testlogs = Path(tmp).resolve() / "bazel-testlogs"
+            retry = testlogs / "pkg" / "t" / "test_attempts" / "attempt_1.outputs"
+            other = Path(tmp).resolve() / "elsewhere" / "testlogs" / "pkg" / "o" / "test.outputs"
+            for directory in (testlogs / "pkg" / "t" / "test.outputs", retry, other):
+                directory.mkdir(parents=True)
+            with self.mod._cached_filesystem():
+                keys = [self.mod._local_test_output_key(path, testlogs_dir=testlogs)
+                        for path in (testlogs / "pkg" / "t" / "test.outputs", retry, other, testlogs)]
+            self.assertEqual(["pkg/t/test.outputs", "pkg/t/test_attempts/attempt_1.outputs/test.outputs",
+                              "pkg/o/test.outputs", ""], keys)
+
     def test_output_listing_finds_what_rglob_finds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

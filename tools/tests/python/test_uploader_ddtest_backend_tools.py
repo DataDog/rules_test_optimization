@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import unittest
+from unittest import mock
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from uploader_test_support import add_uploader_runtime_to_path, resolve_runfile
@@ -493,6 +494,30 @@ class DdtestInvocationTests(unittest.TestCase):
                 [str(output / "payloads/tests/a.json"), str(output / "payloads/coverage/b.json"),
                  str(output / "payloads/coverage/c.json")],
                 [source["path"] for source in sources],
+            )
+
+    def test_discovered_plan_paths_need_no_resolution(self) -> None:
+        # Discovery resolves its roots and never enters links, so its tasks'
+        # paths are already the real ones that ddtest needs.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            real = root / "execroot" / "testlogs"
+            output = real / "pkg" / "fixture.topt" / "test.outputs"
+            _write(output / "payloads" / "tests" / "a.json", _TEST_PAYLOAD)
+            _write(output / "payloads" / "coverage" / "b.json", [])
+            linked = root / "bazel-testlogs"
+            try:
+                linked.symlink_to(real, target_is_directory=True)
+            except OSError as exc:
+                self.skipTest(f"symlinks unavailable: {exc}")
+            tasks = discover_file_tasks((ScanRoot(linked),)).tasks
+            self.assertTrue(all(task.real_paths for task in tasks))
+            context = ContextRecord.create("repo", _CONTEXT)
+            with mock.patch("uploader_py.ddtest_backend.os.path.realpath", side_effect=AssertionError("resolved")):
+                sources, _contexts, _selection, _warnings = _plan_sources(tasks, ContextPlan(context, (context,)))
+            self.assertEqual(
+                [(str(output / "payloads/tests/a.json"), str(output)), (str(output / "payloads/coverage/b.json"), None)],
+                [(source["path"], source.get("output")) for source in sources],
             )
 
 
