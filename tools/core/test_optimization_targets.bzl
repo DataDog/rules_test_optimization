@@ -126,6 +126,7 @@ def _build_test_optimization_target_specs(
     })
     if expected_targets_file != None:
         uploader_attrs["expected_targets_file"] = expected_targets_file
+
     # The legacy platform runtime cannot apply the doctor's checks.
     if uploader_attrs.get("use_python_uploader", True):
         uploader_attrs["doctor"] = ":" + doctor_name
