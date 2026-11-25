@@ -165,7 +165,7 @@ def discover_file_tasks(
             continue
         outputs.append(candidate_outputs[0])
 
-    discovered_sources: list[tuple[Path, str, PayloadType, DiscoveredOutput]] = []
+    discovered_sources: list[tuple[Path, str, PayloadType, DiscoveredOutput, bool]] = []
     seen_sources: set[str] = set()
     for output in outputs:
         resolved_output: Path | None = None
@@ -185,6 +185,9 @@ def discover_file_tasks(
             if resolved_directory is None:
                 warnings.append("payload_symlink_skipped")
                 continue
+            # A Windows junction is not a symlink, and os.walk may have
+            # entered one: only paths that are their resolved paths are real.
+            real = resolved_output == output.path and resolved_directory == payload_directory
             try:
                 with os.scandir(payload_directory) as entries:
                     sources = sorted(entries, key=lambda item: item.name)
@@ -209,7 +212,7 @@ def discover_file_tasks(
                 source_path = payload_directory / entry.name
                 display_path = f"{output.output_key}/{relative_source}"
                 discovered_sources.append(
-                    (source_path, display_path, payload_type, output)
+                    (source_path, display_path, payload_type, output, real)
                 )
 
     tasks = tuple(
@@ -220,9 +223,9 @@ def discover_file_tasks(
             payload_type=payload_type,
             test_outputs_dir=output.path,
             output_key=output.output_key,
-            real_paths=True,
+            real_paths=real,
         )
-        for index, (source_path, display_path, payload_type, output) in enumerate(
+        for index, (source_path, display_path, payload_type, output, real) in enumerate(
             discovered_sources,
             start=1,
         )

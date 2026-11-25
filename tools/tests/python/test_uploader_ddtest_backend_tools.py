@@ -520,6 +520,32 @@ class DdtestInvocationTests(unittest.TestCase):
                 [(source["path"], source.get("output")) for source in sources],
             )
 
+    def test_discovered_paths_below_a_traversed_link_are_resolved(self) -> None:
+        # os.walk can enter a Windows junction, which is not a symlink; the
+        # tasks below it are not real paths, and the plan resolves them.
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw).resolve()
+            output = root / "bazel-testlogs" / "pkg" / "fixture.topt" / "test.outputs"
+            _write(output / "payloads" / "tests" / "a.json", _TEST_PAYLOAD)
+            target = root / "elsewhere" / "test.outputs"
+            resolve = Path.resolve
+
+            def through_junction(path: Path, strict: bool = False) -> Path:
+                if path == output or output in path.parents:
+                    return target / path.relative_to(output)
+                return resolve(path, strict=strict)
+
+            with mock.patch.object(Path, "resolve", autospec=True, side_effect=through_junction):
+                tasks = discover_file_tasks((ScanRoot(root / "bazel-testlogs"),)).tasks
+            self.assertEqual(1, len(tasks))
+            self.assertFalse(tasks[0].real_paths)
+            context = ContextRecord.create("repo", _CONTEXT)
+            realpath = lambda path: str(through_junction(Path(path)))  # noqa: E731
+            with mock.patch("uploader_py.ddtest_backend.os.path.realpath", side_effect=realpath):
+                sources, _contexts, _selection, _warnings = _plan_sources(tasks, ContextPlan(context, (context,)))
+            self.assertEqual([(str(target / "payloads/tests/a.json"), str(target))],
+                             [(source["path"], source.get("output")) for source in sources])
+
 
 if __name__ == "__main__":
     unittest.main()
