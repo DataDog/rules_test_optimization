@@ -26,7 +26,8 @@ Keep the RFC contract intact:
 - Tests write JSON payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
 - Bazel collects those files under `bazel-testlogs/<target>/test.outputs/`.
 - The doctor validates local files after `bazel test`.
-- The uploader runs after the doctor with `bazel run`.
+- The uploader names the doctor and applies its checks in the same
+  `bazel run`; run the doctor on its own only to validate without uploading.
 - Use the default Python 3.10+ uploader unless a temporary rollback explicitly
   requires `use_python_uploader = False`. Its coordinator prepares shared
   CODEOWNERS, contexts, schemas, freshness, and telemetry once, then starts up

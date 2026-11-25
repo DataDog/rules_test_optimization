@@ -8,7 +8,9 @@
 
 Consumer workspaces need one logical doctor/uploader pair after tests complete:
 the doctor validates local payload outputs, and the uploader enriches and sends
-those outputs. This helper keeps that wiring consistent while allowing the
+those outputs. The uploader names the doctor, so one `bazel run` of the
+uploader applies the doctor's checks and uploads; the doctor also runs on its
+own. This helper keeps that wiring consistent while allowing the
 targets to live in a lightweight package instead of forcing monorepos to place
 them in the workspace root package.
 """
@@ -17,7 +19,7 @@ load("//tools/core:test_optimization_doctor.bzl", "dd_test_optimization_doctor")
 load("//tools/core:test_optimization_uploader.bzl", "dd_payload_uploader")
 
 _DOCTOR_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file", "runtime_selection"]
-_UPLOADER_CONTROLLED_ATTRS = ["name", "data", "expected_targets", "expected_targets_file", "runtime_selection"]
+_UPLOADER_CONTROLLED_ATTRS = ["name", "data", "doctor", "expected_targets", "expected_targets_file", "runtime_selection"]
 
 def _copy_kwargs(kwargs, label):
     """Return a defensive copy of optional keyword arguments."""
@@ -124,6 +126,10 @@ def _build_test_optimization_target_specs(
     })
     if expected_targets_file != None:
         uploader_attrs["expected_targets_file"] = expected_targets_file
+
+    # The legacy platform runtime cannot apply the doctor's checks.
+    if uploader_attrs.get("use_python_uploader", True):
+        uploader_attrs["doctor"] = ":" + doctor_name
 
     return struct(
         doctor_attrs = doctor_attrs,

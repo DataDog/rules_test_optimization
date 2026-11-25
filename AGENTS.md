@@ -14,8 +14,8 @@ This repository ships Bazel integrations that fetch Datadog Test Optimization me
 The solution separates concerns into four phases:
 1. **Fetch phase (module/repo resolution)**: repository rule fetches metadata from Datadog APIs.
 2. **Execute phase (test runtime)**: tests run hermetically, consume pre-fetched metadata via runfiles, and write payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
-3. **Validation phase (post-test)**: a dedicated doctor target (`bazel run //<topt-package>:dd_test_optimization_doctor`) validates local JSON payloads, Bazel metadata, Git metadata, and invalid payload-selection states.
-4. **Upload phase (post-test)**: a dedicated uploader target (`bazel run //<topt-package>:dd_upload_payloads`) enriches and uploads payloads from `bazel-testlogs/<target>/test.outputs/`.
+3. **Validation phase (post-test)**: a dedicated doctor target validates local JSON payloads, Bazel metadata, Git metadata, and invalid payload-selection states. The uploader names the doctor and applies its checks during the upload; `bazel run //<topt-package>:dd_test_optimization_doctor` validates without uploading.
+4. **Upload phase (post-test)**: a dedicated uploader target (`bazel run //<topt-package>:dd_upload_payloads`) applies the doctor's checks, then enriches and uploads payloads from `bazel-testlogs/<target>/test.outputs/`, in one run. With ddtest, `ddtest instrument bazel post-process` runs the whole invocation; the Python uploader runs it when ddtest leaves an input to it, and on Windows.
 
 ## Documentation
 - User-facing onboarding and command flow: see `README.md` (use its `Reference links` section for deep references).
@@ -98,11 +98,11 @@ The sync rule creates `@test_optimization_data//` containing:
   ```bash
   # Tests write payloads to TEST_UNDECLARED_OUTPUTS_DIR automatically
   # Bazel collects them to bazel-testlogs/<target>/test.outputs/
-  test_status=0; doctor_status=0; uploader_status=0
+  test_status=0; uploader_status=0
   ./bazelw test //... || test_status=$?
-  ./bazelw run //<topt-package>:dd_test_optimization_doctor || doctor_status=$?
+  # The uploader applies the checks of the doctor that it names.
   DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" ./bazelw run //<topt-package>:dd_upload_payloads -- --validate-enrichment || uploader_status=$?
-  for status in "$test_status" "$doctor_status" "$uploader_status"; do
+  for status in "$test_status" "$uploader_status"; do
     if [ "$status" -ne 0 ]; then exit "$status"; fi
   done
   ```
@@ -154,12 +154,12 @@ The sync rule creates `@test_optimization_data//` containing:
 - In consumer workspaces, prefer `./bazelw test //...` when package layout permits.
 - Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/{tests,coverage}` (Bazel's built-in writable directory).
 - Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`.
-- In consumer workspaces, run `./bazelw run //<topt-package>:dd_test_optimization_doctor`
-  after tests complete, then run the uploader once with `--validate-enrichment`.
+- In consumer workspaces, run the uploader once with `--validate-enrichment`
+  after tests complete; it applies the checks of the doctor that it names.
   Add `--dry-run` to that invocation only when upload is disabled.
   When upload is authorized, process every available fresh valid payload even if
-  tests or doctor fail, and preserve the earliest test, doctor, or uploader
-  failure as the job result.
+  tests or the doctor's checks fail, and preserve the earliest test, doctor, or
+  uploader failure as the job result.
 - For Go, route the repository's central `dd_go_test` wrapper through
   `dd_topt_go_test`; `--config=test-optimization` is the only user-facing
   enable switch.
@@ -183,8 +183,10 @@ The sync rule creates `@test_optimization_data//` containing:
   dd_payload_uploader(
       name = "dd_upload_payloads",
       data = ["@test_optimization_data//:test_optimization_context"],
+      doctor = ":dd_test_optimization_doctor",
   )
   ```
+  `dd_test_optimization_targets` creates the same pair with the doctor wired into the uploader.
 - In the repository's central Go wrapper: load `dd_topt_go_test` and the generated `topt_data`, then delegate every public `dd_go_test(...)` call to the Datadog macro. Do not create separate plain and optimized onboarding paths.
 - Import path inference (preferred): add a `go_library` with an explicit `importpath` and set `embed = [":<that_library>"]` in the central wrapper call. The macro reads rules_go's provider to compute the same `importpath` `go_test` uses and selects the matching per-module payload group. Inferred misses use the core bundle. When synchronized metadata exposes module groups, an explicit `importpath` or `module_label_override` that does not match one fails analysis; when no groups exist, the canonical full bundle remains valid.
 - Fallback (no embed): if neither `embed` nor explicit `importpath` is provided, the macro computes the label-derived importpath that `rules_go` assigns to the hidden raw `go_test` target. In this fallback mode only, it consults `topt_data["runtimes"]["go"]["module_included"]` as a coarse gate before attempting per-module selection.

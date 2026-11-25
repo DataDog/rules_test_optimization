@@ -8,7 +8,9 @@
 param(
   [string]$Bazel = $(if ($env:BAZEL) { $env:BAZEL } else { "bazel" }),
   [string]$Config = $(if ($env:DD_TEST_OPTIMIZATION_BAZEL_CONFIG) { $env:DD_TEST_OPTIMIZATION_BAZEL_CONFIG } else { "test-optimization" }),
-  [string]$DoctorTarget = $(if ($env:DD_TEST_OPTIMIZATION_DOCTOR_TARGET) { $env:DD_TEST_OPTIMIZATION_DOCTOR_TARGET } else { "//:dd_test_optimization_doctor" }),
+  # Also run this doctor before the uploader, for an uploader that does not
+  # name its doctor; by default the uploader applies its doctor's checks.
+  [string]$DoctorTarget = $(if ($env:DD_TEST_OPTIMIZATION_DOCTOR_TARGET) { $env:DD_TEST_OPTIMIZATION_DOCTOR_TARGET } else { "" }),
   [string]$UploadTarget = $(if ($env:DD_TEST_OPTIMIZATION_UPLOAD_TARGET) { $env:DD_TEST_OPTIMIZATION_UPLOAD_TARGET } else { "//:dd_upload_payloads" }),
   [string]$DoctorReportJson = $(if ($env:DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON) { $env:DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON } else { "" }),
   [string]$UploaderReportJson = $(if ($env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON) { $env:DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON } else { "" }),
@@ -267,12 +269,16 @@ try {
   }
 
   $finalizationRequired = $true
-  $doctorStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $DoctorTarget, "--") + $doctorRuntimeArgs)
-  if ($doctorStatus -ne 0 -and $finalStatus -eq 0) {
-    $finalStatus = $doctorStatus
-  }
-
   $uploaderRuntimeArgs = $runtimeArgs
+  if (-not [string]::IsNullOrWhiteSpace($DoctorTarget)) {
+    $doctorStatus = Invoke-BazelCommand -Args (@("run", "--config=$Config", $DoctorTarget, "--") + $doctorRuntimeArgs)
+    if ($doctorStatus -ne 0 -and $finalStatus -eq 0) {
+      $finalStatus = $doctorStatus
+    }
+  } elseif (-not [string]::IsNullOrWhiteSpace($DoctorReportJson)) {
+    # The uploader writes the report of the doctor whose checks it applies.
+    $uploaderRuntimeArgs += "--doctor-report-json=$DoctorReportJson"
+  }
   if ($Upload.IsPresent) {
     if (-not [string]::IsNullOrWhiteSpace($UploadReportJson)) {
       $uploaderRuntimeArgs += "--report-json=$UploadReportJson"

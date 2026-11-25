@@ -15,7 +15,6 @@ run_example_runtests() {
   local script_dir="$1"
   local bazelw
   local test_status=0
-  local doctor_status=0
   local uploader_status=0
   local tmp_root
   local artifact_staging_dir
@@ -64,18 +63,13 @@ run_example_runtests() {
   echo "--- hermetic run"
   run_cmd "${bazelw}" test --config=test-optimization --config=hermetic //src/go-project/... --test_output=streamed --test_arg=-test.v --sandbox_debug --remote_download_minimal --remote_download_regex=.*test[.]outputs.* --zip_undeclared_test_outputs --build_event_json_file="$hermetic_bep" || test_status=$?
 
-  echo "--- validating payloads"
-  run_cmd "${bazelw}" run --config=test-optimization //:dd_test_optimization_doctor -- "${bep_args[@]}" || doctor_status=$?
-
   echo "--- validating and uploading payloads"
+  # The uploader applies the checks of //:dd_test_optimization_doctor in the same run.
   # Requires DD_API_KEY and DD_SITE environment variables.
   DD_API_KEY="${DD_API_KEY:-}" DD_SITE="${DD_SITE:-datadoghq.com}" run_cmd "${bazelw}" run --config=test-optimization //:dd_upload_payloads -- "${bep_args[@]}" --validate-enrichment || uploader_status=$?
 
   if [[ "$test_status" -ne 0 ]]; then
     return "$test_status"
-  fi
-  if [[ "$doctor_status" -ne 0 ]]; then
-    return "$doctor_status"
   fi
   return "$uploader_status"
 }

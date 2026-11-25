@@ -18,6 +18,13 @@ load(
 
 _OWNER = "test_optimization_doctor"
 
+TestOptimizationDoctorInfo = provider(
+    doc = "A doctor's checks, which an uploader naming the doctor applies during its run.",
+    fields = {
+        "config": "The doctor's generated configuration file.",
+    },
+)
+
 def _json_bool(value):
     """Render a Starlark boolean as JSON."""
     return "true" if value else "false"
@@ -396,7 +403,10 @@ exit /b %%ERRORLEVEL%%
     if expected_targets_file:
         runfiles_files.append(expected_targets_file)
     runfiles = ctx.runfiles(files = runfiles_files)
-    return [DefaultInfo(executable = executable, runfiles = runfiles)]
+    return [
+        DefaultInfo(executable = executable, runfiles = runfiles),
+        TestOptimizationDoctorInfo(config = config_file),
+    ]
 
 dd_test_optimization_doctor = rule(
     implementation = _doctor_impl,
@@ -422,5 +432,10 @@ dd_test_optimization_doctor = rule(
         "_support_bundle_renderer": attr.label(default = "//tools/test_optimization:render_report_summary.py", allow_single_file = True),
         "_windows_constraint": attr.label(default = "@platforms//os:windows"),
     },
-    doc = "Validate local Test Optimization payloads and metadata before running the uploader.",
+    provides = [TestOptimizationDoctorInfo],
+    doc = """Validate local Test Optimization payloads and metadata.
+
+Name the doctor in `dd_payload_uploader(doctor = ...)` to apply its checks
+during the upload, in one `bazel run`; running the doctor on its own remains
+useful to validate outputs without uploading them.""",
 )

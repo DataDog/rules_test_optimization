@@ -27,6 +27,7 @@ def _default_context_data_test(ctx):
     )
     asserts.equals(env, ["@test_optimization_data_python//:test_optimization_context"], specs.doctor_attrs["data"])
     asserts.equals(env, specs.doctor_attrs["data"], specs.uploader_attrs["data"])
+    asserts.equals(env, ":dd_test_optimization_doctor", specs.uploader_attrs["doctor"])
     return unittest.end(env)
 
 default_context_data_test = unittest.make(_default_context_data_test)
@@ -159,6 +160,24 @@ def _uploader_kwargs_test(ctx):
     return unittest.end(env)
 
 uploader_kwargs_test = unittest.make(_uploader_kwargs_test)
+
+def _legacy_uploader_names_no_doctor_test(ctx):
+    """The legacy platform runtime keeps running without the doctor's checks."""
+    env = unittest.begin(ctx)
+    specs = build_test_optimization_target_specs_for_tests(
+        name = "test_optimization",
+        sync_repo_name = "test_optimization_data",
+        doctor_name = "doctor",
+        uploader_name = "uploader",
+        expected_targets = [],
+        context_data = None,
+        doctor_kwargs = None,
+        uploader_kwargs = {"use_python_uploader": False},
+    )
+    asserts.false(env, "doctor" in specs.uploader_attrs)
+    return unittest.end(env)
+
+legacy_uploader_names_no_doctor_test = unittest.make(_legacy_uploader_names_no_doctor_test)
 
 def _empty_name_target_impl(_ctx):
     """Create a target that fails for an empty helper name."""

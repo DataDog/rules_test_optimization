@@ -47,6 +47,9 @@ class FileTask:
     test_outputs_dir: Path | None = None
     output_key: str | None = None
     target_label: str | None = None
+    # Discovery walks resolved scan roots without entering links, so the
+    # source and its output directory are already real paths.
+    real_paths: bool = False
 
 
 @dataclass(frozen=True)

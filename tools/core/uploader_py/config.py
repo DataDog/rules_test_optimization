@@ -81,6 +81,12 @@ class RuleConfig:
     runtime_selection: bool = False
     batch_test_payloads: bool = False
     http_keep_alive: bool = False
+    # The rule sets it when its ddtest runs `instrument bazel post-process`.
+    post_process: bool = False
+    # The generated configuration of the doctor whose checks the uploader
+    # applies; empty skips them.
+    doctor_config_path: str = ""
+    doctor_config_short_path: str = ""
     # The rule writes "ddtest"; a configuration without the key predates it.
     uploader_backend: str = "python"
     ddtest_path: str = ""
@@ -135,6 +141,9 @@ class UploaderConfig:
     retained_outputs_dir: Path | None = None
     wrapper_temp_root: Path | None = None
     retention_status_file: Path | None = None
+    # The named doctor's report, which the uploader writes when it applies the
+    # doctor's checks.
+    doctor_report_json: Path | None = None
     batch_test_payloads: bool = False
     http_keep_alive: bool = False
     uploader_backend: str = "python"
@@ -169,6 +178,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--bep-artifact-downloader")
     parser.add_argument("--bep-artifact-downloader-timeout-sec")
     parser.add_argument("--report-json")
+    parser.add_argument("--doctor-report-json", help="Write the named doctor's report, when the uploader applies its checks")
     parser.add_argument("--retained-outputs-dir", help="Copy unresolved sources outside disposable staging for private inspection")
     parser.add_argument("--debug", action="store_true", default=None)
     parser.add_argument("--workers")
@@ -345,6 +355,10 @@ def parse_uploader_config(
         args.report_json,
         "DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON",
     )
+    doctor_report_path_text = text_option(
+        args.doctor_report_json,
+        "DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON",
+    )
     execution_log_path_text = text_option(
         args.execution_log_json,
         "DD_TEST_OPTIMIZATION_EXECUTION_LOG_JSON",
@@ -390,6 +404,7 @@ def parse_uploader_config(
         bep_artifact_downloader=_optional_path(downloader_path_text),
         bep_artifact_downloader_timeout_sec=downloader_timeout,
         report_json=_optional_path(report_path_text),
+        doctor_report_json=_optional_path(doctor_report_path_text),
         testlogs_dir=_optional_path(env.get("TESTLOGS_DIR", "")),
         codeowners_file=_optional_path(env.get("DD_TEST_OPTIMIZATION_CODEOWNERS_FILE", "")),
         context_json=_optional_path(env.get("DD_TEST_OPTIMIZATION_CONTEXT_JSON", "")),
@@ -474,6 +489,9 @@ def load_rule_config(path: Path) -> RuleConfig:
         ),
         runtime_selection=_json_boolean(raw, "runtime_selection", False),
         batch_test_payloads=_json_boolean(raw, "batch_test_payloads", False),
+        post_process=_json_boolean(raw, "post_process", False),
+        doctor_config_path=_json_string(raw, "doctor_config_path", ""),
+        doctor_config_short_path=_json_string(raw, "doctor_config_short_path", ""),
         http_keep_alive=_json_boolean(raw, "http_keep_alive", False),
         uploader_backend=_choice(
             "uploader_backend",

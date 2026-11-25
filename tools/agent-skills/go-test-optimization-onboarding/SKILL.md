@@ -34,7 +34,8 @@ Keep the RFC contract intact:
 - Tests write JSON payloads to `TEST_UNDECLARED_OUTPUTS_DIR`.
 - Bazel collects those files under `bazel-testlogs/<target>/test.outputs/`.
 - The doctor validates local files after `bazel test`.
-- The uploader runs after the doctor with `bazel run`.
+- The uploader names the doctor and applies its checks in the same
+  `bazel run`; run the doctor on its own only to validate without uploading.
 - Use the default Python 3.10+ uploader unless a temporary rollback explicitly
   requires `use_python_uploader = False`. Its coordinator prepares shared
   CODEOWNERS, contexts, schemas, freshness, and telemetry once, then starts up
@@ -244,9 +245,9 @@ Go wrapper, treat it as a consumer-specific integration:
   Bash rollback requires `jq` for this enrichment.
 - Validate with fresh `bazel-testlogs/<target>/test.outputs/`, inspect
   `bazel_target_metadata.json` for
-  `bazel.go.instrumentation.backend = "ddtest"` on Go targets, then run the
-  doctor and one enrichment-validating uploader pass; use dry-run only when
-  real upload is disabled.
+  `bazel.go.instrumentation.backend = "ddtest"` on Go targets, then run one
+  enrichment-validating uploader pass, which applies the doctor's checks; use
+  dry-run only when real upload is disabled.
 
 When a consumer's module extension keeps metadata repositories private, have its
 exported static descriptor provide `repository_label` as a Label or canonical

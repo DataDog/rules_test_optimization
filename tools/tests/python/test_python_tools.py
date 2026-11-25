@@ -622,10 +622,11 @@ esac
             log_text = log_path.read_text(encoding="utf-8")
             self.assertIn("test --config=test-optimization", log_text)
             self.assertIn("--build_event_json_file=", log_text)
-            self.assertIn("run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=", log_text)
+            # One run: the uploader applies its doctor's checks and writes the doctor's report.
+            self.assertNotIn("dd_test_optimization_doctor", log_text)
             self.assertIn("--artifact-staging-dir=", log_text)
             normalized_log_text = log_text.replace("\\", "/")
-            self.assertIn(f"--report-json={(root / 'reports' / 'doctor-report.json').as_posix()}", normalized_log_text)
+            self.assertIn(f"--doctor-report-json={(root / 'reports' / 'doctor-report.json').as_posix()}", normalized_log_text)
             self.assertIn(
                 f"--report-json={(root / 'reports' / 'uploader-dry-run-report.json').as_posix()}",
                 normalized_log_text,
@@ -663,6 +664,8 @@ exit 99
                     bash,
                     str(wrapper),
                     "--upload",
+                    "--doctor-target",
+                    "//:dd_test_optimization_doctor",
                     "--uploader-report-json",
                     str(uploader_report),
                     "//pkg:target",
@@ -830,6 +833,13 @@ if [[ "$1" == "run" ]]; then
   for arg in "$@"; do
     case "$arg" in
       --report-json=*) report_json="${{arg#--report-json=}}" ;;
+      --doctor-report-json=*)
+        doctor_json="${{arg#--doctor-report-json=}}"
+        mkdir -p "$(dirname "$doctor_json")"
+        cat > "$doctor_json" <<JSON
+{{"tool":"dd-test-optimization-doctor","result":{{"status":"ok","reason_code":"ok","reason":"","next_steps":[]}},"summary":{{"payloads":{{"tests":1,"coverage":0,"telemetry":0}}}}}}
+JSON
+        ;;
     esac
   done
   if [[ -n "$report_json" ]]; then
@@ -930,6 +940,11 @@ if ($BazelArgs.Count -gt 0 -and $BazelArgs[0] -eq 'run') {{
     if ($Arg.StartsWith("--report-json=")) {{
       $ReportJson = $Arg.Substring("--report-json=".Length)
     }}
+    if ($Arg.StartsWith("--doctor-report-json=")) {{
+      $DoctorJson = $Arg.Substring("--doctor-report-json=".Length)
+      New-Item -ItemType Directory -Force -Path (Split-Path -Parent $DoctorJson) | Out-Null
+      Set-Content -LiteralPath $DoctorJson -Encoding UTF8 -Value '{{"tool":"dd-test-optimization-doctor","status":"ok","result":{{"status":"ok","reason_code":"ok","reason":"","next_steps":[]}}}}'
+    }}
   }}
   if (-not [string]::IsNullOrWhiteSpace($ReportJson)) {{
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $ReportJson) | Out-Null
@@ -1024,6 +1039,8 @@ exit 99
                     "-Bazel",
                     str(fake_bazel),
                     "-Upload",
+                    "-DoctorTarget",
+                    "//:dd_test_optimization_doctor",
                     "//pkg:target",
                 ],
                 stdout=subprocess.PIPE,
@@ -1724,6 +1741,30 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         )
         return output
 
+    def test_diagnostic_payload_counts_bucket_by_payload_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "pkg" / "target" / "test.outputs"
+            for relative in ("tests/a.json", "tests/nested/b.json", "coverage/c.json", "telemetry/t.json",
+                             "other/o.json", "x.json"):
+                (output / "payloads" / relative).parent.mkdir(parents=True, exist_ok=True)
+                (output / "payloads" / relative).write_text("{}", encoding="utf-8")
+            with self.mod._cached_filesystem():
+                counts = self.mod._diagnostic_payload_counts(output)
+            self.assertEqual({"json": 6, "msgpack": 0, "tests": 2, "coverage": 1, "telemetry": 1}, counts)
+
+    def test_local_output_keys_are_relative_to_the_testlogs_root(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            testlogs = Path(tmp).resolve() / "bazel-testlogs"
+            retry = testlogs / "pkg" / "t" / "test_attempts" / "attempt_1.outputs"
+            other = Path(tmp).resolve() / "elsewhere" / "testlogs" / "pkg" / "o" / "test.outputs"
+            for directory in (testlogs / "pkg" / "t" / "test.outputs", retry, other):
+                directory.mkdir(parents=True)
+            with self.mod._cached_filesystem():
+                keys = [self.mod._local_test_output_key(path, testlogs_dir=testlogs)
+                        for path in (testlogs / "pkg" / "t" / "test.outputs", retry, other, testlogs)]
+            self.assertEqual(["pkg/t/test.outputs", "pkg/t/test_attempts/attempt_1.outputs/test.outputs",
+                              "pkg/o/test.outputs", ""], keys)
+
     def test_output_listing_finds_what_rglob_finds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1824,6 +1865,10 @@ class TestOptimizationDoctorTests(unittest.TestCase):
         """
         def run(command, **kwargs):
             request = json.loads(kwargs["input"])
+            if command[1:] == ["instrument", "bazel", "validate"]:
+                # Leave the validation to the doctor, which then uses the other commands.
+                result = {"status": "fallback", "exit_code": 0, "reason": "test", "stdout": "", "stderr": ""}
+                return subprocess.CompletedProcess(command, 0, json.dumps(result), "")
             if command[1:] == ["instrument", "bazel", "freshness"]:
                 # Leave the BEP to the doctor's own parser.
                 return subprocess.CompletedProcess(command, 0, json.dumps({"schema_version": 1, "status": "fallback"}), "")

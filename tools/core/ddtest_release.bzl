@@ -15,18 +15,18 @@ SDKs. The repository downloads it once, for the host that runs Bazel.
 # records the runtime's SemVer version, with v0.0.0- before a pre-release's
 # name.
 DDTEST_RELEASE = struct(
-    tag = "pre-release-e82c6a0",
-    runtime_version = "v0.0.0-pre-release-e82c6a0",
+    tag = "pre-release-29ee9f1",
+    runtime_version = "v0.0.0-pre-release-29ee9f1",
     contract = "1",
     sdk_name = "ddto",
     url = "https://github.com/DataDog/ddtest/releases/download/{tag}/{asset}",
     sha256 = {
-        "darwin_amd64": "d6c73b6d7d580ccef5ac541cb1c4d41fa045a7e862a1fed645498591e69555b9",
-        "darwin_arm64": "af0fa06183bae6ba43cf1faacc28c43123e409eae3d896b1792cd4eec9314df0",
-        "linux_amd64": "a4370c55766e10bf5f2cd3a9d37d9afb080a125ead8c85218fda0d74e3ba7f7f",
-        "linux_arm64": "42f0479d5bba1b5d5ae27bb15223e1ea9350ee26b4dd6f24c756c706111f4228",
-        "windows_amd64": "4064df314eeed4789565dce56c72afaa110960505b4a11b1da8449d6c75d008c",
-        "windows_arm64": "b4be82ada5d411b4903d80338e61ea32136f143b2d973a53d3b1598d5780efc7",
+        "darwin_amd64": "6c71ba0893aa11e44afc1dea5dbc616df516fb199a0b45eaa2ce2ae8f4d68d62",
+        "darwin_arm64": "2ed828d557a4e9e0e7d113d25add7a2b555f6cb5d6a6d914f1c788ee2eae55de",
+        "linux_amd64": "9a7b9f78eab5f7816a99c3950e266fa8e4e3a34225830da28456d7636f153298",
+        "linux_arm64": "5feb68ecdf25145a225c2d972db90ca9f173b6841c0a31f8fed15f5a37cc9d93",
+        "windows_amd64": "d33e5bf224b907762abd55bdeaee83fca6c7ab88a0bad17dcd2fce163e4c9183",
+        "windows_arm64": "dd9d298621ca09b74f3ae5def7ee9a4d726c67a4bd8fa8beecb4a3287a8c8320",
     },
 )
 

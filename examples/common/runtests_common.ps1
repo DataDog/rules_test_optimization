@@ -72,14 +72,8 @@ function Invoke-ExampleRunTests {
     $rc = Invoke-RunCmd -Command $bazelCmd -Args @("test", "--config=test-optimization", "--config=hermetic", "//src/go-project/...", "--test_output=streamed", "--test_arg=-test.v", "--sandbox_debug", "--remote_download_minimal", "--remote_download_regex=.*test[.]outputs.*", "--zip_undeclared_test_outputs", "--build_event_json_file=$hermeticBep")
     if ($rc -ne 0) { $testStatus = $rc }
 
-    Write-Output "--- validating payloads"
-    $doctorStatus = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "--config=test-optimization", "//:dd_test_optimization_doctor", "--") + $bepArgs)
-    if ($doctorStatus -ne 0) {
-      if ($testStatus -ne 0) { exit $testStatus }
-      exit $doctorStatus
-    }
-
-    Write-Output "--- validating upload enrichment"
+    # The uploader applies the checks of //:dd_test_optimization_doctor in the same run.
+    Write-Output "--- validating payloads and upload enrichment"
     $dryRunStatus = Invoke-RunCmd -Command $bazelCmd -Args (@("run", "--config=test-optimization", "//:dd_upload_payloads", "--") + $bepArgs + @("--dry-run", "--validate-enrichment"))
     if ($dryRunStatus -ne 0) {
       if ($testStatus -ne 0) { exit $testStatus }

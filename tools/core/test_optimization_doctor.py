@@ -2081,8 +2081,13 @@ def _local_test_output_key(output_dir: Path, *, testlogs_dir: Path | None = None
 
 def _compute_local_test_output_key(output_dir: Path, testlogs_dir: Path | None) -> str:
     if testlogs_dir is not None:
+        resolved, root = _resolved(output_dir), _resolved(testlogs_dir)
+        # Most outputs extend the root's string; relative_to decides otherwise.
+        text, prefix = str(resolved), str(root) + os.sep
+        if text.startswith(prefix) and len(text) > len(prefix):
+            return _bep_test_output_key(text[len(prefix):])
         try:
-            relative = _resolved(output_dir).relative_to(_resolved(testlogs_dir))
+            relative = resolved.relative_to(root)
         except ValueError:
             pass
         else:
@@ -2853,15 +2858,22 @@ def _diagnostic_payload_counts(output_dir: Path) -> dict[str, int]:
         "coverage": 0,
         "telemetry": 0,
     }
+    # Payload paths extend payload_root's string; relative_to decides otherwise.
+    prefix = str(payload_root) + os.sep
     for payload in payloads:
-        try:
-            relative = payload.relative_to(payload_root)
-        except ValueError:
-            continue
-        if relative.parts:
+        text = str(payload)
+        if text.startswith(prefix):
+            bucket = text[len(prefix):].split(os.sep, 1)[0]
+        else:
+            try:
+                relative = payload.relative_to(payload_root)
+            except ValueError:
+                continue
+            if not relative.parts:
+                continue
             bucket = relative.parts[0]
-            if bucket in {"tests", "coverage", "telemetry"}:
-                counts[bucket] += 1
+        if bucket in {"tests", "coverage", "telemetry"}:
+            counts[bucket] += 1
     return counts
 
 
@@ -3369,6 +3381,10 @@ def main(argv: list[str]) -> int:
     try:
         with _cached_filesystem():
             rc = _run_doctor(args, report)
+    except _ValidatedWithDdtest as validated:
+        if validated.exit_code:
+            raise SystemExit(validated.exit_code) from None
+        return 0
     except SystemExit as exc:
         _record_diagnostic_failure(report, exc)
         _write_requested_diagnostics(args, report)
@@ -3399,6 +3415,142 @@ def main(argv: list[str]) -> int:
     return rc
 
 
+class _ValidatedWithDdtest(Exception):
+    """ddtest validated the outputs, printed the messages and wrote the report."""
+
+    def __init__(self, exit_code: int) -> None:
+        super().__init__(exit_code)
+        self.exit_code = exit_code
+
+
+class _NotDelegated(Exception):
+    """An input that only this doctor reads as it should."""
+
+
+def _ddtest_context_manifest(config: dict[str, Any], config_path: Path) -> dict[str, Any] | None:
+    """The context manifest and the path that runfiles give each of its lines."""
+    if not config.get("require_git_metadata"):
+        return None
+    if "context_manifest_path" not in config:
+        raise _NotDelegated("context_manifest_path")
+    manifest = _resolve_configured_context_manifest(config, config_path)
+    resolved: dict[str, str] = {}
+    if manifest.exists():
+        try:
+            lines = manifest.read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError) as exc:
+            raise _NotDelegated("context manifest") from exc
+        for raw_line in lines:
+            parts = raw_line.split("\t")
+            if raw_line.strip() and len(parts) == 3:
+                resolved[raw_line] = str(_resolve_runfile_path([parts[2], parts[1]]))
+    return {"path": str(manifest), "resolved": resolved}
+
+
+def _ddtest_support_bundle(args: argparse.Namespace, config_path: Path) -> dict[str, Any] | None:
+    """What ddtest needs to write the support bundle as the default collector does."""
+    if not args.support_bundle:
+        return None
+    if (args.support_bundle_collector or args.support_bundle_renderer
+            or os.environ.get("DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_RENDERER")):
+        raise _NotDelegated("custom support bundle collector or renderer")
+    collector_path = _support_bundle_collector_path(args)
+    if collector_path is None:
+        return {"collector_missing": True}
+    if collector_path != _default_support_bundle_collector():
+        raise _NotDelegated("support bundle collector outside the doctor's runfiles")
+    try:
+        collector = _load_support_bundle_collector(collector_path)
+        runtime = collector._runtime_metadata("bazel")
+    except Exception as exc:
+        raise _NotDelegated("support bundle collector") from exc
+    renderer = getattr(collector, "render_summary_from_reports", None)
+    if renderer is not None and Path(renderer.__code__.co_filename).resolve() != (
+            collector_path.parent / "render_report_summary.py").resolve():
+        raise _NotDelegated("custom support bundle renderer")
+    if not all(isinstance(value, str) for value in runtime.values()):
+        raise _NotDelegated("support bundle runtime metadata")
+    output_base = _support_bundle_output_base(config_path)
+    return {
+        "collector_missing": False,
+        "runtime": runtime,
+        "renderer": renderer is not None,
+        "output_base": str(output_base) if output_base is not None else "",
+    }
+
+
+def _validate_with_ddtest(
+    ddtest: Path, args: argparse.Namespace, config: dict[str, Any], config_path: Path, bep_files: list[Path],
+) -> int | None:
+    """Validate the outputs with ddtest, from the expected targets on.
+
+    ddtest runs the rest of _run_doctor with the same messages, report and
+    exit status. It answers "fallback", having printed nothing, when an input
+    needs this doctor's own reading, such as invalid JSON or an operating
+    system error whose text the doctor prints; this doctor then validates the
+    outputs itself. Returns the exit status, or None to validate here.
+    """
+    try:
+        expected_targets_file = _resolve_configured_optional_runfile(
+            config, config_path, "expected_targets_file_path", "expected_targets_file_short_path")
+        context_manifest = _ddtest_context_manifest(config, config_path)
+        support_bundle = _ddtest_support_bundle(args, config_path)
+        document = json.dumps(config, allow_nan=False)
+    except (_NotDelegated, ValueError):
+        return None
+    request = {
+        "schema_version": 1,
+        "args": {
+            "expected_target": list(args.expected_target),
+            "expected_targets_file": args.expected_targets_file or "",
+            "context_entry": list(args.context_entry),
+            "bep_json": list(args.bep_json),
+            "freshness_source": args.freshness_source,
+            "freshness_mode": args.freshness_mode,
+            "artifact_source": args.artifact_source,
+            "remote_artifacts": args.remote_artifacts,
+            "artifact_staging_dir": args.artifact_staging_dir,
+            "bep_artifact_downloader": args.bep_artifact_downloader,
+            "bep_artifact_downloader_timeout_sec": args.bep_artifact_downloader_timeout_sec,
+            "report_json": args.report_json,
+            "support_bundle": args.support_bundle,
+            "support_bundle_renderer": args.support_bundle_renderer,
+        },
+        "config_path": str(config_path),
+        "config": "__CONFIG__",
+        "bep_files": [str(path) for path in bep_files],
+        "expected_targets_file": str(expected_targets_file) if expected_targets_file is not None else "",
+        "execroot_roots": [str(root) for root in _execroot_roots()],
+        "output_base_roots": [str(root) for root in _output_base_roots()],
+    }
+    if context_manifest is not None:
+        request["context_manifest"] = context_manifest
+    if support_bundle is not None:
+        request["support_bundle"] = support_bundle
+    # The configuration keeps its key order and its numbers as loaded.
+    text = json.dumps(request).replace('"__CONFIG__"', document, 1)
+    try:
+        completed = subprocess.run(
+            [str(ddtest), "instrument", "bazel", "validate"],
+            input=text, capture_output=True, text=True, encoding="utf-8", check=False,
+        )
+        if completed.returncode != 0:
+            raise ValueError(completed.stderr.strip() or f"exit status {completed.returncode}")
+        result = json.loads(completed.stdout)
+        status = result["status"]
+        exit_code = result["exit_code"]
+        if status not in {"done", "fallback"} or not isinstance(exit_code, int):
+            raise ValueError("unexpected validation result")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        _warn(f"ddtest could not validate the outputs ({exc}); validating them without it")
+        return None
+    if status == "fallback":
+        return None
+    sys.stdout.write(result["stdout"])
+    sys.stderr.write(result["stderr"])
+    return exit_code
+
+
 def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
     bep_files = _configured_bep_json_files(args)
     staging_requested = _artifact_staging_requested(args)
@@ -3420,6 +3572,10 @@ def _run_doctor(args: argparse.Namespace, report: dict[str, Any]) -> int:
         _warn(f"ddtest is missing from the doctor's runfiles ({ddtest}); validating the outputs without it")
     elif _run_cache is not None:
         _run_cache.inspector = ddtest
+        if ddtest is not None:
+            exit_code = _validate_with_ddtest(ddtest, args, config, config_path, bep_files)
+            if exit_code is not None:
+                raise _ValidatedWithDdtest(exit_code)
 
     runtime_selection = bool(config.get("runtime_selection", False))
     expected_targets, expected_targets_source = _resolve_expected_targets(

@@ -28,7 +28,7 @@ from topt_runtime.bep_execution import (BepTestExecution, exclusively_cached_lab
 from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 
 from .config import UploaderConfig
-from .discovery import DiscoveryResult, ScanRoot, count_tasks_by_payload_type, read_target_label
+from .discovery import DiscoveredOutput, DiscoveryResult, ScanRoot, count_tasks_by_payload_type, read_target_label
 from .json_utils import strict_json_loads
 from .models import FileResult, FileStatus, FileTask, PayloadType
 
@@ -127,6 +127,9 @@ class FreshnessFilterResult:
     skipped_outputs: tuple[str, ...] = ()
     identified_targets: tuple[str, ...] = ()
     ambiguous_outputs: tuple[str, ...] = ()
+    # The outputs that a doctor's checks validate: the selected ones and
+    # those that the selection would keep but that have nothing to upload.
+    checked_outputs: tuple[DiscoveredOutput, ...] = ()
 
 
 def prepare_freshness(
@@ -319,6 +322,7 @@ def filter_discovery_for_freshness(
 ) -> FreshnessFilterResult:
     """Select current-invocation outputs and stamp worker tasks with labels."""
     selected_outputs = []
+    checked_outputs = []
     task_label_by_output: dict[str, str] = {}
     skipped_output_keys: list[str] = []
     tasks_by_output: dict[str, list[FileTask]] = {}
@@ -379,27 +383,30 @@ def filter_discovery_for_freshness(
             relevant_ambiguities.add(output.output_key)
             skipped_output_keys.append(output.output_key)
             continue
-        if not tasks:
-            continue
+        # An output with nothing to upload is neither selected nor skipped,
+        # but a doctor still checks it when the selection would keep it.
+        uploads = bool(tasks)
         if target_label in plan.blocked_labels or target_label in plan.ambiguous_labels:
-            skipped_output_keys.append(output.output_key)
+            if uploads:
+                skipped_output_keys.append(output.output_key)
             continue
         if not plan.eligibility_enabled:
-            selected_outputs.append(output)
-            continue
-        if not target_label:
-            if plan.selected_source == "bep" and (plan.require_test_results or freshness_mode == "required"):
+            keep = True
+        elif not target_label:
+            if uploads and plan.selected_source == "bep" and (plan.require_test_results or freshness_mode == "required"):
                 raise FreshnessError(
                     "BEP required freshness cannot authorize "
                     f"{output.path} because bazel.target metadata is missing"
                 )
+            keep = False
+        else:
+            keep = (target_label, output.output_key) in plan.eligible_outputs
+        if keep:
+            checked_outputs.append(output)
+            if uploads:
+                selected_outputs.append(output)
+        elif uploads:
             skipped_output_keys.append(output.output_key)
-            continue
-        pair = (target_label, output.output_key)
-        if pair in plan.eligible_outputs:
-            selected_outputs.append(output)
-            continue
-        skipped_output_keys.append(output.output_key)
 
     selected_keys = {output.output_key for output in selected_outputs}
     selected_tasks = tuple(
@@ -423,7 +430,8 @@ def filter_discovery_for_freshness(
             )
         ),
     )
-    return FreshnessFilterResult(filtered_discovery, tuple(sorted(set(skipped_output_keys))), tuple(sorted(identified_targets)), tuple(sorted(relevant_ambiguities)))
+    return FreshnessFilterResult(filtered_discovery, tuple(sorted(set(skipped_output_keys))), tuple(sorted(identified_targets)),
+                                 tuple(sorted(relevant_ambiguities)), tuple(checked_outputs))
 
 
 def _recognized_test_source(task: FileTask) -> bool:

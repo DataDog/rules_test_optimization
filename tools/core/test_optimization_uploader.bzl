@@ -50,6 +50,7 @@ load(
     _legacy_single_context_entry_or_fail_shared = "legacy_single_context_entry_or_fail",
     _shared_apparent_repo_key_from_label_text_or_fail = "apparent_repo_key_from_label_text_or_fail",
 )
+load("//tools/core:test_optimization_doctor.bzl", "TestOptimizationDoctorInfo")
 
 # NOTE: `UPLOADER_VERSION` and `RULES_VERSION` are intentionally independent.
 # Uploader runtime behavior can evolve without forcing a rules contract bump,
@@ -677,6 +678,9 @@ def _uploader_impl(ctx):
         fail_with_prefix("test_optimization_uploader", "batch_test_payloads requires use_python_uploader = True")
     if ctx.attr.http_keep_alive and not ctx.attr.use_python_uploader:
         fail_with_prefix("test_optimization_uploader", "http_keep_alive requires use_python_uploader = True")
+    doctor_config = ctx.attr.doctor[TestOptimizationDoctorInfo].config if ctx.attr.doctor else None
+    if doctor_config and not ctx.attr.use_python_uploader:
+        fail_with_prefix("test_optimization_uploader", "doctor requires use_python_uploader = True")
     expected_targets_file = ctx.file.expected_targets_file
     if ctx.attr.runtime_selection and (ctx.attr.data or ctx.attr.expected_targets or expected_targets_file):
         fail_with_prefix("test_optimization_uploader", "runtime_selection cannot be combined with configured data, expected_targets, or expected_targets_file")
@@ -740,6 +744,9 @@ def _uploader_impl(ctx):
             "gzip_payloads": gzip_payloads,
             "batch_test_payloads": ctx.attr.batch_test_payloads,
             "http_keep_alive": ctx.attr.http_keep_alive,
+            "post_process": ctx.attr.post_process and ctx.attr.uploader_backend == "ddtest",
+            "doctor_config_path": doctor_config.path if doctor_config else "",
+            "doctor_config_short_path": doctor_config.short_path if doctor_config else "",
             "workers": workers,
             "uploader_backend": ctx.attr.uploader_backend,
             "ddtest_path": ctx.file._ddtest.path,
@@ -901,6 +908,8 @@ def _uploader_impl(ctx):
         extra_files.append(ctx.file._schema_validator)
     if ctx.attr.use_python_uploader:
         extra_files.append(ctx.file._ddtest)
+    if doctor_config:
+        extra_files.append(doctor_config)
     runfiles = ctx.runfiles(
         files = [
                     ps_file,
@@ -955,6 +964,8 @@ _dd_payload_uploader_rule = rule(
         "batch_test_payloads": attr.bool(default = False, doc = "Opt in to bounded whole-source test batches with event-local runtime IDs; requires the Python uploader (env: DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS)."),
         "http_keep_alive": attr.bool(default = False, doc = "Opt in to one persistent HTTP connection per worker; requires the Python uploader (env: DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE)."),
         "workers": attr.int(default = 0, doc = "Maximum number of independent payload-file workers; 0 uses the backend's default: one per CPU for ddtest, 8 for the Python workers (env: DD_TEST_OPTIMIZATION_WORKERS, CLI: --workers)"),
+        "post_process": attr.bool(default = True, doc = "Run the whole invocation in one ddtest process, `ddtest instrument bazel post-process`, when the backend is ddtest. ddtest leaves an input that only the Python uploader reads, and Windows, to the Python uploader. Set False to run the Python uploader with ddtest's upload only."),
+        "doctor": attr.label(providers = [TestOptimizationDoctorInfo], doc = "Optional `dd_test_optimization_doctor` target whose checks the uploader applies to the outputs it selects, in the same run. Every fresh valid payload is still sent when a check fails; the run then exits with the doctor's failure unless the upload failed first."),
         "uploader_backend": attr.string(default = "ddtest", values = ["ddtest", "python"], doc = "What prepares and sends the test and coverage payloads that the uploader selects: ddtest's native uploader, or the Python workers. Telemetry always uses the Python workers (env: DD_TEST_OPTIMIZATION_UPLOADER_BACKEND)."),
         "use_python_uploader": attr.bool(default = True, doc = "Use the default cross-platform Python uploader; set False only for temporary rollback to the legacy platform runtime."),
         # Optional files to place in runfiles (e.g., a generated context.json)
@@ -1050,6 +1061,8 @@ Usage:
     dd_payload_uploader(
         name = "dd_upload_payloads",
         data = ["@test_optimization_data//:test_optimization_context"],
+        # Optional: apply this doctor's checks in the same run.
+        doctor = ":dd_test_optimization_doctor",
     )
 
     # After running tests:
