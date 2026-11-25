@@ -24,12 +24,12 @@ small repositories.
    `dd_topt_go_test` links into the test
 2. Bazel automatically collects these to
    `bazel-testlogs/<package>/<target>/test.outputs/`
-3. After tests complete, run the doctor via `bazel run` to validate local
-   payloads and metadata before upload
+3. After tests complete, run the uploader via `bazel run`. It applies the
+   checks of the doctor that it names; run the doctor on its own only to
+   validate without uploading
 4. Optionally run the uploader in dry-run enrichment mode to validate the exact
    outbound body without uploading or deleting files
-5. Then run the uploader via `bazel run`
-6. The uploader discovers local or BEP-staged `test.outputs/` directories and
+5. The uploader discovers local or BEP-staged `test.outputs/` directories and
    waits for quiescence
 7. Its coordinator prepares shared CODEOWNERS, context, schema, freshness, and
    telemetry state once, then starts a bounded pool of eight workers by default
@@ -65,7 +65,6 @@ their existing enablement contract in this release.
 # DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 # Run tests with BEP and validate payloads. Add --upload to send them.
 tools/test_optimization/run_test_optimization_ci.sh \
-  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   --report-dir .topt/reports \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
@@ -78,7 +77,6 @@ tools/test_optimization/run_test_optimization_ci.sh \
 # Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
-    --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
     --upload-target //tools/test_optimization:dd_upload_payloads \
     --report-dir .topt/reports \
     --support-bundle .topt/reports/dd-test-optimization-support.zip \
@@ -91,7 +89,6 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
 # DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 # Run tests with BEP and validate payloads. Add -Upload to send them.
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
-  -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `
   -ReportDir .topt\reports `
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
@@ -105,13 +102,17 @@ DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
 $env:DD_API_KEY = "<your-api-key>"
 $env:DD_SITE = "datadoghq.com"
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
-  -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `
   -ReportDir .topt\reports `
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   -Upload `
   //...
 ```
+
+The wrapper runs the uploader once; the uploader applies the checks of the
+doctor that it names and writes `doctor-report.json` for it. Pass
+`--doctor-target` (`-DoctorTarget`) only for an uploader that does not name a
+doctor: the wrapper then runs that doctor on its own first.
 
 Always preserve all statuses. Test failures win, followed by doctor and uploader
 failures. When upload is enabled, enrichment validation happens during the real
@@ -243,6 +244,29 @@ and the Python workers use 8. A positive `workers`,
 reuses its connections unless `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE` is false.
 `gzip_payloads`, `keep_payloads`, `batch_test_payloads`, `filter_prefix`,
 `--dry-run`, and `--validate-enrichment` apply as with the Python workers.
+
+### One run: the doctor's checks and post-process
+
+An uploader that names a doctor, with `doctor = ":dd_test_optimization_doctor"`
+(`dd_test_optimization_targets` wires it), applies the doctor's checks to the
+outputs that it selects, in the same `bazel run`: every output of an expected
+target, otherwise every selected output that holds a payload or a sidecar,
+including outputs with nothing to upload. A failed check fails the run, but
+every fresh valid payload is still sent; the run exits with the doctor's
+failure unless the upload failed first. `--doctor-report-json=<path>`, or
+`DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`, writes the doctor's report.
+
+With the ddtest backend, `post_process = True` (the default) runs the whole
+invocation in one process, `ddtest instrument bazel post-process`: freshness,
+artifact staging, discovery, the doctor's checks, the upload and the report.
+It reads each payload once. The Python uploader keeps the configuration, the
+workspace lock, the expected targets, the contexts, CODEOWNERS and the API key
+check. Before sending anything, ddtest leaves an input that only the Python code
+reads, such as a sidecar with duplicate keys, to the Python uploader, which
+then applies the doctor's checks itself, with the doctor's own functions and
+messages, before any payload is sent. Windows always uses the Python uploader.
+Set `post_process = False` to run the Python uploader with ddtest's upload
+only.
 
 Set `uploader_backend = "python"` on the uploader, or
 `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND=python` at runtime, to send every
@@ -401,6 +425,7 @@ dd_payload_uploader(
         "@test_optimization_data//:test_optimization_context_service_a",
         "@test_optimization_data//:test_optimization_context_service_b",
     ],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -423,6 +448,7 @@ dd_payload_uploader(
         "@test_optimization_data_python//:test_optimization_context",
         "@test_optimization_data_java//:test_optimization_context",
     ],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -499,7 +525,7 @@ bazel run --config=test-optimization //:dd_upload_payloads
 | `DD_TEST_OPTIMIZATION_BEP_JSON` | unset | Optional explicit path to one BEP JSON file from the matching `bazel test --build_event_json_file=...` invocation. Prefer repeatable `--bep-json` flags when a wrapper runs multiple Bazel test invocations. The uploader does not auto-discover default BEP paths because stale BEP files can authorize stale local outputs. |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE` | `auto` | Cache-safety source: `auto`, `bep`, or `execution_log`. `auto` prefers BEP and uses execution-log filtering only as a legacy fallback when configured. |
 | `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` | `auto` | Cache-safety mode: `auto`, `required`, `optional`, or `disabled`. In CI, `auto` fails closed when no freshness source is available. With a selected BEP, it applies strict completeness checks even outside CI. |
-| `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | unset | Optional path for the doctor machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the doctor target's `--` separator. |
+| `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | unset | Optional path for the doctor machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the doctor target's `--` separator, or `--doctor-report-json=<path>` to an uploader that applies its doctor's checks. |
 | `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | unset | Optional path for the uploader machine-readable diagnostic report. Equivalent to passing `--report-json=<path>` after the uploader target's `--` separator. |
 | `DD_TEST_OPTIMIZATION_REPORT_DIR` | unset | Optional wrapper report directory. CI wrappers write `doctor-report.json` plus `uploader-dry-run-report.json` without upload or `uploader-upload-report.json` with upload. |
 | `DD_TEST_OPTIMIZATION_EXECUTION_LOG_MODE` | `auto` | Legacy alias for freshness mode when `DD_TEST_OPTIMIZATION_FRESHNESS_MODE` is unset. |
@@ -529,7 +555,6 @@ For CI, prefer one report directory per job:
 
 ```bash
 tools/test_optimization/run_test_optimization_ci.sh \
-  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   --report-dir .topt/reports \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
@@ -538,15 +563,14 @@ tools/test_optimization/run_test_optimization_ci.sh \
 
 ```powershell
 .\tools\test_optimization\run_test_optimization_ci.ps1 `
-  -DoctorTarget //tools/test_optimization:dd_test_optimization_doctor `
   -UploadTarget //tools/test_optimization:dd_upload_payloads `
   -ReportDir .topt\reports `
   -SupportBundle .topt\reports\dd-test-optimization-support.zip `
   //...
 ```
 
-The wrapper writes `.topt/reports/doctor-report.json` plus exactly one uploader
-report: `.topt/reports/uploader-dry-run-report.json` without upload, or
+The wrapper writes `.topt/reports/doctor-report.json`, which the uploader writes
+for its doctor, plus exactly one uploader report: `.topt/reports/uploader-dry-run-report.json` without upload, or
 `.topt/reports/uploader-upload-report.json` with upload.
 
 For first-pass support, the doctor can create a doctor-only bundle without the
@@ -692,7 +716,6 @@ test:test-optimization --zip_undeclared_test_outputs
 
 ```bash
 tools/test_optimization/run_test_optimization_ci.sh \
-  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   //...
 ```

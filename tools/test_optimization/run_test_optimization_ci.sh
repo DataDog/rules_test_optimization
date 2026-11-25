@@ -9,7 +9,7 @@ set -euo pipefail
 
 BAZEL="${BAZEL:-bazel}"
 BAZEL_CONFIG="${DD_TEST_OPTIMIZATION_BAZEL_CONFIG:-test-optimization}"
-DOCTOR_TARGET="${DD_TEST_OPTIMIZATION_DOCTOR_TARGET:-//:dd_test_optimization_doctor}"
+DOCTOR_TARGET="${DD_TEST_OPTIMIZATION_DOCTOR_TARGET:-}"
 UPLOAD_TARGET="${DD_TEST_OPTIMIZATION_UPLOAD_TARGET:-//:dd_upload_payloads}"
 DOCTOR_REPORT_JSON="${DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON:-}"
 UPLOADER_REPORT_JSON="${DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON:-}"
@@ -29,12 +29,15 @@ usage() {
 Usage: tools/test_optimization/run_test_optimization_ci.sh [options] [targets...]
 
 Runs Bazel tests with the recommended Test Optimization remote-output setup,
-then validates payloads through BEP freshness and BEP artifact staging.
+then validates and uploads payloads through BEP freshness and BEP artifact
+staging in one `bazel run` of the uploader, which applies the checks of the
+doctor that it names.
 
 Options:
   --bazel PATH             Bazel/Bazelisk executable. Defaults to $BAZEL or bazel.
   --config NAME            Bazel config name. Defaults to test-optimization.
-  --doctor-target LABEL    Doctor target. Defaults to //:dd_test_optimization_doctor.
+  --doctor-target LABEL    Also run this doctor before the uploader, for an uploader
+                           that does not name its doctor. Not set by default.
   --doctor-report-json PATH
                            Write the doctor machine-readable report to PATH.
   --uploader-report-json PATH
@@ -426,16 +429,20 @@ if [[ -n "$DOCTOR_REPORT_JSON" ]]; then
 fi
 
 finalization_required=1
-if run_bazel run "--config=$BAZEL_CONFIG" "$DOCTOR_TARGET" -- "${doctor_runtime_args[@]}"; then
-  doctor_status=0
-else
-  doctor_status=$?
-  if [[ "$final_status" -eq 0 ]]; then
-    final_status="$doctor_status"
-  fi
-fi
-
 uploader_runtime_args=("${runtime_args[@]}")
+if [[ -n "$DOCTOR_TARGET" ]]; then
+  if run_bazel run "--config=$BAZEL_CONFIG" "$DOCTOR_TARGET" -- "${doctor_runtime_args[@]}"; then
+    doctor_status=0
+  else
+    doctor_status=$?
+    if [[ "$final_status" -eq 0 ]]; then
+      final_status="$doctor_status"
+    fi
+  fi
+elif [[ -n "$DOCTOR_REPORT_JSON" ]]; then
+  # The uploader writes the report of the doctor whose checks it applies.
+  uploader_runtime_args+=("--doctor-report-json=$DOCTOR_REPORT_JSON")
+fi
 if [[ "$DO_UPLOAD" -eq 1 ]]; then
   if [[ -n "$UPLOAD_REPORT_JSON" ]]; then
     uploader_runtime_args+=("--report-json=$UPLOAD_REPORT_JSON")

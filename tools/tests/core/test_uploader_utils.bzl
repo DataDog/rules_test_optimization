@@ -61,6 +61,53 @@ legacy_http_keep_alive_failure_test = analysistest.make(
     expect_failure = True,
 )
 
+def _uploader_config(env):
+    """The generated uploader configuration of the target under test."""
+    for action in analysistest.target_actions(env):
+        for output in action.outputs.to_list():
+            if output.basename.endswith(".uploader_config.json"):
+                return json.decode(action.content)
+    fail("no uploader configuration was written")
+
+def _post_process_default_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    config = _uploader_config(env)
+    asserts.equals(env, True, config["post_process"])
+    asserts.equals(env, "", config["doctor_config_path"])
+    asserts.equals(env, "", config["doctor_config_short_path"])
+    return analysistest.end(env)
+
+post_process_default_test = analysistest.make(_post_process_default_test_impl)
+
+def _post_process_disabled_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.equals(env, False, _uploader_config(env)["post_process"])
+    return analysistest.end(env)
+
+post_process_disabled_test = analysistest.make(_post_process_disabled_test_impl)
+
+def _uploader_doctor_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    config = _uploader_config(env)
+    target = analysistest.target_under_test(env)
+    runfiles = [f.short_path for f in target[DefaultInfo].default_runfiles.files.to_list()]
+    asserts.true(env, config["doctor_config_short_path"].endswith("/uploader_doctor_check.config.json"), config["doctor_config_short_path"])
+    asserts.true(env, config["doctor_config_short_path"] in runfiles, "the doctor configuration is not in the runfiles")
+    asserts.equals(env, True, config["post_process"])
+    return analysistest.end(env)
+
+uploader_doctor_test = analysistest.make(_uploader_doctor_test_impl)
+
+def _legacy_doctor_failure_test_impl(ctx):
+    env = analysistest.begin(ctx)
+    asserts.expect_failure(env, "doctor requires use_python_uploader = True")
+    return analysistest.end(env)
+
+legacy_doctor_failure_test = analysistest.make(
+    _legacy_doctor_failure_test_impl,
+    expect_failure = True,
+)
+
 def _legacy_context_capture_impl(ctx):
     """Capture legacy single-context fallback entries from raw data files."""
     return [LegacyContextCaptureInfo(

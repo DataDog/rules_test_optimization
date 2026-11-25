@@ -405,14 +405,16 @@ def _test_targets_for_commands(args: argparse.Namespace) -> tuple[list[str], str
 
 
 def render_command_snippet(args: argparse.Namespace) -> str:
-    """Render the normal test, doctor, and validated upload command flow."""
+    """Render the normal test and validated upload command flow.
+
+    The uploader applies the checks of the doctor that it names, in one run.
+    """
     targets, comment = _test_targets_for_commands(args)
     target_args = " ".join(targets)
     label_prefix = f"//{args.test_optimization_package}" if args.test_optimization_package else "//"
     return dedent(
         f"""
         {comment}test_status=0
-        doctor_status=0
         uploader_status=0
         export DD_TEST_OPTIMIZATION_BEP_JSON=.topt/bazel-bep.json
         export DD_TEST_OPTIMIZATION_FRESHNESS_SOURCE=bep
@@ -424,10 +426,9 @@ def render_command_snippet(args: argparse.Namespace) -> str:
         {args.bazel_command} sync --config={args.bazelrc_config} --only={args.sync_repo_name}
         {args.bazel_command} test --config={args.bazelrc_config} --build_event_json_file="$DD_TEST_OPTIMIZATION_BEP_JSON" {target_args} || test_status=$?
 
-        {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.doctor_name} || doctor_status=$?
+        # The uploader applies the checks of {label_prefix}:{args.doctor_name} in the same run.
         DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" {args.bazel_command} run --config={args.bazelrc_config} {label_prefix}:{args.uploader_name} -- --validate-enrichment || uploader_status=$?
         if [ "$test_status" -ne 0 ]; then exit "$test_status"; fi
-        if [ "$doctor_status" -ne 0 ]; then exit "$doctor_status"; fi
         exit "$uploader_status"
         """
     ).strip() + "\n"

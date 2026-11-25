@@ -36,6 +36,7 @@ from .discovery import (
     tests_executed,
     wait_for_quiescence,
 )
+from .doctor_checks import DoctorOutcome, context_records, load_doctor_config, run_doctor_checks
 from .endpoints import EndpointSet
 from .expected_targets import (
     ExpectedTargetsError,
@@ -48,6 +49,7 @@ from .freshness import (
     FreshnessPlan,
     FreshnessPreparation,
     StagingOwnership,
+    _resolve_doctor_runtime,
     filter_discovery_for_freshness,
     prepare_freshness,
     validate_fresh_outputs_accounted,
@@ -56,6 +58,7 @@ from .locking import WorkspaceLock, WorkspaceLockError
 from .logging_utils import redact_url
 from .metrics import PhaseRecorder, execution_environment
 from .models import FileStatus, PayloadType
+from .post_process import _log_stream, run_post_process
 from .reporting import AggregateReport, LegacyReportContext, emit_report
 from .retention import RetentionError, retain_pending_outputs, write_retention_status
 from .resources import LoadedResources, ResourceError, ResourceInputs, load_resources
@@ -136,6 +139,7 @@ def _run_uploader_with_lock(
     freshness_skipped_count = 0
     report: AggregateReport | None = None
     report_reason: _ReportReason | None = None
+    doctor_outcome: DoctorOutcome | None = None
     workers_completed = False
     retention_discovery: DiscoveryResult | None = None
     resources: LoadedResources | None = None
@@ -147,6 +151,12 @@ def _run_uploader_with_lock(
         # The public wrapper keeps the lock through final report emission.
         with phases.phase("workspace_lock"):
             workspace_lock.acquire()
+        ddtest = _post_process_executable(config, resolver)
+        if ddtest is not None:
+            exit_code = run_post_process(config, resolver=resolver, endpoints=endpoints, logger=logger,
+                                         ddtest=ddtest, load_resources=_load_resources, stream=stream)
+            if exit_code is not None:
+                return exit_code
         expected_targets_plan = load_expected_targets(
             static_targets=config.rule.expected_targets,
             expected_targets_file_paths=(
@@ -239,6 +249,24 @@ def _run_uploader_with_lock(
             freshness_skipped_outputs,
             logger,
         )
+        doctor_config = load_doctor_config(config, resolver, logger)
+        if doctor_config is not None:
+            # Sending deletes payloads: the doctor checks the outputs first.
+            doctor_outcome = run_doctor_checks(
+                doctor_runtime=_resolve_doctor_runtime(config, resolver),
+                doctor_config=doctor_config,
+                workspace=config.workspace,
+                outputs=freshness_selection.checked_outputs,
+                tasks=eligible_discovery.tasks,
+                expected_targets=expected_targets_plan.targets,
+                contexts=context_records(resources.context_plan) if resources is not None else (),
+                ddtest=_ddtest_executable(config, resolver),
+                report_json=config.doctor_report_json,
+                freshness={"freshness_source": config.freshness_source, "freshness_mode": config.freshness_mode,
+                           "artifact_source": config.artifact_source, "remote_artifacts": config.remote_artifacts},
+                stdout=stream,
+                stderr=_log_stream(logger),
+            )
         if eligible_discovery.tasks:
             validate_upload_credentials(config)
         else:
@@ -360,6 +388,11 @@ def _run_uploader_with_lock(
             )
 
     assert report is not None
+    if doctor_outcome is not None and doctor_outcome.exit_code and report.exit_code == 0:
+        # The doctor's failure comes first; the payloads were still sent.
+        report = replace(report, exit_code=doctor_outcome.exit_code)
+        if report_reason is None or report_reason.code in ("", "ok"):
+            report_reason = _ReportReason(doctor_outcome.reason_code, doctor_outcome.message, doctor_outcome.next_steps)
     # The coordinator measures only worker preparation and delivery. Final
     # invocation statistics must also include locking, BEP staging, discovery
     # quiescence, resource loading, and staging cleanup.
@@ -728,6 +761,11 @@ def _load_resources(
         resources.warning_codes,
     )
     return resources
+
+
+def _post_process_executable(config: UploaderConfig, resolver: RunfilesResolver) -> Path | None:
+    """ddtest, when the rule's ddtest runs the invocation with post-process."""
+    return _ddtest_executable(config, resolver) if config.rule.post_process else None
 
 
 def _ddtest_executable(config: UploaderConfig, resolver: RunfilesResolver) -> Path | None:

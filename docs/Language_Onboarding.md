@@ -122,7 +122,6 @@ Shared upload command:
 # Vendor the full tools/test_optimization/ helper directory, or set
 # DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE_COLLECTOR to create_support_bundle.py.
 tools/test_optimization/run_test_optimization_ci.sh \
-  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   --report-dir .topt/reports \
   --support-bundle .topt/reports/dd-test-optimization-support.zip \
@@ -131,7 +130,6 @@ tools/test_optimization/run_test_optimization_ci.sh \
 # Add --upload to send every available fresh valid payload after validation attempts.
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" \
   tools/test_optimization/run_test_optimization_ci.sh \
-    --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
     --upload-target //tools/test_optimization:dd_upload_payloads \
     --report-dir .topt/reports \
     --support-bundle .topt/reports/dd-test-optimization-support.zip \
@@ -1032,6 +1030,7 @@ dd_test_optimization_doctor(
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = ["@test_optimization_data//:test_optimization_context"],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -1141,6 +1140,7 @@ dd_payload_uploader(
         "@test_optimization_data//:test_optimization_context_java_service_a",
         "@test_optimization_data//:test_optimization_context_java_service_b",
     ],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -1201,6 +1201,7 @@ dd_test_optimization_doctor(
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = ["@test_optimization_data//:test_optimization_context"],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -1303,6 +1304,7 @@ dd_payload_uploader(
         "@test_optimization_data//:test_optimization_context_nodejs_service_a",
         "@test_optimization_data//:test_optimization_context_nodejs_service_b",
     ],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -1385,6 +1387,7 @@ dd_test_optimization_doctor(
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = ["@test_optimization_data//:test_optimization_context"],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -1489,6 +1492,7 @@ dd_payload_uploader(
         "@test_optimization_data//:test_optimization_context_dotnet_service_a",
         "@test_optimization_data//:test_optimization_context_dotnet_service_b",
     ],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -1551,6 +1555,7 @@ dd_test_optimization_doctor(
 dd_payload_uploader(
     name = "dd_upload_payloads",
     data = ["@test_optimization_data//:test_optimization_context"],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```
 
@@ -1655,5 +1660,6 @@ dd_payload_uploader(
         "@test_optimization_data//:test_optimization_context_ruby_service_a",
         "@test_optimization_data//:test_optimization_context_ruby_service_b",
     ],
+    doctor = ":dd_test_optimization_doctor",
 )
 ```

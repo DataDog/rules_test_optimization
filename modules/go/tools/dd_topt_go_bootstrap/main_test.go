@@ -715,7 +715,8 @@ func TestValidationScriptUsesConfiguredFlowAndUploadOptIn(t *testing.T) {
 		`uploader-report.json`,
 		`--report-json`,
 		`mktemp -d "${tmp_parent%/}/dd-go-topt.XXXXXX"`,
-		`sync -> controls -> instrumented tests -> doctor -> validated uploader`,
+		`sync -> controls -> instrumented tests -> validated uploader`,
+		`--doctor-report-json=${DOCTOR_REPORT_JSON}`,
 		`validate ordinary no-config bootstrap`,
 		`validate explicit disabled precedence`,
 		`query "@${SYNC_REPO}//:test_optimization_files"`,
@@ -790,7 +791,7 @@ func TestRunPrintValidationScriptDoesNotRequireModuleFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("run --print-validation-script error: %v", err)
 	}
-	if got := buf.String(); !strings.Contains(got, `run_step "doctor ${DOCTOR_TARGET}"`) {
+	if got := buf.String(); !strings.Contains(got, `run_step "dry-run upload ${UPLOAD_TARGET}"`) {
 		t.Fatalf("expected validation script on stdout:\n%s", got)
 	}
 }
@@ -839,8 +840,8 @@ func TestValidationScriptRunsWithNoControlTargets(t *testing.T) {
 		"sync --config=test-optimization --repo_env=FETCH_SALT=",
 		"test --config=test-optimization --build_event_json_file=",
 		"//pkg:go_default_test",
-		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=",
 		"--report-json=",
+		"--doctor-report-json=",
 		"--freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
 		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=",
 		"--dry-run --validate-enrichment",
@@ -944,18 +945,16 @@ set -euo pipefail
 		"test --config=test-optimization --build_event_json_file=" + controlBEPPath + " //control:go_default_test",
 		"test --config=test-optimization --build_event_json_file=" + oneBEPPath + " //pkg:one_test",
 		"test --config=test-optimization --build_event_json_file=" + twoBEPPath + " //pkg:two_test",
-		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
 		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=" + controlBEPPath + " --bep-json=" + oneBEPPath + " --bep-json=" + twoBEPPath + " --freshness-source=bep --freshness-mode=required --artifact-source=bep --artifact-staging-dir=",
-		"uploader-report.json --validate-enrichment",
+		"doctor-report.json --validate-enrichment",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)
 		}
 	}
-	doctorIdx := strings.Index(logText, "run --config=test-optimization //:dd_test_optimization_doctor")
-	uploadIdx := strings.Index(logText, "run --config=test-optimization //:dd_upload_payloads")
-	if doctorIdx < 0 || uploadIdx < 0 || uploadIdx < doctorIdx {
-		t.Fatalf("upload did not run after doctor:\n%s", logText)
+	// One run: the uploader applies its doctor's checks.
+	if strings.Contains(logText, "//:dd_test_optimization_doctor") {
+		t.Fatalf("the doctor ran on its own:\n%s", logText)
 	}
 
 	for _, entry := range []struct {
@@ -983,7 +982,6 @@ func TestValidationScriptUploadsAfterPartialFailures(t *testing.T) {
 	fakeBazelScript := `#!/usr/bin/env bash
 printf '%s\n' "$*" >> "$BAZEL_LOG"
 if [[ "${1:-}" == "test" ]]; then exit 7; fi
-if [[ "${1:-}" == "run" && "$*" == *"//:dd_test_optimization_doctor"* ]]; then exit 8; fi
 if [[ "${1:-}" == "run" && "$*" == *"//:dd_upload_payloads"*"--dry-run"* ]]; then exit 9; fi
 if [[ "${1:-}" == "run" && "$*" == *"//:dd_upload_payloads"* ]]; then exit 10; fi
 exit 0
@@ -1028,7 +1026,7 @@ exit 0
 		t.Fatalf("uploader command count=%d, want one validated real upload:\n%s", got, logText)
 	}
 	if strings.Contains(logText, "--dry-run") ||
-		!strings.Contains(logText, "uploader-report.json --validate-enrichment") {
+		!strings.Contains(logText, "doctor-report.json --validate-enrichment") {
 		t.Fatalf("validation script did not run one validated real upload:\n%s", logText)
 	}
 }
@@ -1074,10 +1072,9 @@ func TestValidationScriptUsesBepArtifactSourceForZippedOutputs(t *testing.T) {
 	logText := string(logBytes)
 	for _, want := range []string{
 		"test --config=test-optimization --zip_undeclared_test_outputs --build_event_json_file=",
-		"run --config=test-optimization //:dd_test_optimization_doctor -- --bep-json=",
 		"--freshness-source=bep --freshness-mode=required --artifact-source=bep",
 		"run --config=test-optimization //:dd_upload_payloads -- --bep-json=",
-		"uploader-report.json --validate-enrichment",
+		"doctor-report.json --validate-enrichment",
 	} {
 		if !strings.Contains(logText, want) {
 			t.Fatalf("fake bazel log missing %q:\n%s\nscript output:\n%s", want, logText, output)

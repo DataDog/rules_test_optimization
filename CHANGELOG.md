@@ -15,8 +15,41 @@ versioning.
 
 ## [Unreleased]
 
+This release pins ddtest `pre-release-29ee9f1`. One `bazel run` of the
+uploader now validates and uploads: the uploader applies the checks of the
+doctor that it names, and with ddtest it runs the whole invocation in one
+process. On a 14,000-output corpus in a 4-CPU Linux container, a dry run
+of the doctor and the uploader took 16.8 s in two runs with 2.1.0-rc.2 and
+takes 4.6 s in one.
+
+### Added
+
+- `dd_payload_uploader` accepts `doctor`, a `dd_test_optimization_doctor`
+  whose checks it applies to the outputs it selects, in the same run. A failed
+  check fails the run, but every fresh valid payload is still sent; the run
+  exits with the doctor's failure unless the upload failed first.
+  `--doctor-report-json`, or `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`, writes
+  the doctor's report. `dd_test_optimization_targets` wires the doctor into its
+  uploader.
+- With the ddtest backend, the uploader runs the invocation with `ddtest
+  instrument bazel post-process`, which reads each payload once and prepares
+  test payloads by streaming. `post_process = False` restores the Python
+  uploader with ddtest's upload. ddtest leaves an input that only the Python
+  code reads, and Windows, to the Python uploader, which then applies the
+  doctor's checks itself before sending anything.
+- The doctor validates with `ddtest instrument bazel validate` and keeps its
+  messages, report and exit status; it validates the outputs itself when
+  ddtest leaves an input to it.
+
 ### Changed
 
+- `run_test_optimization_ci.sh` and `.ps1`, the Go bootstrap's validation
+  script, the Python bootstrap's commands and the examples run the uploader
+  once instead of the doctor and then the uploader. The wrappers' doctor report
+  is written by the uploader. Pass `--doctor-target` (`-DoctorTarget`) to also
+  run a doctor on its own, for an uploader that does not name one; an uploader
+  defined without `dd_test_optimization_targets` needs `doctor = ...` to keep
+  the doctor's checks in the wrapper flow.
 - The uploader no longer resolves every discovered payload path before it runs
   ddtest, since discovery already yields real paths, and the doctor computes
   output keys and payload counts without building intermediate paths. On

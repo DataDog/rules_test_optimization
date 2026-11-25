@@ -110,7 +110,7 @@ does not mutate Bazel rules or force remote output behavior outside the normal
 | `--bazel-config` | `test-optimization` | Config passed as `--config=<name>` to sync, test, doctor, and upload commands |
 | `--control-target` | repeatable | Plain/control test target run before instrumented targets |
 | `--expected-target` | repeatable | Instrumented target run before doctor; this is also used by generated doctor targets |
-| `--doctor-target` | `//:dd_test_optimization_doctor` | Doctor label run after tests pass |
+| `--doctor-target` | `//:dd_test_optimization_doctor` | Doctor whose checks the uploader applies; the script names it and does not run it separately |
 | `--upload-target` | `//:dd_upload_payloads` | Uploader label run only when the script receives `--upload` |
 | `--extra-sync-flag` | repeatable | Extra Bazel sync flag |
 | `--extra-test-flag` | repeatable | Extra Bazel test flag; `--test_env=DD_GIT_*` is rejected |
@@ -561,6 +561,8 @@ Rule: `dd_payload_uploader(...)`
 | `http_keep_alive` | bool | `False` | Reuse at most one HTTP connection per worker; Python uploader only. Runtime override: `DD_TEST_OPTIMIZATION_HTTP_KEEP_ALIVE` |
 | `workers` | int | `0` | Maximum independent payload-file workers; `0` leaves the count to the backend, one per CPU for ddtest and 8 for the Python workers. `DD_TEST_OPTIMIZATION_WORKERS` and `--workers` override it at runtime |
 | `uploader_backend` | string | `"ddtest"` | `"ddtest"` sends the selected test and coverage payloads with ddtest's native uploader; `"python"` sends every payload with the Python workers. Telemetry always uses the Python workers. Runtime override: `DD_TEST_OPTIMIZATION_UPLOADER_BACKEND` |
+| `post_process` | bool | `True` | With the ddtest backend, run the whole invocation in one process, `ddtest instrument bazel post-process`. ddtest leaves an input that only the Python code reads, and Windows, to the Python uploader. `False` runs the Python uploader with ddtest's upload only |
+| `doctor` | label | unset | Optional `dd_test_optimization_doctor` whose checks the uploader applies to the outputs it selects, in the same run. Every fresh valid payload is still sent when a check fails; the run then exits with the doctor's failure unless the upload failed first. `dd_test_optimization_targets` wires it. Requires `use_python_uploader = True` |
 | `use_python_uploader` | bool | `True` | Use the default cross-platform Python uploader; set to `False` only for temporary rollback to the legacy platform runtime |
 | `data` | label_list | `[]` | Data files to include (for example, `context.json` for enrichment) |
 | `expected_targets` | string_list | `[]` | Optional exact local labels expected in the matching BEP. Fresh and cached results jointly satisfy coverage; missing results are reported while other fresh outputs continue to upload |
@@ -571,9 +573,11 @@ Rule: `dd_payload_uploader(...)`
 
 Rule: `dd_test_optimization_doctor(...)`
 
-Run this target after `bazel test` and before `dd_payload_uploader`. It
-validates local or BEP-staged payload files and metadata; it does not upload,
-delete, or rewrite source payloads.
+Name this target in `dd_payload_uploader(doctor = ...)` so that one `bazel run`
+of the uploader applies its checks and uploads. Run it on its own after
+`bazel test` to validate without uploading. It validates local or BEP-staged
+payload files and metadata; it does not upload, delete, or rewrite source
+payloads.
 
 | Attribute | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -1064,6 +1068,7 @@ for the default temporary-root behavior and private CI artifact collection.
 | `--bep-artifact-downloader=<path>` | Executable used to download non-HTTP remote/CAS BEP artifacts or HTTP endpoints requiring custom auth. It receives `--uri`, `--name`, and `--output`, and must write an `outputs.zip` archive to `--output`. Plain HTTP/HTTPS `outputs.zip` carriers do not need this flag |
 | `--bep-artifact-downloader-timeout-sec=<seconds>` | Timeout for each BEP artifact downloader invocation and each native HTTP/HTTPS request attempt |
 | `--report-json=<path>` | Write a machine-readable uploader diagnostic report on success, no-op, or controlled uploader failure |
+| `--doctor-report-json=<path>` | Write the doctor's report when the uploader applies the checks of the doctor that it names. Default: `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` |
 
 Doctor CLI flags:
 
@@ -1085,7 +1090,8 @@ Wrapper report options:
 | Option / variable | Purpose |
 |-------------------|---------|
 | `--report-dir=<path>` / `-ReportDir <path>` / `DD_TEST_OPTIMIZATION_REPORT_DIR` | Recommended CI artifact directory. Bash and PowerShell wrappers write a doctor report plus exactly one uploader report under this directory |
-| `--doctor-report-json=<path>` / `-DoctorReportJson <path>` / `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Override only the wrapper doctor report path |
+| `--doctor-report-json=<path>` / `-DoctorReportJson <path>` / `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON` | Override only the wrapper doctor report path, which the uploader writes for its doctor |
+| `--doctor-target=<label>` / `-DoctorTarget <label>` / `DD_TEST_OPTIMIZATION_DOCTOR_TARGET` | Also run this doctor on its own before the uploader, for an uploader that does not name a doctor. Unset by default |
 | `--uploader-report-json=<path>` / `-UploaderReportJson <path>` / `DD_TEST_OPTIMIZATION_UPLOADER_REPORT_JSON` | Override the selected wrapper uploader report path, for either dry-run or real upload |
 | `--retained-outputs-dir=<path>` / `-RetainedOutputsDir <path>` / `DD_TEST_OPTIMIZATION_RETAINED_OUTPUTS_DIR` | Default Python uploader: choose the durable inspection destination; otherwise an external report directory supplies `<report-dir>/retained` |
 | `--support-bundle=<path>` / `-SupportBundle <path>` / `DD_TEST_OPTIMIZATION_SUPPORT_BUNDLE` | Write a redacted support diagnostics zip containing reports, selected BEP summaries, command metadata, runtime metadata, and a Markdown summary |

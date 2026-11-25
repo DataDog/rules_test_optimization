@@ -227,7 +227,7 @@ func parseFlags() config {
 	flag.Var(&expectedTargets, "expected-target", "Local Bazel target the generated doctor should require; may be repeated")
 	flag.Var(&controlTargets, "control-target", "Local Bazel control target the generated validation script should test before optimized targets; may be repeated")
 	flag.StringVar(&cfg.validationUploadTarget, "upload-target", "//:"+defaultUploaderTargetName, "Uploader label used by the generated validation script")
-	flag.StringVar(&cfg.validationDoctorTarget, "doctor-target", "//:"+defaultDoctorTargetName, "Doctor label used by the generated validation script")
+	flag.StringVar(&cfg.validationDoctorTarget, "doctor-target", "//:"+defaultDoctorTargetName, "Doctor label that the generated validation script names for validation without upload; its uploader applies the doctor's checks")
 	flag.Var(&extraSyncFlags, "extra-sync-flag", "Additional Bazel sync flag for the generated validation script; may be repeated")
 	flag.Var(&extraTestFlags, "extra-test-flag", "Additional Bazel test flag for the generated validation script; may be repeated")
 	flag.Var(&extraRunFlags, "extra-run-flag", "Additional Bazel run flag for the generated validation script; may be repeated")
@@ -880,7 +880,8 @@ func writeBazelrcBlock(cfg config) error {
 
 // validationScript renders the operator-owned shell workflow that repeats the
 // RFC sequence for Go onboarding: sync metadata, run controls, run optimized
-// tests, run the doctor, and upload only when the operator opts in.
+// tests, then run the uploader, which applies its doctor's checks, uploading
+// only when the operator opts in.
 func validationScript(cfg config) (string, error) {
 	if err := validateValidationScriptConfig(cfg); err != nil {
 		return "", err
@@ -929,7 +930,10 @@ usage() {
 Usage: validate_go_pilot.sh [--upload|--no-upload]
 
 Runs the Datadog Go Test Optimization validation flow:
-  sync -> controls -> instrumented tests -> doctor -> validated uploader
+  sync -> controls -> instrumented tests -> validated uploader
+
+The uploader applies the checks of the doctor that it names in the same
+"bazel run"; run the doctor on its own to validate without uploading.
 
 Upload is disabled by default. Pass --upload only when local Datadog
 credentials are already available in the environment. When enabled, every
@@ -1096,16 +1100,10 @@ fi
 
 final_status=${test_status}
 
-check_disk
-run_step "doctor ${DOCTOR_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${DOCTOR_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${DOCTOR_REPORT_JSON}"
-doctor_status=$?
-if (( doctor_status != 0 && final_status == 0 )); then
-  final_status=${doctor_status}
-fi
-
+log "the uploader applies the checks of ${DOCTOR_TARGET}"
 check_disk
 if (( upload == 0 )); then
-  run_step "dry-run upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_REPORT_JSON}" --dry-run --validate-enrichment
+  run_step "dry-run upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_REPORT_JSON}" "--doctor-report-json=${DOCTOR_REPORT_JSON}" --dry-run --validate-enrichment
   uploader_status=$?
   if (( uploader_status != 0 && final_status == 0 )); then
     final_status=${uploader_status}
@@ -1115,7 +1113,7 @@ if (( upload == 0 )); then
   exit "${final_status}"
 fi
 
-run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_REPORT_JSON}" --validate-enrichment
+run_step "upload ${UPLOAD_TARGET}" "${BAZEL}" run "${RUN_FLAGS[@]}" "${UPLOAD_TARGET}" -- "${BEP_JSON_ARGS[@]}" "${BEP_RUN_ARGS[@]}" "--report-json=${UPLOADER_REPORT_JSON}" "--doctor-report-json=${DOCTOR_REPORT_JSON}" --validate-enrichment
 uploader_status=$?
 if (( uploader_status != 0 && final_status == 0 )); then
   final_status=${uploader_status}

@@ -148,14 +148,14 @@ bazel test --config=test-optimization <plain-control-target>
 bazel test --config=test-optimization <build-only-control-target>
 bazel test --config=test-optimization <instrumented-target-1>
 bazel test --config=test-optimization <instrumented-target-2>
-bazel run --config=test-optimization //tools/test_optimization:dd_test_optimization_doctor
 DD_API_KEY="$DD_API_KEY" DD_SITE="$DD_SITE" bazel run --config=test-optimization //tools/test_optimization:dd_upload_payloads -- --validate-enrichment
 bazel shutdown
 ```
 
-Run the real uploader after the doctor even when an earlier phase fails. It
-validates enrichment and uploads available fresh valid failed-test payloads in
-one pass while the wrapper preserves the earlier failure as the job result.
+Run the real uploader even when an earlier phase fails. It applies the doctor's
+checks, validates enrichment and uploads available fresh valid failed-test
+payloads in one pass while the wrapper preserves the earlier failure as the job
+result. Run the doctor on its own only to validate without uploading.
 
 The doctor must see JSON payloads, Bazel target metadata, Git metadata, and only
 valid Go payload-selection states. `module`, `module_override`, and

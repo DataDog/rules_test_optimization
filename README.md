@@ -67,11 +67,11 @@ A managed command owns two Bazel phases behind one user-facing entrypoint:
    temporary manifest;
 3. run metadata sync and the exact selected tests with
    `--config=test-optimization`;
-4. run the workspace doctor against the generated exact-target list, then run
-   one validated uploader pass: dry-run without upload, or real upload.
+4. run one validated uploader pass, which applies the workspace doctor's checks
+   to the generated exact-target list: dry-run without upload, or real upload.
 
 The command reuses one manifest path and one resolved metadata snapshot for
-test, doctor, and uploader. A later command invocation creates a new
+test and uploader. A later command invocation creates a new
 manifest path and fetches current backend state once. When the selected
 settings and module payloads are unchanged, those stable test inputs remain
 byte-identical and normal Bazel test-result cache hits are preserved.
@@ -197,14 +197,17 @@ automatically. No per-target disable attribute is required.
      metadata.
 3. Create exactly one logical doctor/uploader pair. Small repos may put those
    targets in the root package; large monorepos should prefer a lightweight
-   package such as `//tools/test_optimization`.
+   package such as `//tools/test_optimization`. The uploader names the doctor
+   (`dd_test_optimization_targets` wires it), so one `bazel run` of the
+   uploader applies the doctor's checks and uploads; run the doctor on its own
+   only to validate without uploading.
 4. Use the named test config for BwoB, selective `test.outputs`
    materialization, and zipped undeclared outputs. Do not store
    `--build_event_json_file` in `.bazelrc`; CI wrappers should create a fresh
    BEP file path for each Bazel test invocation so parallel jobs cannot
    overwrite each other.
-5. Configure doctor and the validated uploader with the matching BEP
-   files and BEP artifact staging through wrapper arguments:
+5. Configure the validated uploader with the matching BEP files and BEP
+   artifact staging through wrapper arguments:
    - `--bep-json=<path>` once per Bazel test invocation
    - `--freshness-source=bep`
    - `--freshness-mode=required`
@@ -691,8 +694,9 @@ dd_test_optimization_targets(
 )
 ```
 
-Then run `//tools/test_optimization:dd_test_optimization_doctor` and
-`//tools/test_optimization:dd_upload_payloads`. Root labels remain valid for
+Then run `//tools/test_optimization:dd_upload_payloads`, which applies the
+checks of `//tools/test_optimization:dd_test_optimization_doctor` in the same
+run. Root labels remain valid for
 small repositories; package-local labels are the safer default for large
 monorepos because they avoid accidental analysis of unrelated root wiring.
 
@@ -1272,11 +1276,12 @@ bootstrap runs no Go commands and does not touch `go.mod`.
 
 Bootstrap can also generate an operator-owned validation script for large
 repositories. The script repeats the RFC flow without hiding Bazel behavior:
-`sync -> controls -> instrumented tests -> doctor -> validated uploader`.
-Without `--upload`, the uploader runs once in dry-run mode. With `--upload`, it
-runs once as a real upload and validates enrichment in that same pass. Set
-`DD_TEST_OPTIMIZATION_REPORT_DIR` to keep `doctor-report.json` and
-`uploader-report.json` outside the script's temporary directory.
+`sync -> controls -> instrumented tests -> validated uploader`, where the
+uploader applies its doctor's checks. Without `--upload`, the uploader runs
+once in dry-run mode. With `--upload`, it runs once as a real upload and
+validates enrichment in that same pass. Set `DD_TEST_OPTIMIZATION_REPORT_DIR`
+to keep `doctor-report.json` and `uploader-report.json` outside the script's
+temporary directory.
 
 ```bash
 bazel run @datadog-rules-test-optimization-go//:dd_topt_go_bootstrap -- \
@@ -1472,10 +1477,12 @@ The uploader is a normal Bazel rule (not a test) that runs via `bazel run` after
 
 1. Tests write payloads to `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/tests/*.json`, `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/coverage/*.json`, and `$TEST_UNDECLARED_OUTPUTS_DIR/payloads/telemetry/*.json`
 2. Bazel automatically collects these to `bazel-testlogs/<package>/<target>/test.outputs/`
-3. After tests complete, run the doctor via `bazel run` to validate local
-   outputs before upload
-4. Then run the uploader via `bazel run`
-5. The uploader discovers all `test.outputs/` directories, waits for quiescence, uploads, and deletes files
+3. After tests complete, run the uploader via `bazel run`
+4. The uploader discovers all `test.outputs/` directories, waits for
+   quiescence, applies the checks of the doctor that it names, uploads, and
+   deletes files. With ddtest, `ddtest instrument bazel post-process` runs the
+   whole invocation in one process; the Python uploader runs it when ddtest
+   leaves an input to it, and on Windows.
 
 The default Python runtime prepares CODEOWNERS, contexts, schemas, freshness,
 and telemetry plans once. It then gives each source file to one of eight
@@ -1545,10 +1552,12 @@ $env:DD_SITE = "datadoghq.com"
   //...
 ```
 
-Always preserve the test exit code. When upload is enabled, the
-wrapper runs the doctor, then validates enrichment and uploads every available
-fresh valid payload in one uploader pass even if tests or doctor failed. The
-earliest test, doctor, or uploader failure remains the job result.
+Always preserve the test exit code. The wrapper runs the uploader once; it
+applies the checks of the doctor that the uploader names, validates enrichment
+and, when upload is enabled, uploads every available fresh valid payload even
+if tests or the doctor's checks failed. The earliest test, doctor, or uploader
+failure remains the job result. `--doctor-target` also runs a doctor on its
+own before the uploader, for an uploader that does not name one.
 
 ### Runtime requirements
 
@@ -1647,13 +1656,7 @@ bep_json="$(mktemp "${TMPDIR:-/tmp}/dd-topt-bep.XXXXXX.json")"
 artifact_staging_dir="$(mktemp -d "${TMPDIR:-/tmp}/dd-topt-artifacts.XXXXXX")"
 bazel test --config=test-optimization --build_event_json_file="$bep_json" //...
 
-bazel run --config=test-optimization //:dd_test_optimization_doctor -- \
-  --bep-json="$bep_json" \
-  --freshness-source=bep \
-  --freshness-mode=required \
-  --artifact-source=bep \
-  --artifact-staging-dir="$artifact_staging_dir"
-
+# The uploader applies the checks of the doctor that it names.
 bazel run --config=test-optimization //:dd_upload_payloads -- \
   --bep-json="$bep_json" \
   --freshness-source=bep \
@@ -1671,7 +1674,8 @@ tools/test_optimization/run_test_optimization_ci.sh \
   //...
 ```
 
-The wrapper writes `.topt/reports/doctor-report.json` plus exactly one uploader
+The wrapper writes `.topt/reports/doctor-report.json`, which the uploader
+writes for the doctor whose checks it applies, plus exactly one uploader
 report: `uploader-dry-run-report.json` without `--upload`, or
 `uploader-upload-report.json` with it. Reports include a `result` block with
 `status`, `reason_code`, `reason`, `next_steps`, and the exact counts needed to
@@ -2017,10 +2021,11 @@ dd_topt_go_test(
 `embedsrcs`. When enabled, it changes the default `rundir` to `.` only if you
 did not already set `rundir`. An explicit `rundir` still wins unchanged.
 
-Then run tests, doctor, and one validated uploader pass with the same BEP-required
-flow shown in [Basic usage](#basic-usage): let the wrapper generate a fresh BEP
-file path for each `bazel test` invocation, pass those paths to doctor/uploader
-via repeatable `--bep-json`, and keep
+Then run tests and one validated uploader pass, which applies the doctor's
+checks, with the same BEP-required flow shown in [Basic usage](#basic-usage):
+let the wrapper generate a fresh BEP file path for each `bazel test`
+invocation, pass those paths to the uploader via repeatable `--bep-json`, and
+keep
 `--freshness-source=bep --freshness-mode=required --artifact-source=bep`
 enabled in CI.
 

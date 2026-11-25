@@ -198,7 +198,6 @@ Use print modes first:
   --bazel-config test-optimization \
   --expected-target //path/to/pilot:go_default_test \
   --control-target //path/to/plain:go_default_test \
-  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   --large-monorepo \
   --default-jobs 1 \
@@ -227,7 +226,6 @@ Then use write modes only for files the repository should actually own:
   --bazel-config test-optimization \
   --expected-target //path/to/pilot:go_default_test \
   --control-target //path/to/plain:go_default_test \
-  --doctor-target //tools/test_optimization:dd_test_optimization_doctor \
   --upload-target //tools/test_optimization:dd_upload_payloads \
   --write-bazelrc \
   --write-wrapper-template \
