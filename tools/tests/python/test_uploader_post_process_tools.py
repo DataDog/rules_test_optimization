@@ -68,6 +68,15 @@ def _output(root: Path, name: str, *, selection: str = "module", payload: bool =
     return output
 
 
+def _named_root(value, root: str):
+    """value with the workspace path in its strings replaced by ROOT."""
+    if isinstance(value, dict):
+        return {key: _named_root(item, root) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_named_root(item, root) for item in value]
+    return value.replace(root, "ROOT") if isinstance(value, str) else value
+
+
 class PostProcessDoctorTests(unittest.TestCase):
     def run_uploader(self, root: Path, *, post_process: bool, arguments: tuple[str, ...] = (),
                      environment: dict[str, str] | None = None, context: bool = False) -> tuple[int, str, str, dict]:
@@ -124,7 +133,7 @@ class PostProcessDoctorTests(unittest.TestCase):
                                                                      arguments=arguments)
                 # The runs compare their messages with the workspace named alike.
                 runs[post_process] = (rc, summary.replace(str(root), "ROOT"), diagnostics.replace(str(root), "ROOT"),
-                                      json.loads(json.dumps(report).replace(str(root), "ROOT")))
+                                      _named_root(report, str(root)))
         return runs
 
     def doctor_lines(self, text: str) -> list[str]:
@@ -191,9 +200,9 @@ class PostProcessDoctorTests(unittest.TestCase):
                 for name in ("expected", "seen_in_bep", "fresh"):
                     self.assertEqual(["//pkg:a"], doctor["targets"][name], name)
                 self.assertEqual(1, doctor["bep"]["eligible_outputs"])
-                self.assertEqual(["ROOT/bep.json"], doctor["bep"]["files"])
+                self.assertEqual([os.path.join("ROOT", "bep.json")], doctor["bep"]["files"])
                 self.assertEqual("uploader", doctor["config"]["expected_targets_source"])
-                self.assertEqual("ROOT/doctor.config.json", doctor["config"]["config_path"])
+                self.assertEqual(os.path.join("ROOT", "doctor.config.json"), doctor["config"]["config_path"])
                 self.assertEqual(1, doctor["summary"]["expected_targets"])
         for section in ("config", "targets", "bep", "artifacts", "summary"):
             self.assertEqual(runs[True][3]["doctor"][section], runs[False][3]["doctor"][section], section)
