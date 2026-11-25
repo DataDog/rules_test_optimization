@@ -15,7 +15,7 @@ versioning.
 
 ## [Unreleased]
 
-This release pins ddtest `pre-release-29ee9f1`. One `bazel run` of the
+This release pins ddtest `pre-release-0de984d`. One `bazel run` of the
 uploader now validates and uploads: the uploader applies the checks of the
 doctor that it names, and with ddtest it runs the whole invocation in one
 process. On a 14,000-output corpus in a 4-CPU Linux container, a dry run
@@ -29,14 +29,20 @@ takes 4.6 s in one.
   check fails the run, but every fresh valid payload is still sent; the run
   exits with the doctor's failure unless the upload failed first.
   `--doctor-report-json`, or `DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`, writes
-  the doctor's report. `dd_test_optimization_targets` wires the doctor into its
-  uploader.
+  the doctor's report, which records the expected targets (with `uploader` as
+  their source), the BEP's targets and outputs and the staged artifacts as the
+  standalone doctor's report does. `dd_test_optimization_targets` wires the
+  doctor into its uploader.
 - With the ddtest backend, the uploader runs the invocation with `ddtest
   instrument bazel post-process`, which reads each payload once and prepares
   test payloads by streaming. `post_process = False` restores the Python
   uploader with ddtest's upload. ddtest leaves an input that only the Python
   code reads, and Windows, to the Python uploader, which then applies the
-  doctor's checks itself before sending anything.
+  doctor's checks itself before sending anything. `post-process` honors
+  `DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS` as the Python uploader does, and
+  computes the BEP artifact roots itself, so the uploader no longer loads the
+  doctor runtime for them. A ddtest older than the rules leaves the invocation
+  to the Python uploader instead of failing.
 - The doctor validates with `ddtest instrument bazel validate` and keeps its
   messages, report and exit status; it validates the outputs itself when
   ddtest leaves an input to it.

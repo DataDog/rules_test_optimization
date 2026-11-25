@@ -254,7 +254,10 @@ target, otherwise every selected output that holds a payload or a sidecar,
 including outputs with nothing to upload. A failed check fails the run, but
 every fresh valid payload is still sent; the run exits with the doctor's
 failure unless the upload failed first. `--doctor-report-json=<path>`, or
-`DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`, writes the doctor's report.
+`DD_TEST_OPTIMIZATION_DOCTOR_REPORT_JSON`, writes the doctor's report. Like
+the standalone doctor's report, it records the expected targets, which come
+from the uploader (`config.expected_targets_source` is `uploader`), the BEP's
+targets and outputs, and the staged artifacts.
 
 With the ddtest backend, `post_process = True` (the default) runs the whole
 invocation in one process, `ddtest instrument bazel post-process`: freshness,

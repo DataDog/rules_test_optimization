@@ -262,8 +262,9 @@ def _run_uploader_with_lock(
                 contexts=context_records(resources.context_plan) if resources is not None else (),
                 ddtest=_ddtest_executable(config, resolver),
                 report_json=config.doctor_report_json,
-                freshness={"freshness_source": config.freshness_source, "freshness_mode": config.freshness_mode,
-                           "artifact_source": config.artifact_source, "remote_artifacts": config.remote_artifacts},
+                settings={"freshness_source": config.freshness_source, "freshness_mode": config.freshness_mode,
+                          "artifact_source": config.artifact_source, "remote_artifacts": config.remote_artifacts},
+                preparation=freshness_preparation,
                 stdout=stream,
                 stderr=_log_stream(logger),
             )

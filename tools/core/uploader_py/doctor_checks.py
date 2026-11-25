@@ -30,6 +30,7 @@ from topt_runtime.runfiles import RunfileResolutionError, RunfilesResolver
 from .config import UploaderConfig
 from .discovery import DiscoveredOutput
 from .enrichment import ContextPlan, ContextRecord
+from .freshness import FreshnessPreparation
 from .models import FileTask
 
 
@@ -43,8 +44,16 @@ class DoctorOutcome:
     next_steps: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class DoctorConfig:
+    """The named doctor's configuration and the file it was read from."""
+
+    document: dict[str, Any]
+    path: Path
+
+
 def load_doctor_config(config: UploaderConfig, resolver: RunfilesResolver,
-                       logger: logging.Logger) -> dict[str, Any] | None:
+                       logger: logging.Logger) -> DoctorConfig | None:
     """The configuration of the doctor that the rule names, or None.
 
     A configuration that cannot be read skips the checks with a warning.
@@ -53,13 +62,14 @@ def load_doctor_config(config: UploaderConfig, resolver: RunfilesResolver,
     if not candidates:
         return None
     try:
-        document = json.loads(resolver.resolve_file(candidates).read_text(encoding="utf-8-sig"))
+        path = resolver.resolve_file(candidates)
+        document = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(document, dict):
             raise ValueError("not a JSON object")
     except (RunfileResolutionError, OSError, ValueError) as exc:
         logger.warning("warning_code=doctor_config_unavailable skipping the doctor's output checks: %s", exc)
         return None
-    return document
+    return DoctorConfig(document, path)
 
 
 def context_records(plan: ContextPlan) -> list[ContextRecord]:
@@ -73,7 +83,7 @@ def context_records(plan: ContextPlan) -> list[ContextRecord]:
 def run_doctor_checks(
     *,
     doctor_runtime: Path,
-    doctor_config: Mapping[str, Any],
+    doctor_config: DoctorConfig,
     workspace: Path,
     outputs: Iterable[DiscoveredOutput],
     tasks: Iterable[FileTask],
@@ -81,7 +91,8 @@ def run_doctor_checks(
     contexts: Iterable[ContextRecord],
     ddtest: Path | None,
     report_json: Path | None = None,
-    freshness: Mapping[str, str] | None = None,
+    settings: Mapping[str, str] | None = None,
+    preparation: FreshnessPreparation | None = None,
     stdout: TextIO | None = None,
     stderr: TextIO | None = None,
 ) -> DoctorOutcome:
@@ -91,14 +102,41 @@ def run_doctor_checks(
     outputs that hold a payload or a sidecar, as the standalone doctor finds
     its candidates. The doctor prints its messages; a failure returns its exit
     status and the report's reason. With report_json, the doctor's report is
-    written there, as the doctor writes it.
+    written there, as the doctor writes it: with the expected targets, whose
+    source is "uploader", and the BEP and staged artifacts of preparation.
     """
     doctor = _load_doctor(doctor_runtime)
     # The report records the uploader's freshness settings.
-    args = doctor._parse_args(["--config", "", "--report-json", str(report_json or "")])
-    for name, value in (freshness or {}).items():
+    args = doctor._parse_args(["--config", str(doctor_config.path), "--report-json", str(report_json or "")])
+    for name, value in (settings or {}).items():
         setattr(args, name, value)
     report = doctor._new_diagnostic_report(args)
+    expected = list(expected_targets)
+    context = preparation.report_context if preparation is not None else None
+    doctor._update_diagnostic_config(
+        report,
+        config_path=doctor_config.path,
+        workspace=workspace,
+        testlogs_dir=context.testlogs_dir if context is not None else None,
+        expected_targets=expected,
+        expected_targets_source="uploader" if expected else report["config"]["expected_targets_source"],
+        bep_files=list(context.bep_files) if context is not None else [],
+        staging_requested=context.staging_requested if context is not None else False,
+    )
+    if context is not None:
+        doctor._update_diagnostic_bep(
+            report,
+            context.freshness,
+            selected_bep_artifact_outputs=set(context.selected_artifact_outputs),
+            blocked_bep_artifact_labels=set(context.blocked_labels),
+        )
+        doctor._update_diagnostic_artifacts(
+            report,
+            staging_enabled=context.staging_requested and context.freshness is not None,
+            staging_base=preparation._staging_base_path,
+            staged=list(preparation._staged_artifacts),
+        )
+    checks = doctor_config.document
     output_dirs = [output.path for output in outputs]
     labels = {task.test_outputs_dir: task.target_label for task in tasks
               if task.test_outputs_dir is not None and task.target_label}
@@ -110,11 +148,11 @@ def run_doctor_checks(
         stack.enter_context(doctor._cached_filesystem())
         doctor._run_cache.inspector = ddtest
         try:
-            if doctor_config.get("forbid_dd_git_test_env", False):
+            if checks.get("forbid_dd_git_test_env", False):
                 doctor._validate_bazelrc(workspace)
-            if doctor_config.get("require_git_metadata", False):
+            if checks.get("require_git_metadata", False):
                 _validate_context_git(doctor, list(contexts))
-            if not list(expected_targets):
+            if not expected:
                 doctor._inspect_outputs(output_dirs)
                 output_dirs = [path for path in output_dirs if _has_files(doctor, path)]
             if not output_dirs:
@@ -127,12 +165,12 @@ def run_doctor_checks(
                 output_dirs, target_by_output_dir=target_by_output_dir, staged=[], testlogs_dir=None))
             summary = doctor._validate_outputs(
                 output_dirs,
-                require_json_payloads=doctor_config.get("require_json_payloads", True),
-                require_bazel_metadata=doctor_config.get("require_bazel_metadata", True),
-                forbid_full_bundle_no_match=doctor_config.get("forbid_full_bundle_no_match", False),
-                forbid_msgpack_payloads=doctor_config.get("forbid_msgpack_payloads", True),
-                allowed_payload_selections=set(doctor_config.get("allowed_payload_selections") or []) or None,
-                expected_payload_selection_by_target=doctor_config.get("expected_payload_selection_by_target", {}),
+                require_json_payloads=checks.get("require_json_payloads", True),
+                require_bazel_metadata=checks.get("require_bazel_metadata", True),
+                forbid_full_bundle_no_match=checks.get("forbid_full_bundle_no_match", False),
+                forbid_msgpack_payloads=checks.get("forbid_msgpack_payloads", True),
+                allowed_payload_selections=set(checks.get("allowed_payload_selections") or []) or None,
+                expected_payload_selection_by_target=checks.get("expected_payload_selection_by_target", {}),
                 target_by_output_dir=target_by_output_dir,
                 test_result_outputs={},
                 empty_session_outputs={},
