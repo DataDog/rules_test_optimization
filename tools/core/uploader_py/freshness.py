@@ -72,6 +72,19 @@ class FreshnessPlan:
 
 
 @dataclass(frozen=True)
+class BepReportContext:
+    """What a doctor's report records about the BEP, its artifacts and testlogs."""
+
+    bep_files: tuple[Path, ...] = ()
+    testlogs_dir: Path | None = None
+    staging_requested: bool = False
+    # The doctor runtime's BepFreshness, after staging.
+    freshness: object | None = None
+    selected_artifact_outputs: frozenset[tuple[str, str]] = frozenset()
+    blocked_labels: frozenset[str] = frozenset()
+
+
+@dataclass(frozen=True)
 class FreshnessPreparation:
     """Freshness plan plus any staged artifacts owned by this invocation."""
 
@@ -82,6 +95,7 @@ class FreshnessPreparation:
     _staged_artifacts: tuple[object, ...] = ()
     _staging_base_path: Path | None = None
     _owned_run_roots: tuple[Path, ...] = ()
+    report_context: BepReportContext = BepReportContext()
 
     def cleanup(self) -> None:
         """Remove only per-invocation staging roots owned by the doctor."""
@@ -166,6 +180,7 @@ def prepare_freshness(
     selected_artifact_outputs: set[tuple[str, str]] = set()
     blocked_labels: set[str] = set()
     doctor_freshness = None
+    bep_files: tuple[Path, ...] = ()
 
     if bep_processing_required:
         if not bep_configured:
@@ -306,6 +321,14 @@ def prepare_freshness(
         plan=plan,
         scan_roots=tuple(scan_roots),
         staged_roots=staged_roots,
+        report_context=BepReportContext(
+            bep_files=bep_files,
+            testlogs_dir=local_testlogs_root,
+            staging_requested=staging_requested,
+            freshness=doctor_freshness,
+            selected_artifact_outputs=frozenset(selected_artifact_outputs),
+            blocked_labels=frozenset(blocked_labels),
+        ),
         _doctor_runtime=doctor_runtime,
         _staged_artifacts=staged_artifacts,
         _staging_base_path=staging_base_path,

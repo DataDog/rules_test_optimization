@@ -23,7 +23,7 @@ import sys
 import tempfile
 import unittest
 
-from uploader_test_support import add_uploader_runtime_to_path, resolve_runfile
+from uploader_test_support import add_uploader_runtime_to_path, complete_bep_json, resolve_runfile
 
 add_uploader_runtime_to_path()
 
@@ -68,8 +68,18 @@ def _output(root: Path, name: str, *, selection: str = "module", payload: bool =
     return output
 
 
+def _named_root(value, root: str):
+    """value with the workspace path in its strings replaced by ROOT."""
+    if isinstance(value, dict):
+        return {key: _named_root(item, root) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_named_root(item, root) for item in value]
+    return value.replace(root, "ROOT") if isinstance(value, str) else value
+
+
 class PostProcessDoctorTests(unittest.TestCase):
-    def run_uploader(self, root: Path, *, post_process: bool) -> tuple[int, str, str, dict]:
+    def run_uploader(self, root: Path, *, post_process: bool, arguments: tuple[str, ...] = (),
+                     environment: dict[str, str] | None = None, context: bool = False) -> tuple[int, str, str, dict]:
         """Run the uploader with a named doctor that allows only the module selection."""
         doctor_config = root / "doctor.config.json"
         doctor_config.write_text(json.dumps({
@@ -86,12 +96,13 @@ class PostProcessDoctorTests(unittest.TestCase):
             "uploader_backend": "ddtest" if post_process else "python",
             "ddtest_path": str(_ddtest()), "post_process": post_process,
             "doctor_config_path": str(doctor_config),
+            **({"context_manifest_path": str(self.context_manifest(root))} if context else {}),
         }), encoding="utf-8")
         report_path = root / "report.json"
         environment = {"BUILD_WORKSPACE_DIRECTORY": str(root), "TESTLOGS_DIR": str(root / "bazel-testlogs"),
-                       "DD_API_KEY": "", "DD_SITE": "datadoghq.com"}
+                       "DD_API_KEY": "", "DD_SITE": "datadoghq.com", **(environment or {})}
         config = parse_uploader_config(["--config", str(config_path), "--dry-run", f"--report-json={report_path}",
-                                        f"--doctor-report-json={root / 'doctor-report.json'}"],
+                                        f"--doctor-report-json={root / 'doctor-report.json'}", *arguments],
                                        environ=environment, cwd=root)
         diagnostics, summary = StringIO(), StringIO()
         rc = run_uploader(config, resolver=RunfilesResolver.from_environment(environ={}, cwd=root),
@@ -101,16 +112,28 @@ class PostProcessDoctorTests(unittest.TestCase):
         report["doctor"] = json.loads((root / "doctor-report.json").read_text())
         return rc, summary.getvalue(), diagnostics.getvalue(), report
 
+    def context_manifest(self, root: Path) -> Path:
+        """A manifest naming one context, which batching requires."""
+        context = root / "context.json"
+        context.write_text(json.dumps({"git.repository_url": "https://example.org/repo", "git.commit.sha": "abcdef",
+                                       "ci.workspace_path": str(root)}), encoding="utf-8")
+        manifest = root / "contexts.manifest"
+        manifest.write_text(f"repo\tmissing\t{context}\n", encoding="utf-8")
+        return manifest
+
     def both(self, populate) -> dict[bool, tuple[int, str, str, dict]]:
         runs = {}
         for post_process in (True, False):
             with tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp).resolve()
-                populate(root)
-                rc, summary, diagnostics, report = self.run_uploader(root, post_process=post_process)
+                # populate may return extra uploader arguments.
+                populated = populate(root)
+                arguments = tuple(populated) if isinstance(populated, list) else ()
+                rc, summary, diagnostics, report = self.run_uploader(root, post_process=post_process,
+                                                                     arguments=arguments)
                 # The runs compare their messages with the workspace named alike.
                 runs[post_process] = (rc, summary.replace(str(root), "ROOT"), diagnostics.replace(str(root), "ROOT"),
-                                      json.loads(json.dumps(report).replace(str(root), "ROOT")))
+                                      _named_root(report, str(root)))
         return runs
 
     def doctor_lines(self, text: str) -> list[str]:
@@ -157,6 +180,46 @@ class PostProcessDoctorTests(unittest.TestCase):
                 self.assertEqual(1, rc, diagnostics)
                 self.assertIn(_PREFIX + "missing JSON payloads under ", diagnostics)
         self.assertEqual(self.doctor_lines(runs[True][2]), self.doctor_lines(runs[False][2]))
+
+    def test_the_doctor_report_accounts_for_expected_targets_and_the_bep(self) -> None:
+        def populate(root: Path) -> list[str]:
+            output = _output(root, "a")
+            bep = root / "bep.json"
+            result = {"id": {"testResult": {"label": "//pkg:a", "run": 1, "shard": 1, "attempt": 1}},
+                      "testResult": {"status": "PASSED", "testActionOutput": [
+                          {"name": "test.outputs", "uri": output.as_uri()}]}}
+            bep.write_text(complete_bep_json(json.dumps(result), invocation=str(bep)), encoding="utf-8")
+            return [f"--bep-json={bep}", "--freshness-source=bep", "--freshness-mode=required",
+                    "--expected-target=//pkg:a"]
+
+        runs = self.both(populate)
+        for post_process, (rc, _summary, diagnostics, report) in runs.items():
+            with self.subTest(post_process=post_process):
+                self.assertEqual(0, rc, diagnostics)
+                doctor = report["doctor"]
+                for name in ("expected", "seen_in_bep", "fresh"):
+                    self.assertEqual(["//pkg:a"], doctor["targets"][name], name)
+                self.assertEqual(1, doctor["bep"]["eligible_outputs"])
+                self.assertEqual([os.path.join("ROOT", "bep.json")], doctor["bep"]["files"])
+                self.assertEqual("uploader", doctor["config"]["expected_targets_source"])
+                self.assertEqual(os.path.join("ROOT", "doctor.config.json"), doctor["config"]["config_path"])
+                self.assertEqual(1, doctor["summary"]["expected_targets"])
+        for section in ("config", "targets", "bep", "artifacts", "summary"):
+            self.assertEqual(runs[True][3]["doctor"][section], runs[False][3]["doctor"][section], section)
+
+    def test_post_process_batches_when_the_environment_asks(self) -> None:
+        # The rule leaves batching off; DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS
+        # turns it on, for post-process as for the Python uploader.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            output = _output(root, "a")
+            second = output / "payloads" / "tests" / "span_events_2.json"
+            second.write_text(json.dumps(_PAYLOAD), encoding="utf-8")
+            rc, _summary, diagnostics, report = self.run_uploader(
+                root, post_process=True, environment={"DD_TEST_OPTIMIZATION_BATCH_TEST_PAYLOADS": "1"}, context=True)
+        self.assertEqual(0, rc, diagnostics)
+        self.assertEqual(2, report["files"]["succeeded"])
+        self.assertEqual(1, report["requests"]["planned"], report["requests"])
 
     def test_a_sidecar_only_python_reads_is_checked_by_the_python_uploader(self) -> None:
         # ddtest's reader rejects duplicate keys, so post-process leaves the

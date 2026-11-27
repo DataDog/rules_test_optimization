@@ -110,7 +110,9 @@ def _log_level(logger: logging.Logger) -> str:
 
 
 def _config_request(config: UploaderConfig, endpoints: EndpointSet, expected_targets: tuple[str, ...],
-                    execroot_roots: list[str], output_base_roots: list[str], log_level: str) -> dict[str, Any]:
+                    log_level: str) -> dict[str, Any]:
+    # ddtest computes the execroot and output base roots from the same
+    # environment and working directory as the doctor's.
     return {
         "workspace": str(config.workspace),
         "dry_run": config.dry_run,
@@ -146,32 +148,19 @@ def _config_request(config: UploaderConfig, endpoints: EndpointSet, expected_tar
         "retention_status_file": _path(config.retention_status_file),
         "rules_version": config.rule.rules_version,
         "uploader_backend": config.uploader_backend,
-        "batch_test_payloads": config.rule.batch_test_payloads,
-        "execroot_roots": execroot_roots,
-        "output_base_roots": output_base_roots,
+        # The rule's default, as overridden by the environment.
+        "batch_test_payloads": config.batch_test_payloads,
     }
-
-
-def _artifact_roots(config: UploaderConfig, resolver: RunfilesResolver) -> tuple[list[str], list[str]]:
-    """The doctor's execroot and output base roots, for BEP artifact references."""
-    if not config.bep_json_files:
-        return [], []
-    from .freshness import FreshnessError, _load_doctor_runtime, _resolve_doctor_runtime
-
-    try:
-        doctor = _load_doctor_runtime(_resolve_doctor_runtime(config, resolver), [])
-    except (FreshnessError, OSError, ImportError):
-        return [], []
-    return [str(root) for root in doctor._execroot_roots()], [str(root) for root in doctor._output_base_roots()]
 
 
 def _validation_request(config: UploaderConfig, resolver: RunfilesResolver,
                         logger: logging.Logger) -> dict[str, Any] | None:
     """The doctor's configuration, for its output checks, when the rule names one."""
-    document = load_doctor_config(config, resolver, logger)
-    if document is None:
+    doctor_config = load_doctor_config(config, resolver, logger)
+    if doctor_config is None:
         return None
-    return {"config": document, "report_json": _path(config.doctor_report_json)}
+    return {"config": doctor_config.document, "config_path": str(doctor_config.path),
+            "report_json": _path(config.doctor_report_json)}
 
 
 def run_post_process(
@@ -206,11 +195,9 @@ def run_post_process(
         resources_request = _resources_request(config, endpoints, resources, logger)
     except _PREFLIGHT_ERRORS as exc:
         preflight_error = str(exc)
-    execroot_roots, output_base_roots = _artifact_roots(config, resolver)
     request = {
         "schema_version": 1,
-        "config": _config_request(config, endpoints, expected_targets, execroot_roots, output_base_roots,
-                                  _log_level(logger)),
+        "config": _config_request(config, endpoints, expected_targets, _log_level(logger)),
         "resources": resources_request or {"contexts": {}, "warning_codes": [], "messages": []},
     }
     if preflight_error:
