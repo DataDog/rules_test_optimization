@@ -6,7 +6,7 @@
 
 module(
     name = "datadog-rules-test-optimization",
-    version = "2.1.0-rc.2",
+    version = "2.1.0-rc.3",
 )
 
 # Platforms is needed for cross-platform test execution detection

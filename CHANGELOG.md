@@ -15,12 +15,16 @@ versioning.
 
 ## [Unreleased]
 
-This release pins ddtest `pre-release-0de984d`. One `bazel run` of the
+## [2.1.0-rc.3]
+
+This candidate pins ddtest `pre-release-0de984d`. One `bazel run` of the
 uploader now validates and uploads: the uploader applies the checks of the
 doctor that it names, and with ddtest it runs the whole invocation in one
 process. On a 14,000-output corpus in a 4-CPU Linux container, a dry run
 of the doctor and the uploader took 16.8 s in two runs with 2.1.0-rc.2 and
-takes 4.6 s in one.
+takes 4.6 s in one. In dd-source's CI, on about 14,800 test payloads, one
+uploader run validated and uploaded them in 20 s; the doctor and the uploader
+took 40 s together before.
 
 ### Added
 

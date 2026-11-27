@@ -159,7 +159,7 @@
     "//:topt_go_ddtest_extension.bzl%topt_go_ddtest": {
       "general": {
         "bzlTransitiveDigest": "E5sO7MZxg/hQDBX+xUTcPm2X3zZ9CR5EgGynO9tRHzU=",
-        "usagesDigest": "MezCTajuAKbPKhMbyipZlC5Uq5yw4dF/IkPCJ62FUKQ=",
+        "usagesDigest": "PoJ3FXSfjicFHX1jzvazPFYzz6Pc5is/OKH5Hk51MdY=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_skylib bazel_skylib+",
           "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+",
@@ -1098,7 +1098,7 @@
     "//tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "qE9S3HNMfKVJtD4XMT5WNvc3sgOOqqdVoBns0egnuPE=",
-        "usagesDigest": "9Bomsur8cV4aHZzbVjonEfDtLrzy25llNRmpW55vxh4=",
+        "usagesDigest": "JQBPpbCMQOzNIGQlnkepLzNjREJHtuFBfnLXsIa6f7Q=",
         "recordedInputs": [
           "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+"
         ],
@@ -1178,7 +1178,7 @@
     "//tests:private_metadata_repo.bzl%private_metadata": {
       "general": {
         "bzlTransitiveDigest": "SARas6i5J6G20kL9EYBLEzpFAErSG7206KFEcS5I2M8=",
-        "usagesDigest": "PRqv1OFpOagGVuFy/BvvZ74HqHjYQ77WjMlyoyAZ27Y=",
+        "usagesDigest": "CZhmg/M2jpi83l/5KCOFei7T1wnTUexCf/quOvDWq3k=",
         "recordedInputs": [
           "REPO_MAPPING:,datadog-rules-test-optimization datadog-rules-test-optimization+"
         ],
@@ -1202,7 +1202,7 @@
     "@@datadog-rules-test-optimization+//tools/core:ddtest_extension.bzl%ddtest": {
       "general": {
         "bzlTransitiveDigest": "Gh/FptNWhZ20pYDnE1b2F1368hQ1ohO7TdPz+G5G6U4=",
-        "usagesDigest": "cahuMWQnDexUliKiVXetDtikEECLA09yiSyUN5E01/w=",
+        "usagesDigest": "d5FbU9DO1bJhyeLaUhSmkuPvSxzvq1eXm2YFXHSZGWY=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "topt_ddtest": {

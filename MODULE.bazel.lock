@@ -208,7 +208,7 @@
     "//tools/core:ddtest_extension.bzl%ddtest": {
       "general": {
         "bzlTransitiveDigest": "Gh/FptNWhZ20pYDnE1b2F1368hQ1ohO7TdPz+G5G6U4=",
-        "usagesDigest": "wJgEjrPsdvIoVp8uhpeXZF5ryG8dzptF7i7RltAXmGM=",
+        "usagesDigest": "s5AsC+xDpJmJZsfFPhThoC2lY/Gy7d9Ylv3yYZRHDoA=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "topt_ddtest": {
@@ -221,7 +221,7 @@
     "//tools/dev:dotnet_bootstrap.bzl%dotnet_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "UPeW5Tc9bGVY170mvXNHX3/Hod9plUSKN+ZWFasuDF8=",
-        "usagesDigest": "0qjnq19yXw5cYOFjVq073X43npq336mu6OqwHQ9YfCU=",
+        "usagesDigest": "EeArIutTYK8dSxE2AxhVlkWN3JpjihD/R0LctvJdC4s=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -238,7 +238,7 @@
     "//tools/dev:go_bootstrap.bzl%go_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "hKApWFDD6wQhS26gyQpQNBE1Cc+J7WtqTgCDLAx6oRM=",
-        "usagesDigest": "oo/kvBhXiWt2d+Pf6HHc2qZJELG+E6Q+YJXecT8jaxo=",
+        "usagesDigest": "PaPN+Z9bIo/9vpFli/gQ0rC1KHsKCgv7sHU1R37Dkrg=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -255,7 +255,7 @@
     "//tools/dev:java_bootstrap.bzl%java_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "y9kgju33Pes77Wm7i6LxtqHJeQgUNhyTlZTlLVpyqnw=",
-        "usagesDigest": "JY0m+S8WNNoGsyBoivrqYEzmeXZIjqdJ7mUnL/su90o=",
+        "usagesDigest": "N+sCQDgOLgOT10Wq3K4H0mpvFpEJr9fuhbEQGGfmeas=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -272,7 +272,7 @@
     "//tools/dev:nodejs_bootstrap.bzl%nodejs_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "YelvV8D1FHQwD5h5oBWQpKIK+vrFBUPEZeH6vSQXac0=",
-        "usagesDigest": "RH9nGWAxKhfeVaofRkFOvZdymln+9vdaCFuosYjErb4=",
+        "usagesDigest": "pCsgVUK/R6AHYpyws/4NWid1/NAH84+RM5Hl2MD+ixs=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -289,7 +289,7 @@
     "//tools/dev:python_bootstrap.bzl%python_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "1HA/1MUgyYx5SYrKhSpQl/qH3hv/G4odAsLv4LXMQ5E=",
-        "usagesDigest": "APvlJClvBocVn81du6zA4t/58z3H0uzV0PQerfd+v08=",
+        "usagesDigest": "9dlHHZ9fCzTW4OZ+Xc8Ohp1tRfR/cXbTKGBj1D7yKDA=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -306,7 +306,7 @@
     "//tools/dev:ruby_bootstrap.bzl%ruby_bootstrap_extension": {
       "general": {
         "bzlTransitiveDigest": "ig/oJWWSi66NeqxG+UD065TtHW9MD06FkUwE+BZkFcE=",
-        "usagesDigest": "hWeBGVfT6qZWEn0dR93eE+yIwkXFxNtX2oB78TEz19E=",
+        "usagesDigest": "h8zW80ElLAVdO5B3ff0qUjoI6ACJJYiww/4JciUVfFk=",
         "recordedInputs": [
           "REPO_MAPPING:,bazel_tools bazel_tools"
         ],
@@ -323,7 +323,7 @@
     "//tools/tests:example_stub_repo.bzl%example_stub_repo_extension": {
       "general": {
         "bzlTransitiveDigest": "rzTQJIRz9Kp9iW7tjdt2NIf5A0cF3TWHKRxR+nwEaXE=",
-        "usagesDigest": "GvfTYF4fKk3pI/6xt1VMhDvvYaK0kCRdoXuhOPshxs8=",
+        "usagesDigest": "Tg3fyElsTBHOB+jFkmD62WO3m+kGbn8nCOuC3a8H7Yo=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "test_optimization_data": {
@@ -593,7 +593,7 @@
     "@@rules_dotnet+//dotnet:extensions.bzl%dotnet": {
       "general": {
         "bzlTransitiveDigest": "3NFH9+PfsEdlRhZtq3iPX8FRGmmgowYZvWUuTyxUYdw=",
-        "usagesDigest": "KdxcWixD9LSzE/anaeR1lo6dpfFstYOzfSHSbenXdxw=",
+        "usagesDigest": "6idnVRNRc0f2Pja8wFIc1j1U+ZqaptD343QqeifM/Tw=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "dotnet_x86_64-apple-darwin": {
@@ -831,7 +831,7 @@
     "@@rules_nodejs+//nodejs:extensions.bzl%node": {
       "general": {
         "bzlTransitiveDigest": "4pUxCNc22K4I+6+4Nxu52Hur12tFRfa1JMsN5mdDv60=",
-        "usagesDigest": "IdVzByhIcACz77ZVkhzw8joOrzKB+xPcslTVUycph8Y=",
+        "usagesDigest": "ejj9UFthHZavXHG6vPz4eiAW1GfxJBP44ayFY+ypUGM=",
         "recordedInputs": [],
         "generatedRepoSpecs": {
           "nodejs_linux_amd64": {
